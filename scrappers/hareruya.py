@@ -32,8 +32,8 @@ class HareruyaScrapper(MtgScrapper):
 
         cards = []
         for item in results.find_all("div", class_="itemData"):
-            name = item.find_next(class_="itemName").text
-            match = re.search(r"《(.*)》.*?\[(.*?)]", name)
+            name = item.find_next(class_="itemName")
+            match = re.search(r"《(.*)》.*?\[(.*?)]", name.text)
             if match:
                 card, mtg_set = match.group(1), match.group(2)
                 if card.lower() == card_name.lower():
@@ -50,12 +50,16 @@ class HareruyaScrapper(MtgScrapper):
                             'price_jpy': price,
                             'price_usd': price_in_usd,
                             'stock': stock,
-                            'condition': condition
+                            'condition': condition,
+                            'link': self.link(name['href'])
                         })
                         self.logger.info(f"Found {card} from set {mtg_set} valued at ¥{price} (${price_in_usd})")
                 else:
                     self.logger.info(f"Card {card} doesn't match")
         return cards
+
+    def link(self, href):
+        return f"https://www.hareruyamtg.com{href.strip()}"
 
     # too much Javascript magic for basic request, needs selenium
     def search(self, card_name):

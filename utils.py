@@ -7,6 +7,7 @@ def init_selenium():
     options = webdriver.ChromeOptions()
     options.add_argument("--headless")  # Set the Chrome webdriver to run in headless mode for scalability
     options.page_load_strategy = "none"
+    options.add_experimental_option('excludeSwitches', ['enable-logging'])
     driver = Chrome(options=options)
     driver.implicitly_wait(5)
     return driver

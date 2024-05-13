@@ -14,6 +14,7 @@ class MtgScrapper(ABC):
             'price_jpy': 10389,
             'price_usd': 71.42,
             'stock': 4,
-            'condition': 'NM'
+            'condition': 'NM',
+            'link': 'https://mtg_shop.com/product/2938472948'
         """
         pass

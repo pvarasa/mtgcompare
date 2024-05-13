@@ -17,7 +17,7 @@ class CKScrapper(MtgScrapper):
         super().__init__()
         self.driver = init_selenium()
         self.fx = get_fx("jpy")
-        self.logger = logging.getLogger('card_kingdom')
+        self.logger = logging.getLogger('cardkingdom')
 
     def get_prices(self, card_name):
         def to_num(s): return float(s.replace('$', '').strip())
@@ -30,7 +30,8 @@ class CKScrapper(MtgScrapper):
 
         cards = []
         for item in results.find_all("div", class_="itemContentWrapper"):
-            card = item.find_next(class_="productDetailTitle").find_next("a").text
+            card_a = item.find_next(class_="productDetailTitle").find_next("a")
+            card, link = card_a.text, self.link(card_a['href'])
             price_usd = to_num(item.find_next(class_="stylePrice").text)
             stock = item.find_next(class_="styleQty")
             if stock:
@@ -42,12 +43,16 @@ class CKScrapper(MtgScrapper):
                         'price_jpy': price_usd * self.fx,
                         'price_usd': price_usd,
                         'stock': stock.text,
-                        'condition': condition
+                        'condition': condition,
+                        'link': link
                     })
-                    self.logger.info(f"Found with price {price_usd}")
+                    self.logger.info(f"Found with price ${price_usd}")
                 else:
                     self.logger.info(f"Card {card} doesn't match")
         return cards
+
+    def link(self, href):
+        return f"https://www.cardkingdom.com{href.strip()}"
 
     # needs selenium, otherwise throws 403
     def search(self, card_name):

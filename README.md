@@ -2,15 +2,22 @@
 
 This script compares the prices of Magic The Gathering cards in different online shops, finding the cheapest.
 
-## Example usage
+## Usage
 
-`> python compare.py "Force of Will"`
+~~~~~~~
+usage: compare [-h] (-c CARD | -f FILE)
+
+Compares prices for Magic The Gathering cards
+
+options:
+  -h, --help            show this help message and exit
+  -c CARD, --card CARD  name of the card to search for
+  -f FILE, --file FILE  file with one card name per line
+~~~~~~~
 
 ## Features TODO
 
 * More shops (singlestar, toykomtg)
-* Support card list in file
-* Return clickable link to cheapest card
 * Support shipping cost configuration
 * Parse multiple card conditions for the same search
 * Multithreaded search
