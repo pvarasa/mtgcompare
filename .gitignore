@@ -1,3 +1,14 @@
-.venv
-.idea
-**/__pycache__
+.venv/
+.idea/
+.pytest_cache/
+__pycache__/
+*.py[cod]
+
+app.pid
+app.log
+app.err.log
+inventory.db
+binder.csv
+
+.tk_home.html
+.tk_search.html

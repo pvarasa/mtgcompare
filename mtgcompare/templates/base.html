@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
+  <title>{% block title %}mtgcompare{% endblock %}</title>
+  <style>
+    :root {
+      --fg: #e4e4e4;
+      --muted: #8a8a8a;
+      --border: #2a2a2a;
+      --bg: #121212;
+      --bg-alt: #1c1c1c;
+      --accent: #4a3f14;
+      --error-bg: #3a1414;
+      --error-fg: #f5a5a5;
+      color-scheme: dark;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      color: var(--fg);
+      background: var(--bg);
+      max-width: 1000px;
+      margin: 2rem auto;
+      padding: 0 1rem;
+      line-height: 1.4;
+    }
+    h1 { margin: 0 0 1.5rem; font-weight: 600; }
+    form { display: flex; gap: .5rem; margin-bottom: 1.5rem; }
+    input[type=text] {
+      flex: 1;
+      padding: .6rem .8rem;
+      font-size: 1rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--bg-alt);
+      color: var(--fg);
+    }
+    input[type=text]:focus { outline: 2px solid #5b8def; border-color: transparent; }
+    button {
+      padding: .6rem 1.2rem;
+      font-size: 1rem;
+      border: 0;
+      border-radius: 6px;
+      background: #e4e4e4;
+      color: #121212;
+      cursor: pointer;
+    }
+    button:hover { background: #fff; }
+    button:disabled {
+      background: #5a5a5a;
+      color: #bcbcbc;
+      cursor: not-allowed;
+      opacity: .7;
+    }
+    .meta { color: var(--muted); font-size: .9rem; margin: 0 0 1rem; }
+    .error {
+      background: var(--error-bg);
+      color: var(--error-fg);
+      padding: .75rem 1rem;
+      border-radius: 6px;
+      margin-bottom: 1rem;
+    }
+    .flash {
+      background: #14331a;
+      color: #b4e8c4;
+      padding: .6rem 1rem;
+      border-radius: 6px;
+      margin-bottom: 1rem;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: .95rem;
+    }
+    th, td {
+      padding: .55rem .6rem;
+      border-bottom: 1px solid var(--border);
+      text-align: left;
+    }
+    th {
+      background: var(--bg-alt);
+      font-weight: 600;
+      font-size: .85rem;
+      text-transform: uppercase;
+      letter-spacing: .03em;
+      color: var(--muted);
+    }
+    tr.cheapest { background: var(--accent); }
+    .num { text-align: right; font-variant-numeric: tabular-nums; }
+    a { color: #6aa6ff; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .empty { color: var(--muted); padding: 2rem 0; text-align: center; }
+    .flag {
+      display: inline-block;
+      margin-right: .3rem;
+      font-family: "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif;
+    }
+    .badge {
+      display: inline-block;
+      padding: .1rem .45rem;
+      font-size: .75rem;
+      border-radius: 4px;
+      background: #2a2a2a;
+      color: var(--muted);
+      margin-left: .4rem;
+    }
+    .tabs { display: flex; gap: 1.5rem; margin-bottom: 1.5rem; border-bottom: 1px solid var(--border); font-size: 1.02rem; }
+    .tabs a {
+      padding: .7rem .2rem;
+      color: #c0c0c0;
+      font-weight: 500;
+      border-bottom: 2px solid transparent;
+      margin-bottom: -1px;
+    }
+    .tabs a:hover { color: var(--fg); text-decoration: none; }
+    .tabs a.active { color: var(--fg); border-bottom-color: #5b8def; font-weight: 600; }
+    .card-icon {
+      background: transparent;
+      border: 0;
+      padding: 2px 4px;
+      margin-right: .35rem;
+      color: var(--muted);
+      cursor: pointer;
+      vertical-align: -3px;
+      border-radius: 4px;
+      line-height: 0;
+    }
+    .card-icon:hover { color: var(--fg); background: var(--bg-alt); }
+    .card-icon svg { display: block; }
+    .card-modal {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, .75);
+      display: none;
+      z-index: 1000;
+      align-items: center;
+      justify-content: center;
+    }
+    .card-modal.open { display: flex; }
+    .card-modal-inner { position: relative; }
+    .card-modal-img {
+      display: none;
+      max-width: 90vw;
+      max-height: 90vh;
+      border-radius: 12px;
+      box-shadow: 0 12px 32px rgba(0, 0, 0, .6);
+    }
+    .card-modal-msg {
+      color: var(--muted);
+      font-size: 1rem;
+      padding: 2rem 3rem;
+      background: var(--bg-alt);
+      border-radius: 12px;
+    }
+    .card-modal-close {
+      position: absolute;
+      top: -2rem;
+      right: -.25rem;
+      background: transparent;
+      color: var(--fg);
+      font-size: 1.8rem;
+      line-height: 1;
+      padding: 0 .4rem;
+      border: 0;
+      cursor: pointer;
+    }
+    .card-modal-close:hover { color: #fff; background: transparent; }
+    {% block extra_css %}{% endblock %}
+  </style>
+</head>
+<body>
+  <h1>mtgcompare</h1>
+  {% include "_nav.html" %}
+
+  {% with messages = get_flashed_messages() %}
+    {% for msg in messages %}<div class="flash">{{ msg }}</div>{% endfor %}
+  {% endwith %}
+
+  {% block content %}{% endblock %}
+
+  <script src="{{ url_for('static', filename='cardpreview.js') }}" defer></script>
+</body>
+</html>

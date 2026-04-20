@@ -1,0 +1,356 @@
+{% extends "base.html" %}
+{% from "_macros.html" import card_icon %}
+{% block title %}Inventory - mtgcompare{% endblock %}
+{% block extra_css %}
+    .inv-stats { color: var(--muted); font-size: .9rem; margin-bottom: 1rem; }
+    .inv-stats strong { color: var(--fg); font-weight: 600; }
+    .inv-filter {
+      margin-bottom: 1rem;
+      display: grid;
+      gap: .6rem;
+      grid-template-columns: minmax(0, 1fr) auto minmax(0, 10rem);
+      align-items: end;
+    }
+    .inv-filter label {
+      display: flex;
+      flex-direction: column;
+      gap: .25rem;
+      color: var(--muted);
+      font-size: .75rem;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+    }
+    .inv-filter input,
+    .inv-filter select {
+      width: 100%;
+      padding: .45rem .55rem;
+      background: var(--bg);
+      color: var(--fg);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      font-size: .9rem;
+      font-family: inherit;
+    }
+    @media (max-width: 720px) {
+      .inv-filter { grid-template-columns: 1fr; }
+    }
+
+    .add-panel {
+      background: var(--bg-alt);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem 1rem .9rem;
+      margin-bottom: 1.5rem;
+    }
+    .add-panel h2 {
+      margin: 0 0 .75rem;
+      font-size: .8rem;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .05em;
+    }
+    .add-panel form { margin: 0; }
+    .add-mode { display: flex; gap: .5rem; margin-bottom: 1rem; flex-wrap: wrap; }
+    .add-mode button {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: #bfbfbf;
+      padding: .4rem .9rem;
+      font-size: .9rem;
+      border-radius: 6px;
+      font-weight: 500;
+    }
+    .add-mode button:hover { color: var(--fg); background: var(--bg); }
+    .add-mode button.active { background: #5b8def; color: #fff; border-color: #5b8def; }
+
+    .add-form {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .7rem .7rem;
+      align-items: end;
+    }
+    .add-form label {
+      display: flex;
+      flex-direction: column;
+      gap: .2rem;
+      font-size: .72rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .04em;
+      min-width: 0;
+    }
+    .add-form input,
+    .add-form select {
+      padding: .45rem .55rem;
+      background: var(--bg);
+      color: var(--fg);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      font-size: .9rem;
+      font-family: inherit;
+      box-sizing: border-box;
+    }
+    .add-form input:focus,
+    .add-form select:focus { outline: 2px solid #5b8def; border-color: transparent; }
+    .add-form label.grow { flex: 1 1 14rem; }
+    .add-form label.grow > input,
+    .add-form label.grow > select { width: 100%; }
+    .add-form .w-qty   { width: 4.5rem; }
+    .add-form .w-coll  { width: 5.5rem; }
+    .add-form .w-cond  { width: 7rem; }
+    .add-form .w-print { width: 6.5rem; }
+    .add-form .w-lang  { width: 6rem; }
+    .add-form .w-price { width: 6.5rem; }
+    .add-form .w-date  { width: 10rem; }
+    .add-form .actions {
+      flex: 1 1 100%;
+      display: flex;
+      justify-content: flex-end;
+      margin-top: .2rem;
+    }
+
+    .decklist-body textarea {
+      width: 100%;
+      min-height: 9rem;
+      padding: .6rem .7rem;
+      background: var(--bg);
+      color: var(--fg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-family: ui-monospace, Menlo, Consolas, monospace;
+      font-size: .9rem;
+      resize: vertical;
+      box-sizing: border-box;
+    }
+    .decklist-actions { display: flex; gap: .6rem; align-items: center; margin: .75rem 0 .25rem; flex-wrap: wrap; }
+    .decklist-status { color: var(--muted); font-size: .85rem; }
+    .preview-table { font-size: .88rem; margin-top: .5rem; }
+    .preview-table th, .preview-table td { padding: .35rem .5rem; vertical-align: middle; }
+    .preview-table input,
+    .preview-table select {
+      padding: .25rem .4rem;
+      background: var(--bg);
+      color: var(--fg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      font-size: .85rem;
+      font-family: inherit;
+      box-sizing: border-box;
+    }
+    .preview-table input:focus,
+    .preview-table select:focus { outline: 1px solid #5b8def; border-color: transparent; }
+    .preview-table .cell-qty   { width: 3.5rem; }
+    .preview-table .cell-set-code { width: 4.5rem; text-transform: uppercase; }
+    .preview-table .cell-cond  { width: 5.5rem; }
+    .preview-table .cell-print { width: 5.5rem; }
+    .preview-table .cell-price { width: 5rem; }
+    .preview-table .cell-date  { width: 9rem; }
+    .preview-missing { color: #f5a5a5; font-size: .88rem; margin-top: .6rem; }
+    .preview-missing ul { margin: .3rem 0 0 1.2rem; padding: 0; }
+
+    .csv-body { display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; }
+    .csv-body input[type=file] { color: var(--muted); font-size: .85rem; max-width: 100%; }
+    .csv-mode { display: inline-flex; gap: 1rem; }
+    .csv-mode label { display: inline-flex; align-items: center; gap: .35rem; color: var(--fg); font-size: .9rem; cursor: pointer; }
+    .csv-mode input[type=radio] { accent-color: #5b8def; }
+{% endblock %}
+{% block content %}
+  <div class="inv-stats">
+    <strong>{{ '{:,}'.format(stats.total_copies) }}</strong> copies
+    across <strong>{{ '{:,}'.format(stats.printings) }}</strong> lots
+    &middot; cost basis <strong>${{ '%.2f'|format(stats.total_cost) }}</strong>
+  </div>
+
+  <div class="add-panel">
+    <h2>Add cards</h2>
+    <div class="add-mode">
+      <button type="button" data-mode="single" class="active">Single card</button>
+      <button type="button" data-mode="decklist">Paste decklist</button>
+      <button type="button" data-mode="csv">Import CSV</button>
+    </div>
+
+    <form id="add-single" class="add-form" method="post" action="{{ url_for('inventory_add') }}">
+      <label class="grow">Name
+        <input id="add-name" name="card_name" list="add-name-suggest"
+               required autocomplete="off" placeholder="Sol Ring">
+      </label>
+      <datalist id="add-name-suggest"></datalist>
+
+      <label class="grow">Set
+        <select id="add-set" name="set_code" required disabled>
+          <option value="">Enter a card name first...</option>
+        </select>
+      </label>
+      <input type="hidden" id="add-set-name" name="set_name">
+
+      <label>#
+        <input class="w-coll" id="add-collector" name="card_number" autocomplete="off">
+      </label>
+
+      <label>Qty
+        <input class="w-qty" type="number" name="quantity" min="1" max="999" value="1" required>
+      </label>
+      <label>Cond.
+        <select class="w-cond" name="condition">
+          <option>NM</option><option>LP</option><option>MP</option><option>HP</option><option>Damaged</option>
+        </select>
+      </label>
+      <label>Print
+        <select class="w-print" name="printing">
+          <option>Normal</option><option>Foil</option>
+        </select>
+      </label>
+      <label>Lang
+        <input class="w-lang" name="language" value="English">
+      </label>
+      <label>Price $
+        <input class="w-price" type="number" step="0.01" min="0" name="price_bought" placeholder="-">
+      </label>
+      <label>Date
+        <input class="w-date" type="date" name="date_bought">
+      </label>
+
+      <div class="actions">
+        <button type="submit">Add card</button>
+      </div>
+    </form>
+
+    <div id="add-decklist" class="decklist-body" style="display: none;">
+      <textarea id="decklist-text" placeholder="1 Sol Ring&#10;1x Rhystic Study (C21)&#10;1 Cyclonic Rift (CMR) 79&#10;..."></textarea>
+
+      <div class="decklist-actions">
+        <button type="button" id="decklist-resolve">Resolve &amp; preview</button>
+        <button type="button" id="decklist-commit" disabled>Add to inventory</button>
+        <span id="decklist-status" class="decklist-status"></span>
+      </div>
+      <div id="decklist-preview"></div>
+    </div>
+
+    <form id="add-csv" class="csv-body" method="post" action="{{ url_for('inventory_import') }}"
+          enctype="multipart/form-data" style="display: none;">
+      <input type="file" name="file" accept=".csv" required>
+      <div class="csv-mode">
+        <label><input type="radio" name="mode" value="replace" checked> Replace inventory</label>
+        <label><input type="radio" name="mode" value="append"> Append to inventory</label>
+      </div>
+      <button type="submit">Upload</button>
+    </form>
+  </div>
+
+  {% if rows %}
+    <div class="inv-filter">
+      <label>Name
+        <input type="text" id="inv-filter-input" placeholder="Filter by card name..." autocomplete="off">
+      </label>
+      <label>Price filter
+        <select id="inv-price-mode">
+          <option value="any">Any price</option>
+          <option value="empty">Empty only</option>
+          <option value="has">Has price</option>
+          <option value="lte">Price <=</option>
+          <option value="gte">Price >=</option>
+          <option value="eq">Price =</option>
+        </select>
+      </label>
+      <label>Price bought
+        <input type="number" id="inv-price-value" min="0" step="0.01" placeholder="Any" disabled>
+      </label>
+    </div>
+
+    <table id="inv-table">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Set</th>
+          <th>#</th>
+          <th class="num">Qty</th>
+          <th>Cond.</th>
+          <th>Print</th>
+          <th>Lang</th>
+          <th class="num">Bought $</th>
+          <th>Date</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+          <tr data-name="{{ r.card_name|lower }}" data-price="{% if r.price_bought is not none %}{{ '%.2f'|format(r.price_bought) }}{% endif %}">
+            <td>{{ card_icon(r.card_name, r.set_code) }}{{ r.card_name }}</td>
+            <td title="{{ r.set_name }}">{{ r.set_code }}</td>
+            <td>{{ r.card_number }}</td>
+            <td class="num">{{ r.quantity }}</td>
+            <td>{{ r.condition }}</td>
+            <td>{{ r.printing }}</td>
+            <td>{{ r.language }}</td>
+            <td class="num">{% if r.price_bought is not none %}${{ '%.2f'|format(r.price_bought) }}{% else %}-{% endif %}</td>
+            <td>{{ r.date_bought or "-" }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <div class="empty">
+      No inventory yet. Add a card above, paste a decklist, or import a Deckbox/CardCastle-style CSV.
+    </div>
+  {% endif %}
+
+  <script src="{{ url_for('static', filename='inventoryadd.js') }}" defer></script>
+  <script>
+    (function () {
+      const input = document.getElementById('inv-filter-input');
+      const priceMode = document.getElementById('inv-price-mode');
+      const priceValue = document.getElementById('inv-price-value');
+      if (!input || !priceMode || !priceValue) return;
+      const rows = Array.from(document.querySelectorAll('#inv-table tbody tr'));
+      let frameId = 0;
+
+      function applyFilter() {
+        frameId = 0;
+        const q = input.value.trim().toLowerCase();
+        const mode = priceMode.value;
+        const rawValue = priceValue.value.trim();
+        const parsedValue = rawValue === '' ? NaN : parseFloat(rawValue);
+        rows.forEach(tr => {
+          const matchesName = !q || tr.dataset.name.includes(q);
+          const rawPrice = tr.dataset.price || '';
+          const hasPrice = rawPrice !== '';
+          const rowPrice = hasPrice ? parseFloat(rawPrice) : NaN;
+          let matchesPrice = true;
+
+          if (mode === 'empty') {
+            matchesPrice = !hasPrice;
+          } else if (mode === 'has') {
+            matchesPrice = hasPrice;
+          } else if (mode === 'lte') {
+            matchesPrice = Number.isFinite(parsedValue) && hasPrice && rowPrice <= parsedValue;
+          } else if (mode === 'gte') {
+            matchesPrice = Number.isFinite(parsedValue) && hasPrice && rowPrice >= parsedValue;
+          } else if (mode === 'eq') {
+            matchesPrice = Number.isFinite(parsedValue) && hasPrice && rowPrice === parsedValue;
+          }
+
+          tr.hidden = !(matchesName && matchesPrice);
+        });
+      }
+
+      function queueFilter() {
+        if (frameId) cancelAnimationFrame(frameId);
+        frameId = requestAnimationFrame(applyFilter);
+      }
+
+      function syncPriceInputState() {
+        const needsValue = ['lte', 'gte', 'eq'].includes(priceMode.value);
+        priceValue.disabled = !needsValue;
+        if (!needsValue) {
+          priceValue.value = '';
+        }
+        queueFilter();
+      }
+
+      input.addEventListener('input', queueFilter);
+      priceMode.addEventListener('change', syncPriceInputState);
+      priceValue.addEventListener('input', queueFilter);
+      syncPriceInputState();
+    })();
+  </script>
+{% endblock %}
