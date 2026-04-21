@@ -35,7 +35,9 @@
     margin-bottom: .75rem;
   }
   #panel-decklist form { flex-direction: column; }
-  #panel-decklist .dl-actions { display: flex; justify-content: flex-end; }
+  #panel-decklist .dl-actions { display: flex; justify-content: flex-end; align-items: center; gap: .6rem; }
+  #panel-decklist .dl-actions label { display: inline-flex; align-items: center; gap: .35rem; font-size: .88rem; color: var(--muted); cursor: pointer; }
+  #panel-decklist .dl-actions input[type=checkbox] { accent-color: #5b8def; }
 
   .ship-toggle-row {
     display: flex;
@@ -124,6 +126,7 @@
       <textarea name="decklist"
                 placeholder="1 Sol Ring&#10;4x Force of Will (FEM)&#10;1 Rhystic Study (C21) 79&#10;..."></textarea>
       <div class="dl-actions">
+        <label><input type="checkbox" name="use_inventory" value="1"> Use inventory</label>
         <button type="submit">Search decklist</button>
       </div>
     </form>

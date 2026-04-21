@@ -140,11 +140,30 @@ def _fetch_card_prices(card_name: str, fx: float) -> list[dict]:
     return collect_prices(card_name, fx, logger=app.logger)
 
 
+def _deduct_inventory(
+    name_qty: dict[str, int],
+    inv_map: dict[str, int],
+) -> tuple[dict[str, int], dict[str, int]]:
+    """Return (qty_from_inventory, qty_still_needed) per lowercase card key.
+
+    Inventory quantities are capped at the requested amount — extra copies
+    don't produce negative need.
+    """
+    name_inv_qty: dict[str, int] = {}
+    name_needed: dict[str, int] = {}
+    for key, wanted in name_qty.items():
+        have = min(inv_map.get(key, 0), wanted)
+        name_inv_qty[key] = have
+        name_needed[key] = wanted - have
+    return name_inv_qty, name_needed
+
+
 @app.route("/decklist", methods=["POST"])
 def decklist_search():
     text = request.form.get("decklist", "").strip()
     shipping_overrides_jpy = _parse_shipping_overrides(request.form)
     ship_cfg = _shipping_config(shipping_overrides_jpy)
+    use_inventory = request.form.get("use_inventory") == "1"
 
     def _early_return(error_msg: str, fx_val=None):
         return render_template(
@@ -157,15 +176,12 @@ def decklist_search():
             shipping_total_jpy=0,
             fx=fx_val, shop_flags=SHOP_FLAGS,
             shipping_config=ship_cfg, active="search",
+            use_inventory=use_inventory,
         )
 
     card_items = _parse_decklist(text)
     if not card_items:
         return _early_return("No cards parsed. Use format: '1 Card Name' or '4x Card Name (SET)'")
-
-    fx = _get_fx()
-    if fx is None:
-        return _early_return("Could not fetch FX rate; try again later.")
 
     # Consolidate duplicate names, preserve first-seen casing
     name_qty: dict[str, int] = {}
@@ -176,31 +192,49 @@ def decklist_search():
         if key not in name_canonical:
             name_canonical[key] = name
 
-    names = list(name_qty.keys())
-    prices_by_name: dict[str, list[dict]] = {n: [] for n in names}
+    # Build inventory map and compute how many we still need to buy
+    inv_map: dict[str, int] = {}
+    if use_inventory:
+        inv.init_schema()
+        for row in inv.list_all():
+            k = row["card_name"].lower()
+            inv_map[k] = inv_map.get(k, 0) + row["quantity"]
 
-    with ThreadPoolExecutor(max_workers=min(len(names), 6)) as executor:
-        future_to_name = {
-            executor.submit(_fetch_card_prices, name_canonical[n], fx): n
-            for n in names
-        }
-        for future in as_completed(future_to_name):
-            n = future_to_name[future]
-            try:
-                prices_by_name[n] = future.result()
-            except Exception as exc:
-                app.logger.error("Price fetch failed for %r: %s", name_canonical[n], exc)
+    name_inv_qty, name_needed = _deduct_inventory(name_qty, inv_map)
 
-    for n in names:
+    names_to_search = [n for n in name_qty if name_needed[n] > 0]
+    prices_by_name: dict[str, list[dict]] = {n: [] for n in name_qty}
+
+    fx = _get_fx()
+    if fx is None and names_to_search:
+        return _early_return("Could not fetch FX rate; try again later.")
+
+    if names_to_search and fx is not None:
+        with ThreadPoolExecutor(max_workers=min(len(names_to_search), 6)) as executor:
+            future_to_name = {
+                executor.submit(_fetch_card_prices, name_canonical[n], fx): n
+                for n in names_to_search
+            }
+            for future in as_completed(future_to_name):
+                n = future_to_name[future]
+                try:
+                    prices_by_name[n] = future.result()
+                except Exception as exc:
+                    app.logger.error("Price fetch failed for %r: %s", name_canonical[n], exc)
+
+    for n in names_to_search:
         prices_by_name[n].sort(key=lambda r: r["price_jpy"])
 
     card_rows = []
-    for n in sorted(names, key=lambda x: name_canonical[x].lower()):
+    for n in sorted(name_qty, key=lambda x: name_canonical[x].lower()):
         results = prices_by_name[n]
+        qty_needed = name_needed[n]
         card_rows.append({
             "name": name_canonical[n],
             "qty": name_qty[n],
-            "best": results[0] if results else None,
+            "qty_inventory": name_inv_qty[n],
+            "qty_needed": qty_needed,
+            "best": results[0] if (results and qty_needed > 0) else None,
             "all": results,
         })
 
@@ -212,7 +246,7 @@ def decklist_search():
         if row["best"] is None:
             continue
         shop = row["best"]["shop"]
-        qty = row["qty"]
+        qty = row["qty_needed"]
         unit_usd = row["best"]["price_usd"]
         unit_jpy = row["best"]["price_jpy"]
         grand_total_usd += unit_usd * qty
@@ -226,7 +260,7 @@ def decklist_search():
                 "total_usd": 0.0,
                 "total_jpy": 0.0,
                 "shipping_jpy": ship_jpy,
-                "shipping_usd": round(ship_jpy / fx, 2),
+                "shipping_usd": round(ship_jpy / fx, 2) if fx else 0.0,
             }
         shop_totals[shop]["unique_cards"] += 1
         shop_totals[shop]["total_copies"] += qty
@@ -240,7 +274,7 @@ def decklist_search():
     shop_list = sorted(shop_totals.values(), key=lambda s: -s["total_usd_with_shipping"])
 
     shipping_total_jpy = sum(s["shipping_jpy"] for s in shop_totals.values())
-    shipping_total_usd = round(shipping_total_jpy / fx, 2)
+    shipping_total_usd = round(shipping_total_jpy / fx, 2) if fx else 0.0
     grand_total_usd_with_shipping = round(grand_total_usd + shipping_total_usd, 2)
     grand_total_jpy_with_shipping = round(grand_total_jpy + shipping_total_jpy, 0)
 
@@ -259,6 +293,7 @@ def decklist_search():
         shipping_config=ship_cfg,
         active="search",
         error=None,
+        use_inventory=use_inventory,
     )
 
 

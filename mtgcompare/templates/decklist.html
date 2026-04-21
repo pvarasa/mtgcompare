@@ -128,28 +128,44 @@
   }
 
   tr.not-found td { color: var(--muted); }
+  tr.inv-covered td { color: var(--muted); }
+  .inv-covered-badge {
+    font-size: .78rem;
+    color: #5cb85c;
+    font-weight: 500;
+  }
+  .inv-have { color: #5cb85c; font-weight: 500; }
 {% endblock %}
 {% block content %}
 
   {% if error %}
     <div class="error">{{ error }}</div>
   {% else %}
-    {% set found_rows = card_rows | selectattr("best") | list %}
-    {% set missing_rows = card_rows | rejectattr("best") | list %}
+    {% set covered_rows  = card_rows | selectattr("qty_needed", "equalto", 0) | list %}
+    {% set shop_found    = card_rows | selectattr("best") | list %}
+    {# missing = needs buying but no shop result found; excludes inventory-covered cards #}
+    {% set missing_rows  = card_rows | rejectattr("qty_needed", "equalto", 0) | rejectattr("best") | list %}
+    {% set sourced_count = shop_found|length + covered_rows|length %}
 
     <p class="dl-meta">
-      {% if shipping_total_jpy > 0 %}
-        <strong>${{ '%.2f'|format(grand_total_usd_with_shipping) }}</strong>
-        &nbsp;<strong>¥{{ '{:,.0f}'.format(grand_total_jpy_with_shipping) }}</strong> total
-        <span class="dl-meta-note">
-          (¥{{ '{:,.0f}'.format(grand_total_jpy) }} cards
-          + ¥{{ '{:,.0f}'.format(shipping_total_jpy) }} shipping)
-        </span>
-      {% else %}
-        <strong>${{ '%.2f'|format(grand_total_usd) }}</strong>
-        &nbsp;<strong>¥{{ '{:,.0f}'.format(grand_total_jpy) }}</strong> total
+      {% if grand_total_usd > 0 or grand_total_usd_with_shipping > 0 %}
+        {% if shipping_total_jpy > 0 %}
+          <strong>${{ '%.2f'|format(grand_total_usd_with_shipping) }}</strong>
+          &nbsp;<strong>¥{{ '{:,.0f}'.format(grand_total_jpy_with_shipping) }}</strong> to buy
+          <span class="dl-meta-note">
+            (¥{{ '{:,.0f}'.format(grand_total_jpy) }} cards
+            + ¥{{ '{:,.0f}'.format(shipping_total_jpy) }} shipping)
+          </span>
+        {% else %}
+          <strong>${{ '%.2f'|format(grand_total_usd) }}</strong>
+          &nbsp;<strong>¥{{ '{:,.0f}'.format(grand_total_jpy) }}</strong> to buy
+        {% endif %}
+        &middot;
       {% endif %}
-      &middot; {{ found_rows|length }} of {{ card_rows|length }} card{{ 's' if card_rows|length != 1 else '' }} found
+      {{ sourced_count }} of {{ card_rows|length }} card{{ 's' if card_rows|length != 1 else '' }} sourced
+      {% if use_inventory and covered_rows %}
+        &middot; <span style="color:#5cb85c">{{ covered_rows|length }} in inventory</span>
+      {% endif %}
       {% if fx %} &middot; FX ¥{{ '%.2f'|format(fx) }} per $1{% endif %}
     </p>
 
@@ -178,6 +194,10 @@
           <tr>
             <th>Card</th>
             <th class="num">Qty</th>
+            {% if use_inventory %}
+              <th class="num">Have</th>
+              <th class="num">Need</th>
+            {% endif %}
             <th>Best shop</th>
             <th>Set</th>
             <th class="num">Unit ¥</th>
@@ -189,18 +209,34 @@
         </thead>
         <tbody>
           {% for row in card_rows %}
-            {% if row.best %}
+            {% if row.qty_needed == 0 %}
+              <tr class="inv-covered">
+                <td>{{ row.name }}</td>
+                <td class="num">{{ row.qty }}</td>
+                {% if use_inventory %}
+                  <td class="num inv-have">{{ row.qty_inventory }}</td>
+                  <td class="num">0</td>
+                {% endif %}
+                <td colspan="7"><span class="inv-covered-badge">✓ in inventory</span></td>
+              </tr>
+            {% elif row.best %}
               <tr>
                 <td>{{ card_icon(row.name, row.best.set) }}{{ row.name }}</td>
                 <td class="num">{{ row.qty }}</td>
+                {% if use_inventory %}
+                  <td class="num {% if row.qty_inventory > 0 %}inv-have{% endif %}">
+                    {{ row.qty_inventory if row.qty_inventory > 0 else '—' }}
+                  </td>
+                  <td class="num">{{ row.qty_needed }}</td>
+                {% endif %}
                 <td>
                   <span class="flag">{{ shop_flags.get(row.best.shop, '') }}</span>
                   {{ row.best.shop }}
                 </td>
                 <td>{{ row.best.set }}</td>
                 <td class="num">¥{{ '{:,.0f}'.format(row.best.price_jpy) }}</td>
-                <td class="num">¥{{ '{:,.0f}'.format(row.best.price_jpy * row.qty) }}</td>
-                <td class="num">${{ '%.2f'|format(row.best.price_usd * row.qty) }}</td>
+                <td class="num">¥{{ '{:,.0f}'.format(row.best.price_jpy * row.qty_needed) }}</td>
+                <td class="num">${{ '%.2f'|format(row.best.price_usd * row.qty_needed) }}</td>
                 <td>{{ row.best.condition }}</td>
                 <td><a href="{{ row.best.link }}" target="_blank" rel="noopener noreferrer">open</a></td>
               </tr>
@@ -208,6 +244,12 @@
               <tr class="not-found">
                 <td>{{ row.name }}</td>
                 <td class="num">{{ row.qty }}</td>
+                {% if use_inventory %}
+                  <td class="num {% if row.qty_inventory > 0 %}inv-have{% endif %}">
+                    {{ row.qty_inventory if row.qty_inventory > 0 else '—' }}
+                  </td>
+                  <td class="num">{{ row.qty_needed }}</td>
+                {% endif %}
                 <td colspan="7">not found</td>
               </tr>
             {% endif %}
@@ -246,6 +288,12 @@
 
       <div class="dl-actions">
         <a href="{{ url_for('index') }}">← Single card search</a>
+        <label style="display:inline-flex;align-items:center;gap:.35rem;font-size:.88rem;color:var(--muted);cursor:pointer">
+          <input type="checkbox" name="use_inventory" value="1"
+                 {% if use_inventory %}checked{% endif %}
+                 style="accent-color:#5b8def">
+          Use inventory
+        </label>
         <button type="submit">Search again</button>
       </div>
     </form>

@@ -156,6 +156,17 @@
     .csv-mode { display: inline-flex; gap: 1rem; }
     .csv-mode label { display: inline-flex; align-items: center; gap: .35rem; color: var(--fg); font-size: .9rem; cursor: pointer; }
     .csv-mode input[type=radio] { accent-color: #5b8def; }
+
+    .inv-cb { width: 1.6rem; padding-left: .25rem; padding-right: .1rem; }
+    .inv-cb input[type=checkbox] { cursor: pointer; accent-color: #5b8def; }
+    .inv-export-bar {
+      display: flex;
+      align-items: center;
+      gap: .5rem;
+      margin-bottom: .6rem;
+      flex-wrap: wrap;
+    }
+    .inv-export-bar .sel-count { color: var(--muted); font-size: .85rem; flex: 1; min-width: 7rem; }
 {% endblock %}
 {% block content %}
   <div class="inv-stats">
@@ -260,9 +271,16 @@
       </label>
     </div>
 
+    <div class="inv-export-bar">
+      <span class="sel-count" id="inv-sel-count">0 selected</span>
+      <button type="button" id="inv-export-deck" disabled>Export decklist</button>
+      <button type="button" id="inv-export-csv" disabled>Export CSV</button>
+    </div>
+
     <table id="inv-table">
       <thead>
         <tr>
+          <th class="inv-cb"><input type="checkbox" id="inv-check-all" title="Select all visible"></th>
           <th>Name</th>
           <th>Set</th>
           <th>#</th>
@@ -276,7 +294,18 @@
       </thead>
       <tbody>
         {% for r in rows %}
-          <tr data-name="{{ r.card_name|lower }}" data-price="{% if r.price_bought is not none %}{{ '%.2f'|format(r.price_bought) }}{% endif %}">
+          <tr data-name="{{ r.card_name|lower }}"
+              data-price="{% if r.price_bought is not none %}{{ '%.2f'|format(r.price_bought) }}{% endif %}"
+              data-card="{{ r.card_name }}"
+              data-set="{{ r.set_code }}"
+              data-setname="{{ r.set_name or '' }}"
+              data-num="{{ r.card_number or '' }}"
+              data-qty="{{ r.quantity }}"
+              data-cond="{{ r.condition or '' }}"
+              data-print="{{ r.printing or '' }}"
+              data-lang="{{ r.language or '' }}"
+              data-date="{{ r.date_bought or '' }}">
+            <td class="inv-cb"><input type="checkbox"></td>
             <td>{{ card_icon(r.card_name, r.set_code) }}{{ r.card_name }}</td>
             <td title="{{ r.set_name }}">{{ r.set_code }}</td>
             <td>{{ r.card_number }}</td>
@@ -354,6 +383,81 @@
       priceMode.addEventListener('change', syncPriceInputState);
       priceValue.addEventListener('input', queueFilter);
       syncPriceInputState();
+    })();
+
+    (function () {
+      const checkAll  = document.getElementById('inv-check-all');
+      const selCount  = document.getElementById('inv-sel-count');
+      const btnDeck   = document.getElementById('inv-export-deck');
+      const btnCsv    = document.getElementById('inv-export-csv');
+      if (!checkAll) return;
+
+      const allRows = Array.from(document.querySelectorAll('#inv-table tbody tr'));
+
+      function visibleRows()  { return allRows.filter(tr => !tr.hidden); }
+      function checkedRows()  { return allRows.filter(tr => tr.querySelector('input[type=checkbox]').checked); }
+
+      function updateState() {
+        const checked = checkedRows();
+        const n = checked.length;
+        selCount.textContent = n === 0 ? '0 selected' : `${n} selected`;
+        btnDeck.disabled = n === 0;
+        btnCsv.disabled  = n === 0;
+        const vis = visibleRows();
+        const allChecked = vis.length > 0 && vis.every(tr => tr.querySelector('input[type=checkbox]').checked);
+        checkAll.indeterminate = !allChecked && n > 0;
+        checkAll.checked = allChecked;
+      }
+
+      checkAll.addEventListener('change', () => {
+        visibleRows().forEach(tr => {
+          tr.querySelector('input[type=checkbox]').checked = checkAll.checked;
+        });
+        updateState();
+      });
+
+      allRows.forEach(tr => {
+        tr.querySelector('input[type=checkbox]').addEventListener('change', updateState);
+      });
+
+      // Keep state in sync when the filter hides/shows rows
+      const mo = new MutationObserver(updateState);
+      allRows.forEach(tr => mo.observe(tr, { attributes: true, attributeFilter: ['hidden'] }));
+
+      function download(filename, content, mime) {
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(new Blob([content], { type: mime }));
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(a.href);
+      }
+
+      btnDeck.addEventListener('click', () => {
+        const lines = checkedRows().map(tr =>
+          `${tr.dataset.qty}x ${tr.dataset.card} (${tr.dataset.set})`
+        );
+        download('decklist.txt', lines.join('\n'), 'text/plain');
+      });
+
+      function csvCell(v) {
+        const s = v === null || v === undefined ? '' : String(v);
+        return s.includes(',') || s.includes('"') || s.includes('\n')
+          ? `"${s.replace(/"/g, '""')}"` : s;
+      }
+
+      btnCsv.addEventListener('click', () => {
+        const headers = ['Card Name','Set Code','Set Name','Card Number',
+                         'Quantity','Condition','Printing','Language',
+                         'Price Bought','Date Bought'];
+        const dataRows = checkedRows().map(tr => [
+          tr.dataset.card, tr.dataset.set, tr.dataset.setname, tr.dataset.num,
+          tr.dataset.qty,  tr.dataset.cond, tr.dataset.print, tr.dataset.lang,
+          tr.dataset.price, tr.dataset.date,
+        ].map(csvCell).join(','));
+        download('inventory.csv', [headers.join(','), ...dataRows].join('\r\n'), 'text/csv');
+      });
+
+      updateState();
     })();
   </script>
 {% endblock %}
