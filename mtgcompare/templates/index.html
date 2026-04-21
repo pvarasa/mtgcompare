@@ -1,17 +1,133 @@
 {% extends "base.html" %}
 {% from "_macros.html" import card_icon %}
 {% block title %}mtgcompare{% if q %} - {{ q }}{% endif %}{% endblock %}
+{% block extra_css %}
+  .search-mode { display: flex; gap: .5rem; margin-bottom: 1rem; }
+  .search-mode button {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: #bfbfbf;
+    padding: .4rem .9rem;
+    font-size: .9rem;
+    border-radius: 6px;
+    font-weight: 500;
+  }
+  .search-mode button:hover { color: var(--fg); background: var(--bg-alt); }
+  .search-mode button.active { background: #5b8def; color: #fff; border-color: #5b8def; }
+
+  /* Single-card panel: override global form flex so we can stack rows */
+  #panel-single form { display: block; margin-bottom: 0; }
+  .search-row { display: flex; gap: .5rem; margin-bottom: .75rem; }
+  .search-row input[type=text] { flex: 1; }
+
+  #panel-decklist textarea {
+    width: 100%;
+    min-height: 10rem;
+    padding: .6rem .7rem;
+    background: var(--bg-alt);
+    color: var(--fg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: .9rem;
+    resize: vertical;
+    box-sizing: border-box;
+    margin-bottom: .75rem;
+  }
+  #panel-decklist form { flex-direction: column; }
+  #panel-decklist .dl-actions { display: flex; justify-content: flex-end; }
+
+  .ship-toggle-row {
+    display: flex;
+    align-items: center;
+    gap: .6rem;
+    margin-bottom: .5rem;
+  }
+  .ship-toggle-row label {
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: .4rem;
+    font-size: .88rem;
+    color: var(--muted);
+  }
+  .ship-toggle-row input[type=checkbox] { accent-color: #5b8def; }
+  .ship-cfg {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .4rem .9rem;
+    align-items: end;
+    margin-bottom: .75rem;
+    padding: .65rem .75rem;
+    background: var(--bg-alt);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+  }
+  .ship-cfg label {
+    display: flex;
+    flex-direction: column;
+    gap: .2rem;
+    font-size: .7rem;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: .04em;
+  }
+  .ship-cfg input {
+    width: 6.5rem;
+    padding: .3rem .4rem;
+    background: var(--bg);
+    color: var(--fg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-size: .85rem;
+    font-family: inherit;
+    box-sizing: border-box;
+  }
+{% endblock %}
 {% block content %}
-  <form method="get" action="{{ url_for('index') }}">
-    <input
-      type="text"
-      name="q"
-      value="{{ q }}"
-      placeholder='Card name, e.g. "Force of Will"'
-      autofocus
-      autocomplete="off">
-    <button type="submit">Search</button>
-  </form>
+  <div class="search-mode">
+    <button type="button" id="mode-single" class="active">Single card</button>
+    <button type="button" id="mode-decklist">Decklist</button>
+  </div>
+
+  <div id="panel-single">
+    <form method="get" action="{{ url_for('index') }}">
+      <div class="search-row">
+        <input type="text" name="q" value="{{ q }}"
+               placeholder='Card name, e.g. "Force of Will"'
+               autofocus autocomplete="off">
+        <button type="submit">Search</button>
+      </div>
+
+      <input type="hidden" id="shipping-val" name="shipping" value="{{ '1' if include_shipping else '0' }}">
+      <div class="ship-toggle-row">
+        <label>
+          <input type="checkbox" id="ship-toggle"
+                 {% if include_shipping %}checked{% endif %}>
+          Include shipping (¥/order)
+        </label>
+      </div>
+      <div id="ship-cfg-panel" class="ship-cfg"
+           {% if not include_shipping %}style="display:none"{% endif %}>
+        {% for s in shipping_config %}
+          <label>{{ shop_flags.get(s.shop, '') }} {{ s.shop }}
+            <input type="number" step="1" min="0"
+                   name="ship_{{ s.slug }}" value="{{ s.cost_jpy }}">
+          </label>
+        {% endfor %}
+      </div>
+    </form>
+  </div>
+
+  <div id="panel-decklist" style="display:none">
+    <form method="post" action="{{ url_for('decklist_search') }}">
+      <textarea name="decklist"
+                placeholder="1 Sol Ring&#10;4x Force of Will (FEM)&#10;1 Rhystic Study (C21) 79&#10;..."></textarea>
+      <div class="dl-actions">
+        <button type="submit">Search decklist</button>
+      </div>
+    </form>
+  </div>
 
   {% if error %}
     <div class="error">{{ error }}</div>
@@ -21,18 +137,20 @@
     <p class="meta">
       {{ results|length }} result{% if results|length != 1 %}s{% endif %} for "{{ q }}"
       {% if fx %} &middot; FX ¥{{ '%.2f'|format(fx) }} per $1{% endif %}
+      {% if include_shipping %} &middot; sorted by total incl. shipping{% endif %}
     </p>
 
     {% if results %}
-      <table>
+      <table id="results-table">
         <thead>
           <tr>
             <th>Shop</th>
             <th>Set</th>
-            <th class="num">USD</th>
-            <th class="num">JPY</th>
+            <th class="num">¥</th>
+            {% if include_shipping %}<th class="num">w/ship ¥</th>{% endif %}
+            <th class="num">$</th>
             <th class="num">Stock</th>
-            <th>Cond.</th>
+            <th>Cond</th>
             <th>Link</th>
           </tr>
         </thead>
@@ -40,14 +158,16 @@
           {% for r in results %}
             <tr class="{% if loop.first %}cheapest{% endif %}">
               <td>
-                <span class="flag">{{ shop_flags.get(r.shop, '') }}</span>
-                {{ r.shop }}
+                <span class="flag">{{ shop_flags.get(r.shop, '') }}</span>{{ r.shop }}
                 {% if loop.first %}<span class="badge">cheapest</span>{% endif %}
               </td>
               <td>{{ card_icon(q, r.set) }}{{ r.set }}</td>
-              <td class="num">${{ '%.2f'|format(r.price_usd) }}</td>
               <td class="num">¥{{ '{:,.0f}'.format(r.price_jpy) }}</td>
-              <td class="num">{{ r.stock if r.stock is not none else "-" }}</td>
+              {% if include_shipping %}
+                <td class="num">¥{{ '{:,.0f}'.format(r.price_jpy_with_shipping) }}</td>
+              {% endif %}
+              <td class="num">${{ '%.2f'|format(r.price_usd) }}</td>
+              <td class="num">{{ r.stock if r.stock is not none else "—" }}</td>
               <td>{{ r.condition }}</td>
               <td><a href="{{ r.link }}" target="_blank" rel="noopener noreferrer">open</a></td>
             </tr>
@@ -58,4 +178,35 @@
       <div class="empty">No results.</div>
     {% endif %}
   {% endif %}
+
+  <script>
+    (function () {
+      // --- mode toggle ---
+      const btnSingle     = document.getElementById('mode-single');
+      const btnDecklist   = document.getElementById('mode-decklist');
+      const panelSingle   = document.getElementById('panel-single');
+      const panelDecklist = document.getElementById('panel-decklist');
+
+      function activate(mode) {
+        const dl = mode === 'decklist';
+        btnSingle.classList.toggle('active', !dl);
+        btnDecklist.classList.toggle('active', dl);
+        panelSingle.style.display   = dl ? 'none' : '';
+        panelDecklist.style.display = dl ? '' : 'none';
+      }
+      btnSingle.addEventListener('click',   () => activate('single'));
+      btnDecklist.addEventListener('click', () => activate('decklist'));
+
+      // --- shipping toggle: hidden input is what actually submits ---
+      const toggle    = document.getElementById('ship-toggle');
+      const shipVal   = document.getElementById('shipping-val');
+      const cfgPanel  = document.getElementById('ship-cfg-panel');
+      if (toggle && shipVal && cfgPanel) {
+        toggle.addEventListener('change', () => {
+          shipVal.value = toggle.checked ? '1' : '0';
+          cfgPanel.style.display = toggle.checked ? '' : 'none';
+        });
+      }
+    })();
+  </script>
 {% endblock %}

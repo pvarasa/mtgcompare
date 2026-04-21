@@ -1,0 +1,304 @@
+{% extends "base.html" %}
+{% from "_macros.html" import card_icon %}
+{% block title %}Market - mtgcompare{% endblock %}
+{% block extra_css %}
+  .mkt-header {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 1.4rem;
+    flex-wrap: wrap;
+  }
+  .mkt-header .refresh-info {
+    color: var(--muted);
+    font-size: .85rem;
+    flex: 1;
+  }
+  .mkt-header .refresh-info strong { color: var(--fg); }
+
+  .mkt-first-time {
+    background: var(--bg-alt);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 2rem 1.5rem;
+    text-align: center;
+    color: var(--muted);
+    margin-bottom: 1.5rem;
+  }
+  .mkt-first-time p { margin: 0 0 1rem; font-size: .95rem; }
+
+  .mkt-summary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .6rem;
+    margin-bottom: 1.5rem;
+  }
+  .mkt-stat {
+    background: var(--bg-alt);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: .65rem 1rem;
+    min-width: 10rem;
+    flex: 1 1 10rem;
+  }
+  .mkt-stat .stat-label {
+    font-size: .75rem;
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    margin-bottom: .3rem;
+  }
+  .mkt-stat .stat-value {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: var(--fg);
+  }
+  .mkt-stat .stat-sub {
+    font-size: .78rem;
+    color: var(--muted);
+    margin-top: .15rem;
+  }
+
+  .pnl-up   { color: #5cb85c; }
+  .pnl-down { color: #d9534f; }
+  .pnl-none { color: var(--muted); }
+
+  .mkt-note {
+    font-size: .78rem;
+    color: var(--muted);
+    margin-bottom: 1.2rem;
+  }
+
+  #mkt-filter { margin-bottom: .75rem; }
+  #mkt-filter input {
+    padding: .45rem .55rem;
+    background: var(--bg-alt);
+    color: var(--fg);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    font-size: .9rem;
+    font-family: inherit;
+    width: 18rem;
+    max-width: 100%;
+  }
+  #mkt-table thead th[data-col] { user-select: none; }
+  #mkt-table thead th[data-sort="asc"]::after  { content: " ↑"; color: var(--muted); }
+  #mkt-table thead th[data-sort="desc"]::after { content: " ↓"; color: var(--muted); }
+{% endblock %}
+{% block content %}
+
+  {% if error %}
+    <div class="error">{{ error }}</div>
+  {% endif %}
+
+  {# ── Refresh bar ───────────────────────────────────────────────── #}
+  <div class="mkt-header">
+    <div class="refresh-info">
+      {% if has_cache %}
+        Last updated: <strong>{{ last_refreshed }}</strong>
+      {% else %}
+        Prices not yet loaded
+      {% endif %}
+    </div>
+    <form method="post" action="{{ url_for('market_refresh') }}"
+          onsubmit="this.querySelector('button').disabled=true;
+                    this.querySelector('button').textContent='Fetching…';">
+      <button type="submit">Refresh prices</button>
+    </form>
+  </div>
+
+  {# ── Empty inventory ───────────────────────────────────────────── #}
+  {% if not rows %}
+    <div class="empty">
+      No inventory yet. <a href="{{ url_for('inventory') }}">Add cards</a> to see market values.
+    </div>
+
+  {# ── First-time: inventory exists but no cache yet ─────────────── #}
+  {% elif not has_cache %}
+    <div class="mkt-first-time">
+      <p>{{ rows|length }} lot{{ 's' if rows|length != 1 else '' }} in inventory — click <strong>Refresh prices</strong> to fetch current market prices.</p>
+    </div>
+
+  {# ── Full view: cached prices available ───────────────────────── #}
+  {% else %}
+
+    <div class="mkt-summary">
+
+      <div class="mkt-stat">
+        <div class="stat-label">Cost basis</div>
+        <div class="stat-value">${{ '{:,.2f}'.format(summary.total_cost_usd) }}</div>
+        <div class="stat-sub">
+          {{ summary.lots_in_pnl }} of {{ summary.lots_total }} lot{{ 's' if summary.lots_total != 1 else '' }} tracked
+          {% if summary.lots_no_cost %} &middot; {{ summary.lots_no_cost }} uncosted{% endif %}
+        </div>
+      </div>
+
+      <div class="mkt-stat">
+        <div class="stat-label">Market value</div>
+        <div class="stat-value">${{ '{:,.2f}'.format(summary.total_market_usd) }}</div>
+        <div class="stat-sub">
+          ¥{{ '{:,.0f}'.format(summary.total_market_jpy) }}
+          {% if summary.lots_no_market %} &middot; {{ summary.lots_no_market }} no price{% endif %}
+        </div>
+      </div>
+
+      <div class="mkt-stat">
+        <div class="stat-label">Unrealized PnL</div>
+        {% set pnl = summary.total_pnl_usd %}
+        <div class="stat-value {% if pnl > 0 %}pnl-up{% elif pnl < 0 %}pnl-down{% endif %}">
+          {% if pnl >= 0 %}+{% endif %}${{ '{:,.2f}'.format(pnl) }}
+        </div>
+        <div class="stat-sub">
+          {% if summary.pnl_pct is not none %}
+            {% if summary.pnl_pct >= 0 %}+{% endif %}{{ summary.pnl_pct }}% on costed lots
+          {% else %}
+            no costed lots
+          {% endif %}
+        </div>
+      </div>
+
+    </div>
+
+    <p class="mkt-note">
+      Prices from Scryfall / TCGPlayer (NM non-foil, or foil where marked).
+      {% if fx %}FX ¥{{ '%.2f'|format(fx) }} per $1.{% endif %}
+      Cost basis is in USD as entered.
+    </p>
+
+    <div id="mkt-filter">
+      <input type="text" id="mkt-filter-input" placeholder="Filter by card name…" autocomplete="off">
+    </div>
+
+    <table id="mkt-table" style="contain:layout style">
+      <thead>
+        <tr>
+          <th data-col="0">Card</th>
+          <th data-col="1">Set</th>
+          <th class="num" data-col="2">Qty</th>
+          <th data-col="3">Cond.</th>
+          <th data-col="4">Print</th>
+          <th class="num" data-col="5">Paid $</th>
+          <th class="num" data-col="6">Mkt $</th>
+          <th class="num" data-col="7">Mkt ¥</th>
+          <th class="num" data-col="8">PnL</th>
+          <th class="num" data-col="9">%</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+          <tr data-name="{{ row.card_name|lower }}">
+            <td>{{ card_icon(row.card_name, row.set_code) }}{{ row.card_name }}</td>
+            <td title="{{ row.set_name }}">{{ row.set_code }}</td>
+            <td class="num" data-val="{{ row.quantity }}">{{ row.quantity }}</td>
+            <td>{{ row.condition }}</td>
+            <td>{{ row.printing }}</td>
+
+            <td class="num" data-val="{{ row.price_bought if row.price_bought is not none else '' }}">
+              {% if row.price_bought is not none %}
+                ${{ '%.2f'|format(row.price_bought) }}
+              {% else %}<span class="pnl-none">—</span>{% endif %}
+            </td>
+
+            <td class="num" data-val="{{ row.market_price_usd if row.market_price_usd is not none else '' }}">
+              {% if row.market_price_usd is not none %}
+                ${{ '%.2f'|format(row.market_price_usd) }}
+              {% else %}<span class="pnl-none">?</span>{% endif %}
+            </td>
+
+            <td class="num" data-val="{{ row.market_value_jpy if row.market_value_jpy is not none else '' }}">
+              {% if row.market_value_jpy is not none %}
+                ¥{{ '{:,.0f}'.format(row.market_value_jpy) }}
+              {% else %}<span class="pnl-none">?</span>{% endif %}
+            </td>
+
+            <td class="num" data-val="{{ row.pnl_usd if row.pnl_usd is not none else '' }}">
+              {% if row.pnl_usd is not none %}
+                <span class="{% if row.pnl_usd > 0 %}pnl-up{% elif row.pnl_usd < 0 %}pnl-down{% endif %}">
+                  {% if row.pnl_usd > 0 %}+{% endif %}${{ '%.2f'|format(row.pnl_usd) }}
+                </span>
+              {% elif row.price_bought is none %}
+                <span class="pnl-none">—</span>
+              {% else %}
+                <span class="pnl-none">?</span>
+              {% endif %}
+            </td>
+
+            <td class="num" data-val="{{ row.pnl_pct if row.pnl_pct is not none else '' }}">
+              {% if row.pnl_pct is not none %}
+                <span class="{% if row.pnl_pct > 0 %}pnl-up{% elif row.pnl_pct < 0 %}pnl-down{% endif %}">
+                  {% if row.pnl_pct > 0 %}+{% endif %}{{ row.pnl_pct }}%
+                </span>
+              {% else %}
+                <span class="pnl-none">—</span>
+              {% endif %}
+            </td>
+
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <script>
+      (function () {
+        // --- filter ---
+        const input = document.getElementById('mkt-filter-input');
+        const rows  = Array.from(document.querySelectorAll('#mkt-table tbody tr'));
+        let frame = 0;
+        function applyFilter() {
+          frame = 0;
+          const q = input.value.trim().toLowerCase();
+          rows.forEach(tr => {
+            const shouldHide = q && !tr.dataset.name.includes(q);
+            if (tr.hidden !== shouldHide) tr.hidden = shouldHide;
+          });
+        }
+        input.addEventListener('input', () => {
+          if (frame) cancelAnimationFrame(frame);
+          frame = requestAnimationFrame(applyFilter);
+        });
+
+        // --- sort ---
+        const tbody = document.querySelector('#mkt-table tbody');
+        let sortCol = -1, sortAsc = true;
+
+        function cellVal(tr, col) {
+          const td = tr.children[col];
+          const raw = td.dataset.val;
+          if (raw !== undefined) return raw === '' ? null : parseFloat(raw);
+          return td.textContent.trim().toLowerCase();
+        }
+
+        document.querySelectorAll('#mkt-table thead th[data-col]').forEach(th => {
+          th.style.cursor = 'pointer';
+          th.addEventListener('click', () => {
+            const col = parseInt(th.dataset.col);
+            if (sortCol === col) {
+              sortAsc = !sortAsc;
+            } else {
+              sortCol = col;
+              sortAsc = true;
+            }
+            document.querySelectorAll('#mkt-table thead th').forEach(h => {
+              h.dataset.sort = '';
+            });
+            th.dataset.sort = sortAsc ? 'asc' : 'desc';
+
+            const sorted = rows.slice().sort((a, b) => {
+              let av = cellVal(a, col), bv = cellVal(b, col);
+              // nulls always last
+              if (av === null && bv === null) return 0;
+              if (av === null) return 1;
+              if (bv === null) return -1;
+              if (typeof av === 'string') return sortAsc ? av.localeCompare(bv) : bv.localeCompare(av);
+              return sortAsc ? av - bv : bv - av;
+            });
+            sorted.forEach(tr => tbody.appendChild(tr));
+          });
+        });
+      })();
+    </script>
+
+  {% endif %}
+
+{% endblock %}

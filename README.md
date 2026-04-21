@@ -1,8 +1,8 @@
 # mtgcompare
 
-Compares prices of *Magic: The Gathering* cards across online shops and
-picks the cheapest. Prices are normalized to both JPY and USD using a
-live FX rate.
+Compares *Magic: The Gathering* card prices across several shops, normalizes
+them to JPY and USD, and provides both a CLI and a local Flask web UI for
+searching, decklist estimation, and inventory tracking.
 
 ## Shops
 
@@ -13,8 +13,9 @@ live FX rate.
 | SingleStar               | JP     | per-printing price + stock           | server-rendered search HTML                  |
 | TokyoMTG                 | JP     | per-printing price + stock           | server-rendered search HTML                  |
 
-Only non-foil English printings in stock are returned. TCGPlayer/Scryfall
-does not expose live stock, so those records have `stock: null`.
+Search results are scoped to English printings. Shop scrapers return only
+in-stock results where that data is available. TCGPlayer/Scryfall does not
+expose live stock, so those records have `stock: null`.
 
 ## Requirements
 
@@ -40,6 +41,7 @@ Repo layout:
 ### CLI
 
 ```bash
+uv run mtgcompare -c "Force of Will"
 uv run python -m mtgcompare.compare -c "Force of Will"
 uv run python -m mtgcompare.compare -f examples/card_list.txt
 uv run python -m mtgcompare.compare -f examples/card_list.txt -e prices.json
@@ -48,19 +50,30 @@ uv run python -m mtgcompare.compare -f examples/card_list.txt -e prices.json
 ### Web UI
 
 ```bash
+uv run mtgcompare-web
 uv run python -m mtgcompare.web
 ```
 
 Then visit <http://127.0.0.1:5000>.
 
-### Search tab
+### Search
 
-- Enter a card name and submit to get a sorted results table.
+- The Search page has two modes: `Single card` and `Decklist`.
+- Single-card search shows per-printing results across all shops.
 - The cheapest row is highlighted.
+- You can optionally include per-shop shipping and sort by card price plus shipping.
 - FX is fetched once per process and reused.
 - Click the card icon to preview the card art via Scryfall.
 
-### Inventory tab
+### Decklist search
+
+- Paste lines like `1 Sol Ring`, `4x Force of Will (ALL)`, or `1 Rhystic Study (C21) 79`.
+- Duplicate card names are consolidated before pricing.
+- The app fetches each unique card in parallel, then picks the cheapest result per card.
+- The result page shows a deck total, a per-shop cost breakdown, and any cards that were not found.
+- Shipping defaults can be adjusted per shop and are included in the totals.
+
+### Inventory
 
 Your owned cards are stored locally in `inventory.db`.
 
@@ -87,6 +100,14 @@ uv run python -m mtgcompare.inventory import binder.csv
 uv run python -m mtgcompare.inventory import extras.csv --append
 uv run python -m mtgcompare.inventory stats
 ```
+
+### Market
+
+- The Market page values your inventory using cached Scryfall collection lookups.
+- The first visit after adding cards shows inventory rows but no prices until you click `Refresh prices`.
+- Cached rows are keyed by `(card_name, normalized set_code, foil/non-foil)`.
+- The page shows total cost basis, total market value, unrealized PnL, and per-lot rows.
+- Cost basis is whatever USD value you stored in inventory; market value is refreshed from Scryfall.
 
 Startup helpers:
 
@@ -147,4 +168,5 @@ Inspect the diff before accepting fixture changes.
 - Hareruya pagination is not followed; results are capped to page 1.
 - Card matching is case-insensitive exact match.
 - Scryfall's USD price is TCGPlayer market price, not the cheapest listing.
-- Shipping and tax are not modeled.
+- Shipping is modeled as a per-order estimate, not a live checkout quote.
+- Tax, fees, and cross-shop order splitting are not modeled.

@@ -1,0 +1,254 @@
+{% extends "base.html" %}
+{% from "_macros.html" import card_icon %}
+{% block title %}Decklist search - mtgcompare{% endblock %}
+{% block extra_css %}
+  .dl-meta { color: var(--muted); font-size: .9rem; margin-bottom: 1.2rem; }
+  .dl-meta strong { color: var(--fg); font-weight: 600; }
+  .dl-meta-note { font-size: .82em; color: var(--muted); }
+
+  .dl-shops {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .6rem;
+    margin-bottom: 1.5rem;
+  }
+  .dl-shop-card {
+    background: var(--bg-alt);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: .65rem 1rem;
+    min-width: 11rem;
+  }
+  .dl-shop-card .shop-name {
+    font-size: .78rem;
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    margin-bottom: .3rem;
+  }
+  .dl-shop-card .shop-total {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--fg);
+  }
+  .dl-shop-card .shop-breakdown {
+    font-size: .78rem;
+    color: var(--muted);
+    margin-top: .25rem;
+    display: flex;
+    flex-direction: column;
+    gap: .1rem;
+  }
+  .dl-shop-card .ship-line { color: #8a8a8a; }
+
+  .dl-not-found {
+    color: var(--muted);
+    font-size: .88rem;
+    margin-top: 1.2rem;
+    padding: .6rem .8rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-alt);
+  }
+  .dl-not-found strong { color: #f5a5a5; }
+  .dl-not-found ul { margin: .3rem 0 0 1.2rem; padding: 0; }
+
+  .dl-refine {
+    margin-top: 2rem;
+    padding-top: 1.2rem;
+    border-top: 1px solid var(--border);
+  }
+  .dl-refine h2 {
+    font-size: .8rem;
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    margin: 0 0 .6rem;
+  }
+  .dl-refine textarea {
+    width: 100%;
+    min-height: 8rem;
+    padding: .6rem .7rem;
+    background: var(--bg-alt);
+    color: var(--fg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: .9rem;
+    resize: vertical;
+    box-sizing: border-box;
+    margin-bottom: .6rem;
+  }
+  .dl-refine form { flex-direction: column; }
+  .dl-refine .dl-actions { display: flex; justify-content: flex-end; gap: .5rem; align-items: center; }
+
+  details.ship-details {
+    margin-bottom: .75rem;
+  }
+  details.ship-details > summary {
+    cursor: pointer;
+    font-size: .82rem;
+    color: var(--muted);
+    user-select: none;
+    padding: .3rem 0;
+  }
+  details.ship-details > summary:hover { color: var(--fg); }
+  .ship-cfg {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .5rem 1rem;
+    align-items: end;
+    margin-top: .5rem;
+    padding: .75rem;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+  }
+  .ship-cfg label {
+    display: flex;
+    flex-direction: column;
+    gap: .2rem;
+    font-size: .72rem;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: .04em;
+  }
+  .ship-cfg input {
+    width: 7rem;
+    padding: .35rem .45rem;
+    background: var(--bg-alt);
+    color: var(--fg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-size: .85rem;
+    font-family: inherit;
+    box-sizing: border-box;
+  }
+
+  tr.not-found td { color: var(--muted); }
+{% endblock %}
+{% block content %}
+
+  {% if error %}
+    <div class="error">{{ error }}</div>
+  {% else %}
+    {% set found_rows = card_rows | selectattr("best") | list %}
+    {% set missing_rows = card_rows | rejectattr("best") | list %}
+
+    <p class="dl-meta">
+      {% if shipping_total_jpy > 0 %}
+        <strong>${{ '%.2f'|format(grand_total_usd_with_shipping) }}</strong>
+        &nbsp;<strong>¥{{ '{:,.0f}'.format(grand_total_jpy_with_shipping) }}</strong> total
+        <span class="dl-meta-note">
+          (¥{{ '{:,.0f}'.format(grand_total_jpy) }} cards
+          + ¥{{ '{:,.0f}'.format(shipping_total_jpy) }} shipping)
+        </span>
+      {% else %}
+        <strong>${{ '%.2f'|format(grand_total_usd) }}</strong>
+        &nbsp;<strong>¥{{ '{:,.0f}'.format(grand_total_jpy) }}</strong> total
+      {% endif %}
+      &middot; {{ found_rows|length }} of {{ card_rows|length }} card{{ 's' if card_rows|length != 1 else '' }} found
+      {% if fx %} &middot; FX ¥{{ '%.2f'|format(fx) }} per $1{% endif %}
+    </p>
+
+    {% if shop_list %}
+      <div class="dl-shops">
+        {% for s in shop_list %}
+          <div class="dl-shop-card">
+            <div class="shop-name">{{ shop_flags.get(s.shop, '') }} {{ s.shop }}</div>
+            <div class="shop-total">¥{{ '{:,.0f}'.format(s.total_jpy_with_shipping) }}</div>
+            <div class="shop-breakdown">
+              <span>¥{{ '{:,.0f}'.format(s.total_jpy) }} cards</span>
+              {% if s.shipping_jpy > 0 %}
+                <span class="ship-line">+ ¥{{ '{:,.0f}'.format(s.shipping_jpy) }} shipping</span>
+              {% endif %}
+              <span>{{ s.unique_cards }} card{{ 's' if s.unique_cards != 1 else '' }}
+                ({{ s.total_copies }} cop{{ 'ies' if s.total_copies != 1 else 'y' }})</span>
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    {% endif %}
+
+    {% if card_rows %}
+      <table>
+        <thead>
+          <tr>
+            <th>Card</th>
+            <th class="num">Qty</th>
+            <th>Best shop</th>
+            <th>Set</th>
+            <th class="num">Unit ¥</th>
+            <th class="num">Total ¥</th>
+            <th class="num">USD</th>
+            <th>Cond.</th>
+            <th>Link</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in card_rows %}
+            {% if row.best %}
+              <tr>
+                <td>{{ card_icon(row.name, row.best.set) }}{{ row.name }}</td>
+                <td class="num">{{ row.qty }}</td>
+                <td>
+                  <span class="flag">{{ shop_flags.get(row.best.shop, '') }}</span>
+                  {{ row.best.shop }}
+                </td>
+                <td>{{ row.best.set }}</td>
+                <td class="num">¥{{ '{:,.0f}'.format(row.best.price_jpy) }}</td>
+                <td class="num">¥{{ '{:,.0f}'.format(row.best.price_jpy * row.qty) }}</td>
+                <td class="num">${{ '%.2f'|format(row.best.price_usd * row.qty) }}</td>
+                <td>{{ row.best.condition }}</td>
+                <td><a href="{{ row.best.link }}" target="_blank" rel="noopener noreferrer">open</a></td>
+              </tr>
+            {% else %}
+              <tr class="not-found">
+                <td>{{ row.name }}</td>
+                <td class="num">{{ row.qty }}</td>
+                <td colspan="7">not found</td>
+              </tr>
+            {% endif %}
+          {% endfor %}
+        </tbody>
+      </table>
+
+      {% if missing_rows %}
+        <div class="dl-not-found">
+          <strong>Not found ({{ missing_rows|length }}):</strong>
+          <ul>
+            {% for row in missing_rows %}
+              <li>{{ row.name }}</li>
+            {% endfor %}
+          </ul>
+        </div>
+      {% endif %}
+    {% endif %}
+  {% endif %}
+
+  <div class="dl-refine">
+    <h2>Refine search</h2>
+    <form method="post" action="{{ url_for('decklist_search') }}">
+      <textarea name="decklist">{{ decklist }}</textarea>
+
+      <details class="ship-details"{% if shipping_total_jpy is defined and shipping_total_jpy > 0 %} open{% endif %}>
+        <summary>Shipping costs (¥ per order)</summary>
+        <div class="ship-cfg">
+          {% for s in shipping_config %}
+            <label>{{ shop_flags.get(s.shop, '') }} {{ s.shop }}
+              <input type="number" step="1" min="0" name="ship_{{ s.slug }}" value="{{ s.cost_jpy }}">
+            </label>
+          {% endfor %}
+        </div>
+      </details>
+
+      <div class="dl-actions">
+        <a href="{{ url_for('index') }}">← Single card search</a>
+        <button type="submit">Search again</button>
+      </div>
+    </form>
+  </div>
+
+{% endblock %}

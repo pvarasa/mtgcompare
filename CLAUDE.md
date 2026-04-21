@@ -7,7 +7,7 @@ Repo-specific guidance for coding sessions.
 - `mtgcompare/`
   Main application package.
 - `mtgcompare/web.py`
-  Flask UI entry point.
+  Flask UI entry point for search, decklist, inventory, and market pages.
 - `mtgcompare/compare.py`
   CLI price comparison entry point.
 - `mtgcompare/inventory.py`
@@ -46,6 +46,15 @@ Repo-specific guidance for coding sessions.
 - Resolved preview rows default the date field to today.
 - The preview `Set` field is editable as a 3-character set code only.
 - Inventory filtering is client-side and supports filtering by `price_bought`, including empty values.
+- Decklist search on the main Search page is separate from inventory add: it prices pasted lists across shops and shows per-shop shipping-aware totals.
+
+## Search and market behavior
+
+- The Search page supports both single-card search and decklist search.
+- Single-card search can optionally include per-shop shipping overrides in sort order.
+- Market prices are cached in the `market_prices` table inside `inventory.db`.
+- The Market page does not fetch live prices on GET; refresh happens only through `POST /market/refresh`.
+- Market cache keys are `(card_name, normalized set_code, is_foil)`.
 
 ## Scripts
 
@@ -59,6 +68,7 @@ Repo-specific guidance for coding sessions.
   Offline tests.
 - `uv run pytest -m live`
   Live scraper checks.
+- Tests import the package from repo root via `tests/conftest.py`, so `uv run pytest` should work without setting `PYTHONPATH`.
 - `.\.venv\Scripts\python -m pytest`
   Fallback if `uv` has cache or permission issues in this environment.
 

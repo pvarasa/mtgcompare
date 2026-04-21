@@ -5,7 +5,7 @@ import logging
 import logging.config
 from pathlib import Path
 
-from .shops import build_scrapers
+from .shops import collect_prices
 from .utils import get_fx
 
 LOGGING_CONF = Path(__file__).resolve().parent.parent / "logging.conf"
@@ -17,18 +17,14 @@ def main():
     if args.file is None:
         cards = [args.card]
     else:
-        with open(args.file, encoding="utf-8") as file:
+        with Path(args.file).open(encoding="utf-8") as file:
             cards = [line.strip() for line in file if line.strip()]
 
     fx = get_fx("jpy")
-    scrappers = build_scrapers(fx)
-
     all_prices = []
     for card_name in cards:
         logger.info(f"Processing {card_name}")
-        prices = []
-        for scp in scrappers:
-            prices.extend(scp.get_prices(card_name))
+        prices = collect_prices(card_name, fx, logger=logger)
 
         if not prices:
             print(f"No prices found for {card_name}")
@@ -42,7 +38,7 @@ def main():
         now = datetime.datetime.now().strftime("%Y/%m/%d, %H:%M:%S")
         for p in all_prices:
             p["timestamp"] = now
-        with open(args.export, "w", encoding="utf-8") as ef:
+        with Path(args.export).open("w", encoding="utf-8") as ef:
             json.dump(all_prices, ef)
 
 

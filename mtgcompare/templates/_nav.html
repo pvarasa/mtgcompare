@@ -1,4 +1,5 @@
 <nav class="tabs">
   <a href="{{ url_for('index') }}"     class="{% if active == 'search'    %}active{% endif %}">Search</a>
   <a href="{{ url_for('inventory') }}" class="{% if active == 'inventory' %}active{% endif %}">Inventory</a>
+  <a href="{{ url_for('market') }}"    class="{% if active == 'market'    %}active{% endif %}">Market</a>
 </nav>

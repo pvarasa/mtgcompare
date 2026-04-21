@@ -149,6 +149,8 @@
     .preview-missing { color: #f5a5a5; font-size: .88rem; margin-top: .6rem; }
     .preview-missing ul { margin: .3rem 0 0 1.2rem; padding: 0; }
 
+    #inv-table { contain: layout style; }
+
     .csv-body { display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; }
     .csv-body input[type=file] { color: var(--muted); font-size: .85rem; max-width: 100%; }
     .csv-mode { display: inline-flex; gap: 1rem; }
@@ -329,7 +331,8 @@
             matchesPrice = Number.isFinite(parsedValue) && hasPrice && rowPrice === parsedValue;
           }
 
-          tr.hidden = !(matchesName && matchesPrice);
+          const shouldHide = !(matchesName && matchesPrice);
+          if (tr.hidden !== shouldHide) tr.hidden = shouldHide;
         });
       }
 

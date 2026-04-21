@@ -1,4 +1,4 @@
-from mtgcompare.web import app, main
+from mtgcompare.web import main
 
 
 if __name__ == "__main__":
