@@ -12,12 +12,16 @@ Repo-specific guidance for coding sessions.
   CLI price comparison entry point.
 - `mtgcompare/inventory.py`
   Inventory storage and inventory CLI.
+- `mtgcompare/launcher.py`
+  Packaged-app entry point: starts Flask in a daemon thread, opens the browser, runs the system-tray icon loop.
+- `mtgcompare/db.py`
+  SQLite connection, schema, and DB path resolution (AppData when frozen, repo root in dev).
 - `mtgcompare/scrappers/`
   Shop scraper implementations.
 - `mtgcompare/templates/`, `mtgcompare/static/`
   Flask templates and browser assets.
 - `scripts/`
-  Start/stop helpers for local development.
+  Start/stop helpers for local development; `build.ps1` for packaging.
 - root `app.py`, `compare.py`
   Thin compatibility wrappers.
 
@@ -29,8 +33,8 @@ Repo-specific guidance for coding sessions.
 
 ## Runtime paths
 
-- `logging.conf`, `inventory.db`, `app.log`, `app.err.log`, and `app.pid` live at repo root.
-- The package code should resolve those paths relative to the repo root, not relative to the package directory.
+- In development: `logging.conf`, `inventory.db`, `app.log`, `app.err.log`, and `app.pid` live at repo root. Resolve them relative to repo root, not the package directory.
+- When frozen (PyInstaller): `inventory.db` and `app.log` go to `%APPDATA%\mtgcompare\`; `logging.conf` is bundled alongside the exe and found via `__file__`-relative resolution as normal.
 
 ## Inventory invariants
 
