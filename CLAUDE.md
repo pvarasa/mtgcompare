@@ -62,6 +62,14 @@ Repo-specific guidance for coding sessions.
 - On Windows, the shell scripts delegate to the PowerShell scripts.
 - The scripts should start the app via `python -m mtgcompare.web`.
 
+## Packaging (Windows desktop app)
+
+- Entry point: `mtgcompare/launcher.py` — starts Flask in a daemon thread, opens the browser, runs a system-tray icon loop.
+- Build locally: `.\scripts\build.ps1` (installs PyInstaller + desktop deps, runs tests, produces `dist/mtgcompare-windows.zip`).
+- Release: push a `v*` tag; GitHub Actions builds and attaches the zip to the GitHub Release automatically.
+- User data (`inventory.db`, `app.log`) goes to `%APPDATA%\mtgcompare\` when running frozen so it survives app updates.
+- Desktop deps (`pystray`, `pillow`) live in the `desktop` dependency group — not installed by default with `uv sync`.
+
 ## Testing
 
 - `uv run pytest`
@@ -71,6 +79,10 @@ Repo-specific guidance for coding sessions.
 - Tests import the package from repo root via `tests/conftest.py`, so `uv run pytest` should work without setting `PYTHONPATH`.
 - `.\.venv\Scripts\python -m pytest`
   Fallback if `uv` has cache or permission issues in this environment.
+
+## Git workflow
+
+- Always ask for confirmation before running `git commit` or `git push`.
 
 ## Generated files
 

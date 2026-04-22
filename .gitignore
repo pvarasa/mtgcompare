@@ -4,6 +4,11 @@
 __pycache__/
 *.py[cod]
 
+# PyInstaller build output
+build/
+dist/
+*.spec.bak
+
 app.pid
 app.log
 app.err.log

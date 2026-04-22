@@ -14,10 +14,15 @@ dependencies = [
 [project.scripts]
 mtgcompare = "mtgcompare.compare:main"
 mtgcompare-web = "mtgcompare.web:main"
+mtgcompare-app = "mtgcompare.launcher:main"
 
 [dependency-groups]
 dev = [
     "pytest>=9.0",
+]
+desktop = [
+    "pillow>=10.0",
+    "pystray>=0.19",
 ]
 
 [tool.pytest.ini_options]

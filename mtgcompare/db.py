@@ -3,10 +3,22 @@
 Single local DB file — currently holds the inventory table; future
 price-history feature will share the same file.
 """
+import os
 import sqlite3
+import sys
 from pathlib import Path
 
-DB_PATH = Path(__file__).resolve().parent.parent / "inventory.db"
+
+def _db_path() -> Path:
+    if getattr(sys, "frozen", False):
+        # Running as a PyInstaller bundle — keep user data out of the install dir.
+        data_dir = Path(os.environ.get("APPDATA", Path.home())) / "mtgcompare"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        return data_dir / "inventory.db"
+    return Path(__file__).resolve().parent.parent / "inventory.db"
+
+
+DB_PATH = _db_path()
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS inventory (
