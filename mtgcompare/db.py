@@ -9,10 +9,18 @@ import sys
 from pathlib import Path
 
 
+def _data_dir() -> Path:
+    if sys.platform == "win32":
+        return Path(os.environ.get("APPDATA", Path.home())) / "mtgcompare"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "mtgcompare"
+    xdg = os.environ.get("XDG_DATA_HOME")
+    return (Path(xdg) if xdg else Path.home() / ".local" / "share") / "mtgcompare"
+
+
 def _db_path() -> Path:
     if getattr(sys, "frozen", False):
-        # Running as a PyInstaller bundle — keep user data out of the install dir.
-        data_dir = Path(os.environ.get("APPDATA", Path.home())) / "mtgcompare"
+        data_dir = _data_dir()
         data_dir.mkdir(parents=True, exist_ok=True)
         return data_dir / "inventory.db"
     return Path(__file__).resolve().parent.parent / "inventory.db"

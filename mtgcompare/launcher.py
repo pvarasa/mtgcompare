@@ -24,7 +24,12 @@ URL = f"http://127.0.0.1:{PORT}"
 
 
 def _data_dir() -> Path:
-    return Path(os.environ.get("APPDATA", Path.home())) / "mtgcompare"
+    if sys.platform == "win32":
+        return Path(os.environ.get("APPDATA", Path.home())) / "mtgcompare"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "mtgcompare"
+    xdg = os.environ.get("XDG_DATA_HOME")
+    return (Path(xdg) if xdg else Path.home() / ".local" / "share") / "mtgcompare"
 
 
 def _setup_logging() -> None:
@@ -44,7 +49,7 @@ def _make_icon() -> Image.Image:
     size = 64
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
-    draw.ellipse([2, 2, size - 2, size - 2], fill="#5b8def")
+    draw.ellipse([2, 2, size - 2, size - 2], fill="#c9a84c")
     text = "M"
     bbox = draw.textbbox((0, 0), text)
     tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
