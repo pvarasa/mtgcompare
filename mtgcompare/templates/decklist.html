@@ -15,6 +15,7 @@
   .dl-shop-card {
     background: var(--bg-alt);
     border: 1px solid var(--border);
+    border-top: 2px solid var(--gold);
     border-radius: 8px;
     padding: .65rem 1rem;
     min-width: 11rem;
@@ -40,7 +41,7 @@
     flex-direction: column;
     gap: .1rem;
   }
-  .dl-shop-card .ship-line { color: #8a8a8a; }
+  .dl-shop-card .ship-line { color: var(--muted); }
 
   .dl-not-found {
     color: var(--muted);
@@ -131,10 +132,10 @@
   tr.inv-covered td { color: var(--muted); }
   .inv-covered-badge {
     font-size: .78rem;
-    color: #5cb85c;
+    color: var(--green);
     font-weight: 500;
   }
-  .inv-have { color: #5cb85c; font-weight: 500; }
+  .inv-have { color: var(--green); font-weight: 500; }
 {% endblock %}
 {% block content %}
 
@@ -164,7 +165,7 @@
       {% endif %}
       {{ sourced_count }} of {{ card_rows|length }} card{{ 's' if card_rows|length != 1 else '' }} sourced
       {% if use_inventory and covered_rows %}
-        &middot; <span style="color:#5cb85c">{{ covered_rows|length }} in inventory</span>
+        &middot; <span style="color:#4db87a">{{ covered_rows|length }} in inventory</span>
       {% endif %}
       {% if fx %} &middot; FX ¥{{ '%.2f'|format(fx) }} per $1{% endif %}
     </p>
@@ -291,7 +292,7 @@
         <label style="display:inline-flex;align-items:center;gap:.35rem;font-size:.88rem;color:var(--muted);cursor:pointer">
           <input type="checkbox" name="use_inventory" value="1"
                  {% if use_inventory %}checked{% endif %}
-                 style="accent-color:#5b8def">
+                 style="accent-color:#c9a84c">
           Use inventory
         </label>
         <button type="submit">Search again</button>

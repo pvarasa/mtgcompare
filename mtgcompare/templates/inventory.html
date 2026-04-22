@@ -62,7 +62,9 @@
       font-weight: 500;
     }
     .add-mode button:hover { color: var(--fg); background: var(--bg); }
-    .add-mode button.active { background: #5b8def; color: #fff; border-color: #5b8def; }
+    .add-mode button { border-color: var(--border); color: var(--muted); }
+    .add-mode button:hover { border-color: var(--gold); color: var(--gold); background: transparent; }
+    .add-mode button.active { border-color: var(--gold); color: var(--gold); background: var(--gold-dim); }
 
     .add-form {
       display: flex;
@@ -92,7 +94,7 @@
       box-sizing: border-box;
     }
     .add-form input:focus,
-    .add-form select:focus { outline: 2px solid #5b8def; border-color: transparent; }
+    .add-form select:focus { outline: 2px solid var(--gold); border-color: transparent; }
     .add-form label.grow { flex: 1 1 14rem; }
     .add-form label.grow > input,
     .add-form label.grow > select { width: 100%; }
@@ -139,7 +141,7 @@
       box-sizing: border-box;
     }
     .preview-table input:focus,
-    .preview-table select:focus { outline: 1px solid #5b8def; border-color: transparent; }
+    .preview-table select:focus { outline: 1px solid var(--gold); border-color: transparent; }
     .preview-table .cell-qty   { width: 3.5rem; }
     .preview-table .cell-set-code { width: 4.5rem; text-transform: uppercase; }
     .preview-table .cell-cond  { width: 5.5rem; }
@@ -150,15 +152,16 @@
     .preview-missing ul { margin: .3rem 0 0 1.2rem; padding: 0; }
 
     #inv-table { contain: layout style; }
+    .col-date { white-space: nowrap; }
 
     .csv-body { display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; }
     .csv-body input[type=file] { color: var(--muted); font-size: .85rem; max-width: 100%; }
     .csv-mode { display: inline-flex; gap: 1rem; }
     .csv-mode label { display: inline-flex; align-items: center; gap: .35rem; color: var(--fg); font-size: .9rem; cursor: pointer; }
-    .csv-mode input[type=radio] { accent-color: #5b8def; }
+    .csv-mode input[type=radio] { accent-color: var(--gold); }
 
     .inv-cb { width: 1.6rem; padding-left: .25rem; padding-right: .1rem; }
-    .inv-cb input[type=checkbox] { cursor: pointer; accent-color: #5b8def; }
+    .inv-cb input[type=checkbox] { cursor: pointer; accent-color: var(--gold); }
     .inv-export-bar {
       display: flex;
       align-items: center;
@@ -289,7 +292,7 @@
           <th>Print</th>
           <th>Lang</th>
           <th class="num">Bought $</th>
-          <th>Date</th>
+          <th class="col-date">Date</th>
         </tr>
       </thead>
       <tbody>
@@ -314,7 +317,7 @@
             <td>{{ r.printing }}</td>
             <td>{{ r.language }}</td>
             <td class="num">{% if r.price_bought is not none %}${{ '%.2f'|format(r.price_bought) }}{% else %}-{% endif %}</td>
-            <td>{{ r.date_bought or "-" }}</td>
+            <td class="col-date">{{ r.date_bought or "-" }}</td>
           </tr>
         {% endfor %}
       </tbody>

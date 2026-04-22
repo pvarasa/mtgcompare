@@ -36,6 +36,7 @@
   .mkt-stat {
     background: var(--bg-alt);
     border: 1px solid var(--border);
+    border-top: 2px solid var(--gold);
     border-radius: 8px;
     padding: .65rem 1rem;
     min-width: 10rem;
@@ -60,8 +61,8 @@
     margin-top: .15rem;
   }
 
-  .pnl-up   { color: #5cb85c; }
-  .pnl-down { color: #d9534f; }
+  .pnl-up   { color: var(--green); }
+  .pnl-down { color: var(--red); }
   .pnl-none { color: var(--muted); }
 
   .mkt-note {
@@ -83,8 +84,8 @@
     max-width: 100%;
   }
   #mkt-table thead th[data-col] { user-select: none; }
-  #mkt-table thead th[data-sort="asc"]::after  { content: " ↑"; color: var(--muted); }
-  #mkt-table thead th[data-sort="desc"]::after { content: " ↓"; color: var(--muted); }
+  #mkt-table thead th[data-sort="asc"]::after  { content: " ▲"; color: var(--gold); }
+  #mkt-table thead th[data-sort="desc"]::after { content: " ▼"; color: var(--gold); }
 {% endblock %}
 {% block content %}
 

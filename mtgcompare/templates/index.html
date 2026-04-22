@@ -13,7 +13,9 @@
     font-weight: 500;
   }
   .search-mode button:hover { color: var(--fg); background: var(--bg-alt); }
-  .search-mode button.active { background: #5b8def; color: #fff; border-color: #5b8def; }
+  .search-mode button { border-color: var(--border); color: var(--muted); }
+  .search-mode button:hover { border-color: var(--gold); color: var(--gold); background: transparent; }
+  .search-mode button.active { border-color: var(--gold); color: var(--gold); background: var(--gold-dim); }
 
   /* Single-card panel: override global form flex so we can stack rows */
   #panel-single form { display: block; margin-bottom: 0; }
@@ -37,7 +39,7 @@
   #panel-decklist form { flex-direction: column; }
   #panel-decklist .dl-actions { display: flex; justify-content: flex-end; align-items: center; gap: .6rem; }
   #panel-decklist .dl-actions label { display: inline-flex; align-items: center; gap: .35rem; font-size: .88rem; color: var(--muted); cursor: pointer; }
-  #panel-decklist .dl-actions input[type=checkbox] { accent-color: #5b8def; }
+  #panel-decklist .dl-actions input[type=checkbox] { accent-color: var(--gold); }
 
   .ship-toggle-row {
     display: flex;
@@ -53,7 +55,7 @@
     font-size: .88rem;
     color: var(--muted);
   }
-  .ship-toggle-row input[type=checkbox] { accent-color: #5b8def; }
+  .ship-toggle-row input[type=checkbox] { accent-color: var(--gold); }
   .ship-cfg {
     display: flex;
     flex-wrap: wrap;
