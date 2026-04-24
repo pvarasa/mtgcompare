@@ -79,7 +79,7 @@ if sys.platform == "darwin":
         icon=None,
         bundle_identifier="com.mtgcompare.app",
         info_plist={
-            "CFBundleShortVersionString": "1.1.0",
+            "CFBundleShortVersionString": "1.2.0",
             "CFBundleDisplayName": "MTG Compare",
             "LSUIElement": True,       # tray-only: no Dock icon
             "NSHighResolutionCapable": True,

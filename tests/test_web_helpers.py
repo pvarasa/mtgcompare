@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from mtgcompare import web
 
 
@@ -114,3 +116,40 @@ def test_fetch_card_prices_uses_shared_collector(monkeypatch):
     monkeypatch.setattr(web, "collect_prices", fake_collect_prices)
 
     assert web._fetch_card_prices("Force of Will", 150.0) == expected
+
+
+def test_history_cutoff_for_known_period():
+    now = datetime(2026, 4, 22, tzinfo=timezone.utc)
+    assert web._history_cutoff("1m", now=now) == datetime(2026, 3, 23, tzinfo=timezone.utc)
+    assert web._history_cutoff("all", now=now) is None
+
+
+def test_slice_history_filters_by_period():
+    now = datetime(2026, 4, 22, tzinfo=timezone.utc)
+    points = [
+        {"price_usd": 2.0, "fetched_at": "2026-03-01T00:00:00+00:00"},
+        {"price_usd": 3.0, "fetched_at": "2026-03-25T00:00:00+00:00"},
+        {"price_usd": 4.0, "fetched_at": "2026-04-20T00:00:00+00:00"},
+    ]
+
+    assert web._slice_history(points, "1m", now=now) == points[1:]
+    assert web._slice_history(points, "all", now=now) == points
+
+
+def test_densify_daily_points_fills_gaps():
+    points = {
+        "2026-04-20": 3.0,
+        "2026-04-22": 5.0,
+    }
+
+    assert web._densify_daily_points(points) == [
+        {"market_date": "2026-04-20", "price_usd": 3.0},
+        {"market_date": "2026-04-21", "price_usd": None},
+        {"market_date": "2026-04-22", "price_usd": 5.0},
+    ]
+
+
+def test_mtgjson_set_candidates_include_trimmed_variants():
+    assert web._mtgjson_set_candidates("FMB1")[:2] == ["FMB1", "FMB"]
+
+

@@ -21,6 +21,21 @@ Your inventory is stored in `%APPDATA%\mtgcompare\inventory.db` and survives app
 
 ---
 
+## Download & run (macOS)
+
+> **Requires Apple Silicon (M1 or later).** The pre-built app is compiled for arm64 and will not run on Intel Macs.
+
+1. Go to the [latest release](https://github.com/pvarasa/mtgcompare/releases/latest) and download `mtgcompare-macos.zip`.
+2. Extract the zip — you get **`MTG Compare.app`**.
+3. Drag it to `/Applications` (optional but recommended).
+4. **First launch only:** because the app is unsigned, macOS will block it. Right-click (or Control-click) the app icon and choose **Open**, then click **Open** again in the dialog.
+5. Your browser opens automatically at `http://127.0.0.1:5000`.
+6. A menu-bar icon appears — click it to reopen the browser or quit.
+
+Your inventory is stored in `~/Library/Application Support/mtgcompare/inventory.db` and survives app updates.
+
+---
+
 ## Features
 
 ### Price search

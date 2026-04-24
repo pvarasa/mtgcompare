@@ -184,9 +184,15 @@
     }
     .card-modal.open { display: flex; }
     .card-modal-inner { position: relative; }
-    .card-modal-img {
+    .card-modal-faces {
       display: none;
-      max-width: 90vw;
+      gap: .75rem;
+      align-items: flex-start;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+    .card-modal-img {
+      display: block;
       max-height: 90vh;
       border-radius: 12px;
       border: 1px solid var(--gold);

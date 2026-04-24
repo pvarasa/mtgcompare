@@ -4,19 +4,24 @@ Run: uv run python -m mtgcompare.web
 Visit: http://127.0.0.1:5000
 """
 import logging.config
+import lzma
+import json
 import re
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from threading import Lock
+from threading import Lock, Thread
+from uuid import uuid4
 
+import duckdb
 import requests
 
-from flask import Flask, flash, redirect, render_template, request, url_for
+from flask import Flask, flash, jsonify, redirect, render_template, request, url_for
 
 from . import db
+from . import history_import
 from . import inventory as inv
 from .shops import SHIPPING_JPY, SHOP_FLAGS, collect_prices, shop_slug
 from .utils import get_fx
@@ -28,8 +33,23 @@ app = Flask(__name__)
 # `flash()` needs a session cookie; the value only needs to be stable per process.
 app.secret_key = "mtgcompare-local"
 
+_CONDITION_ABBR = {
+    "nearmint": "NM", "nm": "NM",
+    "lightlyplayed": "LP", "lightplay": "LP", "lp": "LP",
+    "moderatelyplayed": "MP", "moderateplay": "MP", "mp": "MP",
+    "heavilyplayed": "HP", "heavyplay": "HP", "hp": "HP",
+    "damaged": "DMG", "dmg": "DMG",
+}
+
+@app.template_filter("condition_abbr")
+def _condition_abbr(value: str) -> str:
+    key = re.sub(r"[^a-z]", "", (value or "").lower())
+    return _CONDITION_ABBR.get(key, value)
+
 _fx: float | None = None
 _fx_lock = Lock()
+_download_jobs: dict[str, dict] = {}
+_download_jobs_lock = Lock()
 
 
 def _get_fx() -> float | None:
@@ -322,6 +342,237 @@ def _safe_float(val) -> float | None:
         return None
 
 
+_MARKET_HISTORY_PERIODS = {
+    "1w": 7,
+    "1m": 30,
+    "all": None,
+}
+
+_MTGJSON_BASE_URL = "https://mtgjson.com/api/v5"
+_MTGJSON_HEADERS = {"User-Agent": "mtgcompare/0.1", "Accept": "application/json"}
+
+
+def _history_cutoff(period: str, *, now: datetime | None = None) -> datetime | None:
+    days = _MARKET_HISTORY_PERIODS.get(period)
+    if days is None:
+        return None
+    anchor = now or datetime.now(timezone.utc)
+    return anchor - timedelta(days=days)
+
+
+def _slice_history(points: list[dict], period: str, *, now: datetime | None = None) -> list[dict]:
+    cutoff = _history_cutoff(period, now=now)
+    if cutoff is None:
+        return points
+    return [
+        point for point in points
+        if datetime.fromisoformat(point["fetched_at"].replace("Z", "+00:00")) >= cutoff
+    ]
+
+
+def _mtgjson_cache_dir() -> Path:
+    cache_dir = db.DB_PATH.parent / "mtgjson"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir
+
+
+def _mtgjson_history_path() -> Path:
+    return _mtgjson_cache_dir() / "AllPrices.json.xz"
+
+
+def _mtgjson_history_duckdb_path() -> Path:
+    return _mtgjson_cache_dir() / "AllPricesHistory.duckdb"
+
+
+def _mtgjson_today_path() -> Path:
+    return _mtgjson_cache_dir() / "AllPricesToday.json.xz"
+
+
+def _mtgjson_set_path(set_code: str) -> Path:
+    return _mtgjson_cache_dir() / f"{_normalize_set_code(set_code, upper=True)}.json.xz"
+
+
+def _mtgjson_set_candidates(set_code: str) -> list[str]:
+    normalized = _normalize_set_code(set_code, upper=True)
+    candidates: list[str] = []
+    for value in (
+        normalized,
+        normalized.split("_")[0],
+        normalized.split("-")[0],
+        re.sub(r"\d+$", "", normalized),
+    ):
+        value = value.strip()
+        if value and value not in candidates:
+            candidates.append(value)
+    trimmed = normalized
+    while len(trimmed) > 3:
+        trimmed = trimmed[:-1]
+        if trimmed and trimmed not in candidates:
+            candidates.append(trimmed)
+    return candidates
+
+
+def _download_file(url: str, target: Path) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    with requests.get(url, headers=_MTGJSON_HEADERS, stream=True, timeout=(20, 300)) as resp:
+        resp.raise_for_status()
+        with tmp.open("wb") as fh:
+            for chunk in resp.iter_content(chunk_size=1024 * 256):
+                if chunk:
+                    fh.write(chunk)
+    tmp.replace(target)
+
+
+def _download_mtgjson_set_file(set_code: str) -> tuple[str, Path] | None:
+    for candidate in _mtgjson_set_candidates(set_code):
+        path = _mtgjson_set_path(candidate)
+        if path.exists():
+            return candidate, path
+        try:
+            _download_file(f"{_MTGJSON_BASE_URL}/{candidate}.json.xz", path)
+            return candidate, path
+        except requests.HTTPError as exc:
+            if exc.response is not None and exc.response.status_code == 404:
+                continue
+            raise
+    return None
+
+
+def _read_meta(conn, key: str) -> str | None:
+    row = conn.execute("SELECT value FROM app_meta WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else None
+
+
+def _write_meta(conn, key: str, value: str) -> None:
+    conn.execute(
+        "INSERT OR REPLACE INTO app_meta (key, value) VALUES (?, ?)",
+        (key, value),
+    )
+
+
+def _init_download_job(job_id: str) -> None:
+    with _download_jobs_lock:
+        _download_jobs[job_id] = {
+            "id": job_id,
+            "state": "running",
+            "phase": "Queued",
+            "detail": "Waiting to start...",
+            "progress": 0,
+            "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "error": None,
+        }
+
+
+def _set_download_job(job_id: str, **updates) -> None:
+    with _download_jobs_lock:
+        job = _download_jobs.get(job_id)
+        if not job:
+            return
+        job.update(updates)
+        job["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _get_download_job(job_id: str) -> dict | None:
+    with _download_jobs_lock:
+        job = _download_jobs.get(job_id)
+        return dict(job) if job else None
+
+
+_history_duckdb_lock = Lock()
+
+
+def _query_history(uuid: str, finish: str) -> dict[str, float]:
+    duckdb_path = _mtgjson_history_duckdb_path()
+    if not duckdb_path.exists():
+        return {}
+    with _history_duckdb_lock:
+        conn = duckdb.connect(str(duckdb_path), read_only=True)
+        try:
+            rows = conn.execute(
+                "SELECT market_date, price_usd FROM price_rows "
+                "WHERE uuid = ? AND finish = ? ORDER BY market_date ASC",
+                [uuid, finish],
+            ).fetchall()
+        finally:
+            conn.close()
+    return {row[0]: row[1] for row in rows if row[1] is not None}
+
+
+def _candidate_uuid_map(cards: list[dict], set_code: str) -> dict[tuple[str, str, str], dict[str, str]]:
+    candidates: dict[tuple[str, str, str], dict[str, str]] = {}
+    normalized_set = _normalize_set_code(set_code, upper=True)
+    for card in cards:
+        name = (card.get("name") or "").strip()
+        if not name:
+            continue
+        card_number = (card.get("number") or "").strip()
+        identifiers = card.get("identifiers") or {}
+        finishes = {finish.lower() for finish in (card.get("finishes") or [])}
+        normal_uuid = identifiers.get("mtgjsonNonFoilVersionId")
+        foil_uuid = identifiers.get("mtgjsonFoilVersionId")
+        if not normal_uuid and "nonfoil" in finishes:
+            normal_uuid = card.get("uuid")
+        if not foil_uuid and "foil" in finishes:
+            foil_uuid = card.get("uuid")
+        key = (name.lower(), normalized_set, card_number)
+        bucket = candidates.setdefault(key, {})
+        if normal_uuid and "normal" not in bucket:
+            bucket["normal"] = normal_uuid
+        if foil_uuid and "foil" not in bucket:
+            bucket["foil"] = foil_uuid
+    return candidates
+
+
+def _resolve_candidate_uuid(row: dict, candidates: dict[tuple[str, str, str], dict[str, str]]) -> str | None:
+    name_key = row["card_name"].lower()
+    set_key = _normalize_set_code(row["set_code"], upper=True)
+    card_number = (row.get("card_number") or "").strip()
+    finish_key = "foil" if _is_foil(row.get("printing")) else "normal"
+    search_keys = [(name_key, set_key, card_number)]
+    if card_number:
+        search_keys.append((name_key, set_key, ""))
+    for key in search_keys:
+        bucket = candidates.get(key)
+        if bucket and bucket.get(finish_key):
+            return bucket[finish_key]
+    return None
+
+
+def _load_set_cards(path: Path) -> list[dict]:
+    with lzma.open(path, "rt", encoding="utf-8") as fh:
+        payload = json.load(fh)
+    return ((payload.get("data") or {}).get("cards")) or []
+
+
+def _densify_daily_points(
+    price_points: dict[str, float],
+    *,
+    start_day: date | None = None,
+    end_day: date | None = None,
+) -> list[dict]:
+    if not price_points:
+        return []
+    normalized = {
+        datetime.fromisoformat(stamp).date(): value
+        for stamp, value in price_points.items()
+    }
+    lo = start_day or min(normalized)
+    hi = end_day or max(normalized)
+    points: list[dict] = []
+    current = lo
+    while current <= hi:
+        value = normalized.get(current)
+        points.append({
+            "market_date": current.isoformat(),
+            "price_usd": value,
+        })
+        current += timedelta(days=1)
+    return points
+
+
+
+
 def _fetch_market_prices(rows: list[dict], fx: float) -> list[dict]:
     """Augment inventory rows with market_price_usd / market_price_jpy via Scryfall."""
     # Collect unique (name, set) pairs to minimise requests
@@ -400,6 +651,140 @@ def _fetch_market_prices(rows: list[dict], fx: float) -> list[dict]:
     return result
 
 
+def _import_mtgjson_history(rows: list[dict], *, progress_cb=None) -> tuple[int, int]:
+    def _progress(progress: int, phase: str, detail: str) -> None:
+        if progress_cb:
+            progress_cb(progress, phase, detail)
+
+    inventory_rows = [dict(row) for row in rows]
+    downloaded_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    def _row_key(row: dict) -> tuple[str, str, str, int]:
+        return (
+            row["card_name"].lower(),
+            _normalize_set_code(row["set_code"], upper=True),
+            (row.get("card_number") or "").strip(),
+            int(_is_foil(row.get("printing"))),
+        )
+
+    # Load existing mappings so we can skip sets that are already fully resolved.
+    with db.get_conn() as conn:
+        existing_rows = conn.execute(
+            "SELECT card_name, set_code, card_number, is_foil, uuid FROM mtgjson_card_map"
+        ).fetchall()
+    existing_uuid: dict[tuple[str, str, str, int], str] = {
+        (r["card_name"].lower(), r["set_code"], r["card_number"], r["is_foil"]): r["uuid"]
+        for r in existing_rows
+    }
+
+    # Only load XZ files for sets that have at least one unmapped inventory row.
+    sets_needing_load: set[str] = {
+        _normalize_set_code(row["set_code"], upper=True)
+        for row in inventory_rows
+        if row.get("set_code") and _row_key(row) not in existing_uuid
+    }
+
+    candidates_by_set: dict[str, dict[tuple[str, str, str], dict[str, str]]] = {}
+    sets_to_load = sorted(sets_needing_load)
+    if sets_to_load:
+        total_to_load = len(sets_to_load)
+        for index, set_code in enumerate(sets_to_load, start=1):
+            _progress(
+                5 + round(index / total_to_load * 20),
+                "Downloading set data",
+                f"Downloading MTGJSON set file for {set_code} ({index}/{total_to_load})...",
+            )
+            resolved = _download_mtgjson_set_file(set_code)
+            if not resolved:
+                app.logger.warning("No MTGJSON set file found for inventory set %s", set_code)
+                candidates_by_set[set_code] = {}
+                continue
+            resolved_set_code, set_path = resolved
+            candidates_by_set[set_code] = _candidate_uuid_map(_load_set_cards(set_path), resolved_set_code)
+    else:
+        _progress(25, "Set data", "All sets already mapped — skipping set file load.")
+
+    _progress(28, "Mapping inventory", "Resolving MTGJSON card UUIDs for inventory lots...")
+    card_maps: list[tuple[str, str, str, int, str, str]] = []
+    for row in inventory_rows:
+        key = _row_key(row)
+        set_code = _normalize_set_code(row["set_code"], upper=True)
+        if set_code in sets_needing_load:
+            uuid = _resolve_candidate_uuid(row, candidates_by_set.get(set_code, {}))
+        else:
+            uuid = existing_uuid.get(key)
+        if not uuid:
+            continue
+        is_foil = int(_is_foil(row.get("printing")))
+        card_number = (row.get("card_number") or "").strip()
+        card_maps.append((row["card_name"], set_code, card_number, is_foil, uuid, downloaded_at))
+
+    history_duckdb_path = _mtgjson_history_duckdb_path()
+    history_row_count = 0
+    today_date = datetime.now(timezone.utc).date().isoformat()
+    with db.get_conn() as conn:
+        last_built_at = _read_meta(conn, "mtgjson_history_db_built_at")
+        today_merged_date = _read_meta(conn, "mtgjson_today_merged_date")
+
+    is_today_merge = history_duckdb_path.exists() and bool(last_built_at)
+    already_done_today = is_today_merge and today_merged_date == today_date
+
+    if already_done_today:
+        _progress(96, "Up to date", "Today's prices are already in the local history database.")
+    elif is_today_merge:
+        today_path = _mtgjson_today_path()
+        _progress(32, "Downloading today's prices", "Downloading MTGJSON AllPricesToday snapshot...")
+        _download_file(f"{_MTGJSON_BASE_URL}/AllPricesToday.json.xz", today_path)
+        with _history_duckdb_lock:
+            history_row_count = history_import.merge_today_prices(
+                today_path, history_duckdb_path, downloaded_at, progress_cb=_progress
+            )
+        today_path.unlink(missing_ok=True)
+    else:
+        history_path = _mtgjson_history_path()
+        _progress(32, "Downloading history", "Downloading MTGJSON AllPrices history...")
+        _download_file(f"{_MTGJSON_BASE_URL}/AllPrices.json.xz", history_path)
+        with _history_duckdb_lock:
+            history_row_count = history_import.rebuild_history_db(
+                history_path,
+                downloaded_at,
+                history_duckdb_path,
+                progress_cb=_progress,
+            )
+        history_path.unlink(missing_ok=True)
+
+    _progress(96, "Saving mappings", "Updating local card-to-MTGJSON mappings...")
+    with db.get_conn() as conn:
+        if sets_needing_load:
+            placeholders = ",".join("?" * len(sets_needing_load))
+            conn.execute(
+                f"DELETE FROM mtgjson_card_map WHERE set_code IN ({placeholders})",
+                list(sets_needing_load),
+            )
+        if card_maps:
+            conn.executemany(
+                """INSERT OR REPLACE INTO mtgjson_card_map
+                   (card_name, set_code, card_number, is_foil, uuid, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                card_maps,
+            )
+        _write_meta(conn, "mtgjson_history_downloaded_at", downloaded_at)
+        if history_row_count:
+            _write_meta(conn, "mtgjson_history_db_built_at", downloaded_at)
+            if not is_today_merge:
+                _write_meta(conn, "mtgjson_history_db_row_count", str(history_row_count))
+            else:
+                _write_meta(conn, "mtgjson_today_merged_date", today_date)
+
+    if not history_row_count:
+        with db.get_conn() as conn:
+            row_count = _read_meta(conn, "mtgjson_history_db_row_count")
+            history_row_count = int(row_count) if row_count else 0
+
+    _progress(100, "Done", f"Indexed {history_row_count:,} MTGJSON price points and mapped {len(card_maps)} lot(s).")
+    return len(card_maps), history_row_count
+
+
 @app.route("/market")
 def market():
     inv.init_schema()
@@ -410,6 +795,7 @@ def market():
         cache_rows = conn.execute(
             "SELECT card_name, set_code, is_foil, price_usd, fetched_at FROM market_prices"
         ).fetchall()
+        mtgjson_downloaded_at = _read_meta(conn, "mtgjson_history_downloaded_at")
 
     price_cache: dict[tuple, float | None] = {}
     last_fetched_at: str | None = None
@@ -419,13 +805,19 @@ def market():
         if last_fetched_at is None or cr["fetched_at"] > last_fetched_at:
             last_fetched_at = cr["fetched_at"]
 
-    has_cache      = bool(price_cache)
+    has_cache = bool(price_cache)
     last_refreshed = _format_ago(last_fetched_at)
+    history_db_exists = _mtgjson_history_duckdb_path().exists()
+    mtgjson_last_downloaded = _format_ago(mtgjson_downloaded_at) if history_db_exists else None
 
     if not inventory_rows:
         return render_template(
             "market.html", rows=[], summary=None, fx=None, error=None,
-            has_cache=has_cache, last_refreshed=last_refreshed, active="market",
+            has_cache=has_cache,
+            last_refreshed=last_refreshed,
+            mtgjson_last_downloaded=mtgjson_last_downloaded,
+            history_db_exists=history_db_exists,
+            active="market",
         )
 
     fx = _get_fx() if has_cache else None
@@ -444,7 +836,11 @@ def market():
     if not has_cache:
         return render_template(
             "market.html", rows=priced, summary=None, fx=None, error=None,
-            has_cache=False, last_refreshed=None, active="market",
+            has_cache=False,
+            last_refreshed=None,
+            mtgjson_last_downloaded=mtgjson_last_downloaded,
+            history_db_exists=history_db_exists,
+            active="market",
         )
 
     for row in priced:
@@ -488,6 +884,8 @@ def market():
         "market.html",
         rows=priced, summary=summary, fx=fx, error=None,
         has_cache=True, last_refreshed=last_refreshed,
+        mtgjson_last_downloaded=mtgjson_last_downloaded,
+        history_db_exists=history_db_exists,
         active="market",
     )
 
@@ -524,8 +922,133 @@ def market_refresh():
             [(name, set_code, is_foil, price, fetched_at)
              for (name, set_code, is_foil), price in seen.items()],
         )
+        conn.executemany(
+            """INSERT OR REPLACE INTO market_price_history
+               (card_name, set_code, is_foil, price_usd, fetched_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            [(name, set_code, is_foil, price, fetched_at)
+             for (name, set_code, is_foil), price in seen.items()],
+        )
 
     return redirect(url_for("market"))
+
+
+@app.route("/market/history/download", methods=["POST"])
+def market_history_download():
+    inv.init_schema()
+    inventory_rows = inv.list_all()
+
+    if not inventory_rows:
+        return jsonify({"ok": False, "error": "No inventory to build MTGJSON history for."}), 400
+
+    with _download_jobs_lock:
+        running = next((job for job in _download_jobs.values() if job["state"] == "running"), None)
+    if running:
+        return jsonify({"ok": True, "job_id": running["id"], "already_running": True})
+
+    job_id = uuid4().hex
+    _init_download_job(job_id)
+
+    def _progress(progress: int, phase: str, detail: str) -> None:
+        _set_download_job(job_id, progress=progress, phase=phase, detail=detail)
+
+    def _worker(snapshot_rows: list[dict]) -> None:
+        try:
+            mapped_count, point_count = _import_mtgjson_history(snapshot_rows, progress_cb=_progress)
+            _set_download_job(
+                job_id,
+                state="done",
+                progress=100,
+                phase="Done",
+                detail=f"Downloaded history for {mapped_count} lot(s) and imported {point_count} daily price points.",
+            )
+        except Exception as exc:
+            app.logger.exception("MTGJSON history download failed")
+            _set_download_job(
+                job_id,
+                state="error",
+                phase="Failed",
+                detail="MTGJSON history download failed.",
+                error=str(exc),
+            )
+
+    Thread(target=_worker, args=([dict(row) for row in inventory_rows],), daemon=True).start()
+    return jsonify({"ok": True, "job_id": job_id, "already_running": False})
+
+
+@app.route("/market/history/download/status")
+def market_history_download_status():
+    job_id = request.args.get("job_id", "").strip()
+    if not job_id:
+        return jsonify({"ok": False, "error": "job_id is required"}), 400
+    job = _get_download_job(job_id)
+    if not job:
+        return jsonify({"ok": False, "error": "job not found"}), 404
+    return jsonify({"ok": True, **job})
+
+
+@app.route("/market/history")
+def market_history():
+    card_name = request.args.get("card_name", "").strip()
+    set_code = _normalize_set_code(request.args.get("set_code", ""), upper=True)
+    card_number = request.args.get("card_number", "").strip()
+    is_foil = 1 if request.args.get("printing", "").strip().lower() == "foil" else 0
+    period = request.args.get("period", "1m").strip().lower()
+    if period not in _MARKET_HISTORY_PERIODS:
+        period = "1m"
+
+    if not card_name or not set_code:
+        return jsonify({"ok": False, "error": "card_name and set_code are required"}), 400
+
+    inv.init_schema()
+    with db.get_conn() as conn:
+        downloaded_at = _read_meta(conn, "mtgjson_history_downloaded_at")
+        mapped = conn.execute(
+            """SELECT uuid
+               FROM mtgjson_card_map
+               WHERE lower(card_name) = lower(?)
+                 AND set_code = ?
+                 AND card_number = ?
+                 AND is_foil = ?
+               LIMIT 1""",
+            (card_name, set_code, card_number, is_foil),
+        ).fetchone()
+
+    finish = "foil" if is_foil else "normal"
+    history = _query_history(mapped["uuid"], finish) if mapped else {}
+    dense_points = _densify_daily_points(
+        history,
+        end_day=datetime.now(timezone.utc).date(),
+    ) if history else []
+    if period != "all" and dense_points:
+        cutoff = _history_cutoff(period)
+        assert cutoff is not None
+        dense_points = [
+            point for point in dense_points
+            if datetime.fromisoformat(point["market_date"]).replace(tzinfo=timezone.utc) >= cutoff
+        ]
+    available_since = next((point["market_date"] for point in dense_points if point["price_usd"] is not None), None)
+
+    return jsonify({
+        "ok": True,
+        "card_name": card_name,
+        "set_code": set_code,
+        "card_number": card_number,
+        "is_foil": bool(is_foil),
+        "default_period": "1m",
+        "period": period,
+        "available_periods": list(_MARKET_HISTORY_PERIODS),
+        "period_days": _MARKET_HISTORY_PERIODS,
+        "available_since": available_since,
+        "downloaded_at": downloaded_at,
+        "has_history": bool(history),
+        "source": {
+            "label": "MTGJSON / TCGplayer retail",
+            "detail": "Imported from MTGJSON price history. Blank days mean MTGJSON has no value for that day or the local download is behind.",
+        },
+        "points": dense_points,
+        "all_points_count": len(dense_points),
+    })
 
 
 @app.route("/inventory")
