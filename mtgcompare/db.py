@@ -52,6 +52,32 @@ CREATE TABLE IF NOT EXISTS market_prices (
     fetched_at  TEXT    NOT NULL,
     PRIMARY KEY (card_name, set_code, is_foil)
 );
+
+CREATE TABLE IF NOT EXISTS market_price_history (
+    card_name   TEXT    NOT NULL,
+    set_code    TEXT    NOT NULL,
+    is_foil     INTEGER NOT NULL DEFAULT 0,
+    price_usd   REAL,
+    fetched_at  TEXT    NOT NULL,
+    PRIMARY KEY (card_name, set_code, is_foil, fetched_at)
+);
+CREATE INDEX IF NOT EXISTS idx_market_price_history_lookup
+    ON market_price_history(card_name, set_code, is_foil, fetched_at);
+
+CREATE TABLE IF NOT EXISTS mtgjson_card_map (
+    card_name      TEXT    NOT NULL,
+    set_code       TEXT    NOT NULL,
+    card_number    TEXT    NOT NULL DEFAULT '',
+    is_foil        INTEGER NOT NULL DEFAULT 0,
+    uuid           TEXT    NOT NULL,
+    updated_at     TEXT    NOT NULL,
+    PRIMARY KEY (card_name, set_code, card_number, is_foil)
+);
+
+CREATE TABLE IF NOT EXISTS app_meta (
+    key     TEXT PRIMARY KEY,
+    value   TEXT
+);
 """
 
 

@@ -1,8 +1,9 @@
 // Click-to-preview card art. Attach to `.card-icon` buttons carrying
 // data-name (required) + data-set (optional). Opens a modal with the
-// Scryfall image; dismisses on backdrop click, close button, or Escape.
+// Scryfall image(s); double-faced cards show both faces side by side.
+// Dismisses on backdrop click, close button, or Escape.
 (function () {
-  const BASE = "https://api.scryfall.com/cards/named";
+  const NAMED = "https://api.scryfall.com/cards/named";
 
   // Deckbox exports suffixed set codes like "GK1_GOLGAR" — Scryfall just
   // uses "GK1". Name-only fallback handles anything we can't normalize.
@@ -12,14 +13,14 @@
     return u === -1 ? set : set.slice(0, u);
   }
 
-  function buildUrl(name, set) {
-    const p = new URLSearchParams({ exact: name, format: "image", version: "normal" });
+  function apiUrl(name, set) {
+    const p = new URLSearchParams({ exact: name });
     if (set) p.set("set", set);
-    return BASE + "?" + p.toString();
+    return NAMED + "?" + p.toString();
   }
 
   // Single reusable modal, built on first open.
-  let modal = null, img = null, msg = null, current = null;
+  let modal = null, facesEl = null, msgEl = null, controller = null;
 
   function buildModal() {
     modal = document.createElement("div");
@@ -28,42 +29,81 @@
       <div class="card-modal-inner">
         <button type="button" class="card-modal-close" aria-label="Close">&times;</button>
         <div class="card-modal-msg">Loading…</div>
-        <img class="card-modal-img" alt="" referrerpolicy="no-referrer" decoding="async">
+        <div class="card-modal-faces"></div>
       </div>`;
-    img = modal.querySelector(".card-modal-img");
-    msg = modal.querySelector(".card-modal-msg");
-
-    img.addEventListener("load",  () => { msg.style.display = "none"; img.style.display = "block"; });
-    img.addEventListener("error", () => {
-      if (current && !current.triedNameOnly && current.set) {
-        current.triedNameOnly = true;
-        img.src = buildUrl(current.name, "");
-      } else {
-        msg.textContent = "No image found.";
-      }
-    });
-
+    facesEl = modal.querySelector(".card-modal-faces");
+    msgEl   = modal.querySelector(".card-modal-msg");
     modal.addEventListener("click", e => {
       if (e.target === modal || e.target.classList.contains("card-modal-close")) close();
     });
     document.body.appendChild(modal);
   }
 
-  function open(name, set) {
+  function showImages(urls) {
+    facesEl.innerHTML = "";
+    const maxW = urls.length > 1 ? "44vw" : "88vw";
+    let loaded = 0;
+    urls.forEach(url => {
+      const img = document.createElement("img");
+      img.className = "card-modal-img";
+      img.alt = "";
+      img.referrerPolicy = "no-referrer";
+      img.decoding = "async";
+      img.style.maxWidth = maxW;
+      img.addEventListener("load", () => {
+        if (++loaded === urls.length) {
+          msgEl.style.display = "none";
+          facesEl.style.display = "flex";
+        }
+      });
+      img.addEventListener("error", () => { msgEl.textContent = "No image found."; });
+      facesEl.appendChild(img);
+      img.src = url;  // set src after appending so load/error always fire
+    });
+  }
+
+  async function open(name, set) {
     if (!modal) buildModal();
-    current = { name, set, triedNameOnly: false };
-    msg.textContent = "Loading…";
-    msg.style.display = "block";
-    img.style.display = "none";
-    img.src = buildUrl(name, set);
+    if (controller) controller.abort();
+    controller = new AbortController();
+    const signal = controller.signal;
+
+    msgEl.textContent = "Loading…";
+    msgEl.style.display = "block";
+    facesEl.style.display = "none";
+    facesEl.innerHTML = "";
     modal.classList.add("open");
+
+    try {
+      let data = null;
+      const r = await fetch(apiUrl(name, set), { signal });
+      if (r.ok) data = await r.json();
+      if (!data && set) {
+        const r2 = await fetch(apiUrl(name, ""), { signal });
+        if (r2.ok) data = await r2.json();
+      }
+      if (!data) { msgEl.textContent = "No image found."; return; }
+
+      let urls;
+      if (data.card_faces?.[0]?.image_uris) {
+        // Double-faced card — collect all face images
+        urls = data.card_faces.map(f => f.image_uris.normal).filter(Boolean);
+      } else if (data.image_uris) {
+        urls = [data.image_uris.normal];
+      } else {
+        msgEl.textContent = "No image found."; return;
+      }
+      showImages(urls);
+    } catch (e) {
+      if (e.name !== "AbortError") msgEl.textContent = "No image found.";
+    }
   }
 
   function close() {
-    current = null;
+    if (controller) { controller.abort(); controller = null; }
     if (!modal) return;
     modal.classList.remove("open");
-    img.src = "";  // cancel in-flight request
+    facesEl.innerHTML = "";  // remove imgs to cancel any in-flight loads
   }
 
   document.addEventListener("keydown", e => {
@@ -73,7 +113,6 @@
   document.addEventListener("click", e => {
     const btn = e.target.closest(".card-icon");
     if (!btn) return;
-
     e.preventDefault();
     const name = btn.dataset.name;
     if (!name) return;

@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "beautifulsoup4>=4.14",
+    "duckdb>=1.2",
     "flask>=3.1",
     "requests>=2.33",
     "yfinance>=1.3",

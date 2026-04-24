@@ -313,7 +313,7 @@
             <td title="{{ r.set_name }}">{{ r.set_code }}</td>
             <td>{{ r.card_number }}</td>
             <td class="num">{{ r.quantity }}</td>
-            <td>{{ r.condition }}</td>
+            <td>{{ r.condition|condition_abbr }}</td>
             <td>{{ r.printing }}</td>
             <td>{{ r.language }}</td>
             <td class="num">{% if r.price_bought is not none %}${{ '%.2f'|format(r.price_bought) }}{% else %}-{% endif %}</td>

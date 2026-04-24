@@ -5,6 +5,7 @@
   .mkt-header {
     display: flex;
     align-items: center;
+    justify-content: space-between;
     gap: 1rem;
     margin-bottom: 1.4rem;
     flex-wrap: wrap;
@@ -15,6 +16,50 @@
     flex: 1;
   }
   .mkt-header .refresh-info strong { color: var(--fg); }
+  .mkt-actions {
+    display: flex;
+    gap: .55rem;
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+  .mkt-history-download {
+    display: flex;
+    flex-direction: column;
+    gap: .45rem;
+    min-width: 16rem;
+  }
+  .mkt-progress {
+    display: none;
+    width: 100%;
+  }
+  .mkt-progress.open { display: block; }
+  .mkt-progress-meta {
+    display: flex;
+    justify-content: space-between;
+    gap: .75rem;
+    color: var(--muted);
+    font-size: .78rem;
+    margin-bottom: .3rem;
+  }
+  .mkt-progress-bar {
+    height: .5rem;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(201, 168, 76, 0.12);
+    overflow: hidden;
+  }
+  .mkt-progress-fill {
+    width: 0%;
+    height: 100%;
+    background: linear-gradient(90deg, #5a9fd4, #c9a84c);
+    transition: width .25s ease;
+  }
+  .mkt-progress-detail {
+    margin-top: .3rem;
+    color: var(--muted);
+    font-size: .76rem;
+    min-height: 1.1rem;
+  }
 
   .mkt-first-time {
     background: var(--bg-alt);
@@ -61,7 +106,7 @@
     margin-top: .15rem;
   }
 
-  .pnl-up   { color: var(--green); }
+  .pnl-up { color: var(--green); }
   .pnl-down { color: var(--red); }
   .pnl-none { color: var(--muted); }
 
@@ -83,9 +128,208 @@
     width: 18rem;
     max-width: 100%;
   }
+
+  #mkt-table { table-layout: fixed; width: 100%; }
+  #mkt-table th[data-col="0"] { width: auto; }
+  #mkt-table th[data-col="1"] { width: 3.8rem; }
+  #mkt-table th[data-col="2"] { width: 2.5rem; }
+  #mkt-table th[data-col="3"] { width: 5.2rem; }
+  #mkt-table th[data-col="4"] { width: 4.5rem; }
+  #mkt-table th[data-col="5"] { width: 4.8rem; }
+  #mkt-table th[data-col="6"] { width: 4.8rem; }
+  #mkt-table th[data-col="7"] { width: 7rem; }
+  #mkt-table th[data-col="8"] { width: 6rem; }
+  #mkt-table th[data-col="9"] { width: 5.5rem; }
+  #mkt-table td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #mkt-table td:first-child { white-space: normal; overflow: visible; text-overflow: unset; }
   #mkt-table thead th[data-col] { user-select: none; }
-  #mkt-table thead th[data-sort="asc"]::after  { content: " ▲"; color: var(--gold); }
-  #mkt-table thead th[data-sort="desc"]::after { content: " ▼"; color: var(--gold); }
+  #mkt-table thead th[data-sort="asc"]::after { content: " ^"; color: var(--gold); }
+  #mkt-table thead th[data-sort="desc"]::after { content: " v"; color: var(--gold); }
+
+  .market-cell {
+    display: flex;
+    align-items: center;
+    gap: .35rem;
+    min-width: 0;
+  }
+  .market-chart-trigger {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.65rem;
+    height: 1.65rem;
+    padding: 0;
+    border: 1px solid rgba(201, 168, 76, 0.32);
+    border-radius: 999px;
+    background: linear-gradient(180deg, rgba(201, 168, 76, 0.18), rgba(90, 159, 212, 0.08));
+    color: var(--gold);
+    flex: 0 0 auto;
+  }
+  .market-chart-trigger:hover {
+    color: #0f1117;
+    background: linear-gradient(180deg, var(--gold), #ecd389);
+  }
+  .market-chart-trigger svg {
+    width: .9rem;
+    height: .9rem;
+    display: block;
+  }
+
+  .market-chart-modal {
+    position: fixed;
+    inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 1.25rem;
+    background:
+      radial-gradient(circle at top, rgba(90, 159, 212, 0.18), transparent 42%),
+      rgba(4, 6, 12, 0.84);
+    backdrop-filter: blur(8px);
+    z-index: 1100;
+  }
+  .market-chart-modal.open { display: flex; }
+  .market-chart-panel {
+    width: min(860px, 100%);
+    max-height: min(92vh, 780px);
+    overflow: auto;
+    background:
+      linear-gradient(160deg, rgba(201, 168, 76, 0.06), transparent 22%),
+      linear-gradient(180deg, rgba(24, 28, 42, 0.96), rgba(12, 15, 24, 0.98));
+    border: 1px solid rgba(201, 168, 76, 0.28);
+    border-radius: 18px;
+    box-shadow: 0 26px 64px rgba(0, 0, 0, 0.55);
+    padding: 1.15rem 1.15rem 1rem;
+  }
+  .market-chart-topbar {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    align-items: flex-start;
+    margin-bottom: 1rem;
+  }
+  .market-chart-kicker {
+    color: var(--gold);
+    text-transform: uppercase;
+    letter-spacing: .12em;
+    font-size: .68rem;
+    margin-bottom: .4rem;
+  }
+  .market-chart-title {
+    font-family: 'Cinzel', 'Palatino Linotype', Georgia, serif;
+    color: var(--fg);
+    font-size: 1.25rem;
+    line-height: 1.15;
+    margin: 0;
+  }
+  .market-chart-subtitle {
+    color: var(--muted);
+    margin-top: .25rem;
+    font-size: .88rem;
+  }
+  .market-chart-close {
+    border-color: rgba(201, 168, 76, 0.28);
+    min-width: 2.4rem;
+    padding: .45rem .8rem;
+  }
+  .market-chart-meta {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: .7rem;
+    margin-bottom: 1rem;
+  }
+  .market-chart-stat {
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid rgba(201, 168, 76, 0.12);
+    border-radius: 12px;
+    padding: .75rem .85rem;
+  }
+  .market-chart-stat-label {
+    color: var(--muted);
+    font-size: .72rem;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    margin-bottom: .3rem;
+  }
+  .market-chart-stat-value {
+    color: var(--fg);
+    font-size: 1.18rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+  .market-chart-stat-value.positive { color: var(--green); }
+  .market-chart-stat-value.negative { color: var(--red); }
+  .market-chart-controls {
+    display: flex;
+    gap: .45rem;
+    flex-wrap: wrap;
+    margin-bottom: .9rem;
+  }
+  .market-chart-range {
+    padding: .42rem .75rem;
+    border-radius: 999px;
+    border: 1px solid rgba(201, 168, 76, 0.18);
+    background: rgba(255, 255, 255, 0.02);
+    color: var(--muted);
+    font-size: .82rem;
+  }
+  .market-chart-range.active {
+    color: #0f1117;
+    background: linear-gradient(180deg, var(--gold), #ecd389);
+    border-color: transparent;
+  }
+  .market-chart-stage {
+    border: 1px solid rgba(90, 159, 212, 0.14);
+    border-radius: 16px;
+    background:
+      radial-gradient(circle at top, rgba(90, 159, 212, 0.1), transparent 35%),
+      rgba(8, 11, 18, 0.74);
+    padding: .85rem;
+    min-height: 380px;
+  }
+  .market-chart-svg {
+    width: 100%;
+    height: 360px;
+    display: block;
+  }
+  .market-chart-axis {
+    fill: var(--muted);
+    font-size: 11px;
+    font-family: 'Inter', system-ui, sans-serif;
+  }
+  .market-chart-grid {
+    stroke: rgba(122, 130, 160, 0.18);
+    stroke-width: 1;
+  }
+  .market-chart-footnote {
+    color: var(--muted);
+    font-size: .8rem;
+    margin-top: .75rem;
+  }
+  .market-chart-empty,
+  .market-chart-loading {
+    min-height: 360px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--muted);
+    text-align: center;
+    padding: 1rem;
+  }
+  @media (max-width: 720px) {
+    .market-chart-meta {
+      grid-template-columns: 1fr;
+    }
+    .market-chart-panel {
+      padding: 1rem;
+    }
+    .market-chart-stage {
+      min-height: 320px;
+    }
+    .market-chart-svg {
+      height: 300px;
+    }
+  }
 {% endblock %}
 {% block content %}
 
@@ -93,7 +337,6 @@
     <div class="error">{{ error }}</div>
   {% endif %}
 
-  {# ── Refresh bar ───────────────────────────────────────────────── #}
   <div class="mkt-header">
     <div class="refresh-info">
       {% if has_cache %}
@@ -101,31 +344,43 @@
       {% else %}
         Prices not yet loaded
       {% endif %}
+      <br>
+      Price history:
+      <strong>{{ mtgjson_last_downloaded or 'not downloaded' }}</strong>
     </div>
-    <form method="post" action="{{ url_for('market_refresh') }}"
-          onsubmit="this.querySelector('button').disabled=true;
-                    this.querySelector('button').textContent='Fetching…';">
-      <button type="submit">Refresh prices</button>
-    </form>
+    <div class="mkt-actions">
+      <form method="post" action="{{ url_for('market_refresh') }}"
+            onsubmit="this.querySelector('button').disabled=true; this.querySelector('button').textContent='Fetching...';">
+        <button type="submit">Refresh prices</button>
+      </form>
+      <div class="mkt-history-download">
+        <button type="button" id="mkt-history-download-btn">Download history</button>
+        <div id="mkt-history-progress" class="mkt-progress" aria-live="polite">
+          <div class="mkt-progress-meta">
+            <span id="mkt-history-phase">Idle</span>
+            <span id="mkt-history-pct">0%</span>
+          </div>
+          <div class="mkt-progress-bar">
+            <div id="mkt-history-fill" class="mkt-progress-fill"></div>
+          </div>
+          <div id="mkt-history-detail" class="mkt-progress-detail"></div>
+        </div>
+      </div>
+    </div>
   </div>
 
-  {# ── Empty inventory ───────────────────────────────────────────── #}
   {% if not rows %}
     <div class="empty">
       No inventory yet. <a href="{{ url_for('inventory') }}">Add cards</a> to see market values.
     </div>
 
-  {# ── First-time: inventory exists but no cache yet ─────────────── #}
   {% elif not has_cache %}
     <div class="mkt-first-time">
-      <p>{{ rows|length }} lot{{ 's' if rows|length != 1 else '' }} in inventory — click <strong>Refresh prices</strong> to fetch current market prices.</p>
+      <p>{{ rows|length }} lot{{ 's' if rows|length != 1 else '' }} in inventory. Click <strong>Refresh prices</strong> to fetch current market prices.</p>
     </div>
 
-  {# ── Full view: cached prices available ───────────────────────── #}
   {% else %}
-
     <div class="mkt-summary">
-
       <div class="mkt-stat">
         <div class="stat-label">Cost basis</div>
         <div class="stat-value">${{ '{:,.2f}'.format(summary.total_cost_usd) }}</div>
@@ -139,7 +394,7 @@
         <div class="stat-label">Market value</div>
         <div class="stat-value">${{ '{:,.2f}'.format(summary.total_market_usd) }}</div>
         <div class="stat-sub">
-          ¥{{ '{:,.0f}'.format(summary.total_market_jpy) }}
+          JPY {{ '{:,.0f}'.format(summary.total_market_jpy) }}
           {% if summary.lots_no_market %} &middot; {{ summary.lots_no_market }} no price{% endif %}
         </div>
       </div>
@@ -158,17 +413,16 @@
           {% endif %}
         </div>
       </div>
-
     </div>
 
     <p class="mkt-note">
-      Prices from Scryfall / TCGPlayer (NM non-foil, or foil where marked).
-      {% if fx %}FX ¥{{ '%.2f'|format(fx) }} per $1.{% endif %}
-      Cost basis is in USD as entered.
+      Spot prices come from Scryfall / TCGPlayer.
+      {% if fx %}FX JPY {{ '%.2f'|format(fx) }} per $1.{% endif %}
+      Card charts use downloaded MTGJSON history and show blank days when MTGJSON has no price for that date or the local history download is out of date.
     </p>
 
     <div id="mkt-filter">
-      <input type="text" id="mkt-filter-input" placeholder="Filter by card name…" autocomplete="off">
+      <input type="text" id="mkt-filter-input" placeholder="Filter by card name..." autocomplete="off">
     </div>
 
     <table id="mkt-table" style="contain:layout style">
@@ -181,7 +435,7 @@
           <th data-col="4">Print</th>
           <th class="num" data-col="5">Paid $</th>
           <th class="num" data-col="6">Mkt $</th>
-          <th class="num" data-col="7">Mkt ¥</th>
+          <th class="num" data-col="7">Mkt JPY</th>
           <th class="num" data-col="8">PnL</th>
           <th class="num" data-col="9">%</th>
         </tr>
@@ -189,63 +443,423 @@
       <tbody>
         {% for row in rows %}
           <tr data-name="{{ row.card_name|lower }}">
-            <td>{{ card_icon(row.card_name, row.set_code) }}{{ row.card_name }}</td>
+            <td>
+              <div class="market-cell">
+                <button
+                  type="button"
+                  class="market-chart-trigger"
+                  title="View price chart"
+                  aria-label="View price chart for {{ row.card_name }} {{ row.set_code }}"
+                  data-chart-card="{{ row.card_name }}"
+                  data-chart-set="{{ row.set_code }}"
+                  data-chart-number="{{ row.card_number }}"
+                  data-chart-printing="{{ row.printing }}"
+                >
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M4 17.5h16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                    <path d="M5 14.5 9.2 10l3.4 2.9 5.4-6.4 1.6 1.3" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
+                    <circle cx="9.2" cy="10" r="1.2" fill="currentColor"/>
+                    <circle cx="12.6" cy="12.9" r="1.2" fill="currentColor"/>
+                    <circle cx="18" cy="6.5" r="1.2" fill="currentColor"/>
+                  </svg>
+                </button>
+                <span>{{ card_icon(row.card_name, row.set_code) }}{{ row.card_name }}</span>
+              </div>
+            </td>
             <td title="{{ row.set_name }}">{{ row.set_code }}</td>
             <td class="num" data-val="{{ row.quantity }}">{{ row.quantity }}</td>
-            <td>{{ row.condition }}</td>
+            <td>{{ row.condition|condition_abbr }}</td>
             <td>{{ row.printing }}</td>
-
             <td class="num" data-val="{{ row.price_bought if row.price_bought is not none else '' }}">
-              {% if row.price_bought is not none %}
-                ${{ '%.2f'|format(row.price_bought) }}
-              {% else %}<span class="pnl-none">—</span>{% endif %}
+              {% if row.price_bought is not none %}${{ '%.2f'|format(row.price_bought) }}{% else %}<span class="pnl-none">-</span>{% endif %}
             </td>
-
             <td class="num" data-val="{{ row.market_price_usd if row.market_price_usd is not none else '' }}">
-              {% if row.market_price_usd is not none %}
-                ${{ '%.2f'|format(row.market_price_usd) }}
-              {% else %}<span class="pnl-none">?</span>{% endif %}
+              {% if row.market_price_usd is not none %}${{ '%.2f'|format(row.market_price_usd) }}{% else %}<span class="pnl-none">?</span>{% endif %}
             </td>
-
             <td class="num" data-val="{{ row.market_value_jpy if row.market_value_jpy is not none else '' }}">
-              {% if row.market_value_jpy is not none %}
-                ¥{{ '{:,.0f}'.format(row.market_value_jpy) }}
-              {% else %}<span class="pnl-none">?</span>{% endif %}
+              {% if row.market_value_jpy is not none %}JPY {{ '{:,.0f}'.format(row.market_value_jpy) }}{% else %}<span class="pnl-none">?</span>{% endif %}
             </td>
-
             <td class="num" data-val="{{ row.pnl_usd if row.pnl_usd is not none else '' }}">
               {% if row.pnl_usd is not none %}
                 <span class="{% if row.pnl_usd > 0 %}pnl-up{% elif row.pnl_usd < 0 %}pnl-down{% endif %}">
                   {% if row.pnl_usd > 0 %}+{% endif %}${{ '%.2f'|format(row.pnl_usd) }}
                 </span>
               {% elif row.price_bought is none %}
-                <span class="pnl-none">—</span>
+                <span class="pnl-none">-</span>
               {% else %}
                 <span class="pnl-none">?</span>
               {% endif %}
             </td>
-
             <td class="num" data-val="{{ row.pnl_pct if row.pnl_pct is not none else '' }}">
               {% if row.pnl_pct is not none %}
                 <span class="{% if row.pnl_pct > 0 %}pnl-up{% elif row.pnl_pct < 0 %}pnl-down{% endif %}">
                   {% if row.pnl_pct > 0 %}+{% endif %}{{ row.pnl_pct }}%
                 </span>
               {% else %}
-                <span class="pnl-none">—</span>
+                <span class="pnl-none">-</span>
               {% endif %}
             </td>
-
           </tr>
         {% endfor %}
       </tbody>
     </table>
 
+    <div id="market-chart-modal" class="market-chart-modal">
+      <div class="market-chart-panel" role="dialog" aria-modal="true" aria-labelledby="market-chart-title">
+        <div class="market-chart-topbar">
+          <div>
+            <div class="market-chart-kicker">Market History</div>
+            <h2 id="market-chart-title" class="market-chart-title">Loading...</h2>
+            <div id="market-chart-subtitle" class="market-chart-subtitle"></div>
+          </div>
+          <button type="button" id="market-chart-close" class="market-chart-close" aria-label="Close chart">x</button>
+        </div>
+        <div class="market-chart-meta">
+          <div class="market-chart-stat">
+            <div class="market-chart-stat-label">Current</div>
+            <div id="market-chart-current" class="market-chart-stat-value">-</div>
+          </div>
+          <div class="market-chart-stat">
+            <div class="market-chart-stat-label">Range Change</div>
+            <div id="market-chart-delta" class="market-chart-stat-value">-</div>
+          </div>
+          <div class="market-chart-stat">
+            <div class="market-chart-stat-label">Range Low</div>
+            <div id="market-chart-low" class="market-chart-stat-value">-</div>
+          </div>
+        </div>
+        <div id="market-chart-controls" class="market-chart-controls"></div>
+        <div id="market-chart-stage" class="market-chart-stage">
+          <div class="market-chart-loading">Loading chart...</div>
+        </div>
+        <div id="market-chart-footnote" class="market-chart-footnote"></div>
+      </div>
+    </div>
+
     <script>
       (function () {
-        // --- filter ---
+        const historyUrl = {{ url_for('market_history')|tojson }};
+        const isFirstDownload = {{ (not history_db_exists)|tojson }};
+        const historyDownloadUrl = {{ url_for('market_history_download')|tojson }};
+        const historyStatusUrl = {{ url_for('market_history_download_status')|tojson }};
+        const modal = document.getElementById('market-chart-modal');
+        const titleEl = document.getElementById('market-chart-title');
+        const subtitleEl = document.getElementById('market-chart-subtitle');
+        const currentEl = document.getElementById('market-chart-current');
+        const deltaEl = document.getElementById('market-chart-delta');
+        const lowEl = document.getElementById('market-chart-low');
+        const controlsEl = document.getElementById('market-chart-controls');
+        const stageEl = document.getElementById('market-chart-stage');
+        const footnoteEl = document.getElementById('market-chart-footnote');
+        const closeEl = document.getElementById('market-chart-close');
+        const downloadBtn = document.getElementById('mkt-history-download-btn');
+        const progressEl = document.getElementById('mkt-history-progress');
+        const progressFillEl = document.getElementById('mkt-history-fill');
+        const progressPhaseEl = document.getElementById('mkt-history-phase');
+        const progressPctEl = document.getElementById('mkt-history-pct');
+        const progressDetailEl = document.getElementById('mkt-history-detail');
+
+        let activeHistory = null;
+        let activeJobId = null;
+        let statusPoll = null;
+
+        function formatUsd(value) {
+          if (value == null || Number.isNaN(value)) return '-';
+          return `$${value.toFixed(2)}`;
+        }
+
+        function formatDate(stamp) {
+          if (!stamp) return '-';
+          const dt = new Date(stamp);
+          if (Number.isNaN(dt.getTime())) return stamp;
+          return dt.toLocaleDateString(undefined, {
+            year: 'numeric',
+            month: 'short',
+            day: 'numeric',
+          });
+        }
+
+        function slicePoints(points, period) {
+          if (period === 'all') return points.slice();
+          const days = activeHistory && activeHistory.period_days ? activeHistory.period_days[period] : null;
+          if (days == null) return points.slice();
+          const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+          return points.filter(point => new Date(point.market_date).getTime() >= cutoff);
+        }
+
+        function summarize(points) {
+          const priced = points.filter(point => point.price_usd != null);
+          if (!priced.length) {
+            return { current: null, delta: null, low: null };
+          }
+          const current = priced[priced.length - 1].price_usd;
+          const low = Math.min.apply(null, priced.map(point => point.price_usd));
+          const delta = current - priced[0].price_usd;
+          return { current, delta, low };
+        }
+
+        function setDelta(delta) {
+          if (delta == null) {
+            deltaEl.textContent = '-';
+            deltaEl.className = 'market-chart-stat-value';
+            return;
+          }
+          const sign = delta > 0 ? '+' : '';
+          deltaEl.textContent = `${sign}$${delta.toFixed(2)}`;
+          deltaEl.className = `market-chart-stat-value ${delta > 0 ? 'positive' : (delta < 0 ? 'negative' : '')}`.trim();
+        }
+
+        function buildChart(points) {
+          const priced = points
+            .map((point, index) => ({ ...point, index }))
+            .filter(point => point.price_usd != null);
+          if (priced.length < 2) return '';
+
+          const width = 760;
+          const height = 360;
+          const pad = { top: 18, right: 18, bottom: 34, left: 58 };
+          const innerWidth = width - pad.left - pad.right;
+          const innerHeight = height - pad.top - pad.bottom;
+          const values = priced.map(point => point.price_usd);
+          const min = Math.min.apply(null, values);
+          const max = Math.max.apply(null, values);
+          const spread = Math.max(max - min, Math.max(max * 0.08, 0.25));
+          const lo = Math.max(0, min - spread * 0.35);
+          const hi = max + spread * 0.35;
+          const xFor = index => pad.left + (points.length === 1 ? innerWidth / 2 : (index / (points.length - 1)) * innerWidth);
+          const yFor = value => pad.top + (1 - ((value - lo) / (hi - lo || 1))) * innerHeight;
+          const yTicks = Array.from({ length: 5 }, (_, index) => lo + ((hi - lo) * index / 4));
+          const segments = [];
+          let currentSegment = [];
+          points.forEach((point, index) => {
+            if (point.price_usd == null) {
+              if (currentSegment.length) segments.push(currentSegment);
+              currentSegment = [];
+              return;
+            }
+            currentSegment.push({ x: xFor(index), y: yFor(point.price_usd), price_usd: point.price_usd });
+          });
+          if (currentSegment.length) segments.push(currentSegment);
+
+          const lineMarkup = segments.map(segment => {
+            const linePath = segment.map((point, idx) => `${idx ? 'L' : 'M'} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`).join(' ');
+            const areaPath = `${linePath} L ${segment[segment.length - 1].x.toFixed(2)} ${(pad.top + innerHeight).toFixed(2)} L ${segment[0].x.toFixed(2)} ${(pad.top + innerHeight).toFixed(2)} Z`;
+            return `
+              <path d="${areaPath}" fill="url(#chart-area-fill)"></path>
+              <path d="${linePath}" fill="none" stroke="url(#chart-line-stroke)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></path>
+            `;
+          }).join('');
+
+          const xIndexes = [0, Math.floor((points.length - 1) / 2), points.length - 1]
+            .filter((index, position, array) => array.indexOf(index) === position);
+
+          const yMarkup = yTicks.map(value => {
+            const y = yFor(value).toFixed(2);
+            return `
+              <line class="market-chart-grid" x1="${pad.left}" y1="${y}" x2="${width - pad.right}" y2="${y}"></line>
+              <text class="market-chart-axis" x="${pad.left - 8}" y="${Number(y) + 4}" text-anchor="end">$${value.toFixed(2)}</text>
+            `;
+          }).join('');
+
+          const xMarkup = xIndexes.map(index => `
+            <text class="market-chart-axis" x="${xFor(index).toFixed(2)}" y="${height - 8}" text-anchor="middle">${formatDate(points[index].market_date)}</text>
+          `).join('');
+
+          const dotMarkup = priced.map((point, index) => `
+            <circle cx="${xFor(point.index).toFixed(2)}" cy="${yFor(point.price_usd).toFixed(2)}" r="${index === priced.length - 1 ? 4.5 : 3.2}" fill="${index === priced.length - 1 ? '#c9a84c' : '#5a9fd4'}"></circle>
+          `).join('');
+
+          return `
+            <svg class="market-chart-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="Price history chart">
+              <defs>
+                <linearGradient id="chart-area-fill" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stop-color="rgba(201, 168, 76, 0.38)"></stop>
+                  <stop offset="100%" stop-color="rgba(90, 159, 212, 0.04)"></stop>
+                </linearGradient>
+                <linearGradient id="chart-line-stroke" x1="0" y1="0" x2="1" y2="0">
+                  <stop offset="0%" stop-color="#5a9fd4"></stop>
+                  <stop offset="100%" stop-color="#c9a84c"></stop>
+                </linearGradient>
+              </defs>
+              ${yMarkup}
+              ${lineMarkup}
+              ${dotMarkup}
+              ${xMarkup}
+            </svg>
+          `;
+        }
+
+        function renderPeriod(period) {
+          if (!activeHistory) return;
+          controlsEl.querySelectorAll('.market-chart-range').forEach(button => {
+            button.classList.toggle('active', button.dataset.period === period);
+          });
+
+          const points = slicePoints(activeHistory.points, period);
+          const priced = points.filter(point => point.price_usd != null);
+          const stats = summarize(points);
+          currentEl.textContent = formatUsd(stats.current);
+          lowEl.textContent = formatUsd(stats.low);
+          setDelta(stats.delta);
+
+          if (!activeHistory.has_history) {
+            stageEl.innerHTML = '<div class="market-chart-empty">No MTGJSON history has been downloaded for this card yet.<br>Use <strong>Download history</strong> in Market to import it.</div>';
+          } else if (!priced.length) {
+            stageEl.innerHTML = '<div class="market-chart-empty">There is no priced data in this range.<br>Blank days are preserved when MTGJSON has no value.</div>';
+          } else if (priced.length === 1) {
+            stageEl.innerHTML = '<div class="market-chart-empty">Only one MTGJSON price point is available in this range.</div>';
+          } else {
+            stageEl.innerHTML = buildChart(points);
+          }
+
+          footnoteEl.textContent = `${activeHistory.source.detail} Downloaded ${activeHistory.downloaded_at ? formatDate(activeHistory.downloaded_at) : 'never'}.`;
+        }
+
+        function openModal() {
+          modal.classList.add('open');
+        }
+
+        function closeModal() {
+          modal.classList.remove('open');
+        }
+
+        closeEl.addEventListener('click', closeModal);
+        modal.addEventListener('click', event => {
+          if (event.target === modal) closeModal();
+        });
+        document.addEventListener('keydown', event => {
+          if (event.key === 'Escape') closeModal();
+        });
+
+        document.querySelectorAll('.market-chart-trigger').forEach(button => {
+          button.addEventListener('click', () => {
+            openModal();
+            titleEl.textContent = button.dataset.chartCard;
+            subtitleEl.textContent = `${button.dataset.chartSet}${button.dataset.chartPrinting.toLowerCase() === 'foil' ? ' / Foil' : ' / Non-foil'}`;
+            currentEl.textContent = '-';
+            lowEl.textContent = '-';
+            setDelta(null);
+            controlsEl.innerHTML = '';
+            stageEl.innerHTML = '<div class="market-chart-loading">Loading chart...</div>';
+            footnoteEl.textContent = '';
+
+            const params = new URLSearchParams({
+              card_name: button.dataset.chartCard,
+              set_code: button.dataset.chartSet,
+              card_number: button.dataset.chartNumber,
+              printing: button.dataset.chartPrinting,
+              period: 'all',
+            });
+
+            fetch(`${historyUrl}?${params.toString()}`)
+              .then(response => response.json())
+              .then(data => {
+                if (!data.ok) throw new Error(data.error || 'History fetch failed');
+                activeHistory = data;
+                subtitleEl.textContent = `${data.set_code}${data.card_number ? ` #${data.card_number}` : ''}${data.is_foil ? ' / Foil' : ' / Non-foil'}${data.available_since ? ` / tracking since ${formatDate(data.available_since)}` : ''}`;
+                controlsEl.innerHTML = data.available_periods.map(period => `
+                  <button type="button" class="market-chart-range${period === data.default_period ? ' active' : ''}" data-period="${period}">
+                    ${period.toUpperCase()}
+                  </button>
+                `).join('');
+                controlsEl.querySelectorAll('.market-chart-range').forEach(rangeButton => {
+                  rangeButton.addEventListener('click', () => renderPeriod(rangeButton.dataset.period));
+                });
+                renderPeriod(data.default_period || '1m');
+              })
+              .catch(() => {
+                activeHistory = null;
+                stageEl.innerHTML = '<div class="market-chart-empty">Could not load market history for this card.</div>';
+                footnoteEl.textContent = 'Download history first if MTGJSON data is not available locally.';
+              });
+          });
+        });
+
+        function setProgress(job) {
+          progressEl.classList.add('open');
+          const progress = Math.max(0, Math.min(100, job.progress || 0));
+          progressFillEl.style.width = `${progress}%`;
+          progressPhaseEl.textContent = job.phase || 'Working';
+          progressPctEl.textContent = `${progress}%`;
+          progressDetailEl.textContent = job.error || job.detail || '';
+          downloadBtn.disabled = job.state === 'running';
+          if (job.state === 'running') {
+            downloadBtn.textContent = 'Downloading...';
+          } else {
+            downloadBtn.textContent = 'Download history';
+          }
+        }
+
+        function stopPolling() {
+          if (statusPoll) {
+            clearInterval(statusPoll);
+            statusPoll = null;
+          }
+        }
+
+        function pollStatus(jobId) {
+          fetch(`${historyStatusUrl}?job_id=${encodeURIComponent(jobId)}`)
+            .then(response => response.json())
+            .then(job => {
+              if (!job.ok) throw new Error(job.error || 'Status fetch failed');
+              setProgress(job);
+              if (job.state === 'done' || job.state === 'error') {
+                stopPolling();
+                if (job.state === 'done') {
+                  window.setTimeout(() => window.location.reload(), 900);
+                }
+              }
+            })
+            .catch(() => {
+              stopPolling();
+              downloadBtn.disabled = false;
+              downloadBtn.textContent = 'Download history';
+              progressEl.classList.add('open');
+              progressPhaseEl.textContent = 'Failed';
+              progressPctEl.textContent = '';
+              progressFillEl.style.width = '0%';
+              progressDetailEl.textContent = 'Could not read MTGJSON download status.';
+            });
+        }
+
+        downloadBtn.addEventListener('click', () => {
+          if (isFirstDownload && !confirm(
+            'Downloading price history for the first time requires fetching a large file (~150 MB) and rebuilding a local database. This can take 5–15 minutes depending on your connection and machine.\n\nContinue?'
+          )) return;
+          downloadBtn.disabled = true;
+          downloadBtn.textContent = 'Starting...';
+          progressEl.classList.add('open');
+          progressPhaseEl.textContent = 'Queued';
+          progressPctEl.textContent = '0%';
+          progressFillEl.style.width = '0%';
+          progressDetailEl.textContent = 'Starting MTGJSON history download...';
+
+          fetch(historyDownloadUrl, {
+            method: 'POST',
+            headers: { 'X-Requested-With': 'fetch' },
+          })
+            .then(response => response.json())
+            .then(data => {
+              if (!data.ok) throw new Error(data.error || 'Download start failed');
+              activeJobId = data.job_id;
+              pollStatus(activeJobId);
+              stopPolling();
+              statusPoll = window.setInterval(() => pollStatus(activeJobId), 1000);
+            })
+            .catch(err => {
+              downloadBtn.disabled = false;
+              downloadBtn.textContent = 'Download history';
+              progressPhaseEl.textContent = 'Failed';
+              progressPctEl.textContent = '';
+              progressFillEl.style.width = '0%';
+              progressDetailEl.textContent = err.message || 'Could not start MTGJSON history download.';
+            });
+        });
+
         const input = document.getElementById('mkt-filter-input');
-        const rows  = Array.from(document.querySelectorAll('#mkt-table tbody tr'));
+        const rows = Array.from(document.querySelectorAll('#mkt-table tbody tr'));
         let frame = 0;
+
         function applyFilter() {
           frame = 0;
           const q = input.value.trim().toLowerCase();
@@ -254,14 +868,15 @@
             if (tr.hidden !== shouldHide) tr.hidden = shouldHide;
           });
         }
+
         input.addEventListener('input', () => {
           if (frame) cancelAnimationFrame(frame);
           frame = requestAnimationFrame(applyFilter);
         });
 
-        // --- sort ---
         const tbody = document.querySelector('#mkt-table tbody');
-        let sortCol = -1, sortAsc = true;
+        let sortCol = -1;
+        let sortAsc = true;
 
         function cellVal(tr, col) {
           const td = tr.children[col];
@@ -273,21 +888,22 @@
         document.querySelectorAll('#mkt-table thead th[data-col]').forEach(th => {
           th.style.cursor = 'pointer';
           th.addEventListener('click', () => {
-            const col = parseInt(th.dataset.col);
+            const col = parseInt(th.dataset.col, 10);
             if (sortCol === col) {
               sortAsc = !sortAsc;
             } else {
               sortCol = col;
               sortAsc = true;
             }
-            document.querySelectorAll('#mkt-table thead th').forEach(h => {
-              h.dataset.sort = '';
+
+            document.querySelectorAll('#mkt-table thead th').forEach(header => {
+              header.dataset.sort = '';
             });
             th.dataset.sort = sortAsc ? 'asc' : 'desc';
 
             const sorted = rows.slice().sort((a, b) => {
-              let av = cellVal(a, col), bv = cellVal(b, col);
-              // nulls always last
+              let av = cellVal(a, col);
+              let bv = cellVal(b, col);
               if (av === null && bv === null) return 0;
               if (av === null) return 1;
               if (bv === null) return -1;
@@ -299,7 +915,6 @@
         });
       })();
     </script>
-
   {% endif %}
 
 {% endblock %}
