@@ -8,7 +8,6 @@ import lzma
 import json
 import re
 import tempfile
-import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -384,9 +383,6 @@ def _mtgjson_history_duckdb_path() -> Path:
     return _mtgjson_cache_dir() / "AllPricesHistory.duckdb"
 
 
-def _mtgjson_today_path() -> Path:
-    return _mtgjson_cache_dir() / "AllPricesToday.json.xz"
-
 
 def _mtgjson_set_path(set_code: str) -> Path:
     return _mtgjson_cache_dir() / f"{_normalize_set_code(set_code, upper=True)}.json.xz"
@@ -573,82 +569,57 @@ def _densify_daily_points(
 
 
 
-def _fetch_market_prices(rows: list[dict], fx: float) -> list[dict]:
-    """Augment inventory rows with market_price_usd / market_price_jpy via Scryfall."""
-    # Collect unique (name, set) pairs to minimise requests
-    seen: dict[tuple, tuple] = {}
-    for row in rows:
-        key = (row["card_name"].lower(), _normalize_set_code(row["set_code"]))
-        if key not in seen:
-            seen[key] = (row["card_name"], row["set_code"])
+def _populate_market_prices_from_history(
+    card_maps: list[tuple],
+    duckdb_path: Path,
+    fetched_at: str,
+) -> None:
+    """Write the latest DuckDB price for each mapped inventory lot into market_prices.
 
-    # name_price_map: keyed by lowercase name only (fallback pass)
-    name_price_map: dict[str, dict] = {}
-    # set_price_map: keyed by (lowercase name, lowercase set) (precise pass)
-    set_price_map: dict[tuple, dict] = {}
-    items = list(seen.values())
+    card_maps: list of (card_name, set_code, card_number, is_foil, uuid, updated_at)
+    """
+    if not card_maps or not duckdb_path.exists():
+        return
 
-    def _do_batch(identifiers: list[dict]) -> tuple[list[dict], list[dict]]:
-        """POST one batch to Scryfall; return (found_cards, not_found_identifiers)."""
+    # Deduplicate to one market_prices row per (card_name, set_code, is_foil).
+    uuid_to_db_key: dict[tuple[str, str], tuple[str, str, int]] = {}
+    seen_db_keys: set[tuple[str, str, int]] = set()
+    for card_name, set_code, _card_number, is_foil, uuid, _ in card_maps:
+        finish = "foil" if is_foil else "normal"
+        db_key = (card_name, set_code, is_foil)
+        if db_key not in seen_db_keys:
+            seen_db_keys.add(db_key)
+            uuid_to_db_key[(uuid, finish)] = db_key
+
+    if not uuid_to_db_key:
+        return
+
+    uuid_list = ", ".join(f"'{u}'" for u, _ in uuid_to_db_key)
+    with _history_duckdb_lock:
+        conn = duckdb.connect(str(duckdb_path), read_only=True)
         try:
-            resp = requests.post(
-                _SCRYFALL_COLLECTION,
-                json={"identifiers": identifiers},
-                headers=_SCRYFALL_HEADERS,
-                timeout=30,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            return data.get("data", []), data.get("not_found", [])
-        except Exception as exc:
-            app.logger.error("Scryfall collection batch failed: %s", exc)
-            return [], []
+            rows = conn.execute(f"""
+                SELECT uuid, finish, price_usd
+                FROM price_rows
+                WHERE uuid IN ({uuid_list})
+                QUALIFY ROW_NUMBER() OVER (PARTITION BY uuid, finish ORDER BY market_date DESC) = 1
+            """).fetchall()
+        finally:
+            conn.close()
 
-    # Pass 1: look up by name + set
-    not_found_names: list[str] = []
-    for i in range(0, len(items), 75):
-        batch = items[i:i + 75]
-        identifiers = [{"name": n, "set": _normalize_set_code(s)} for n, s in batch]
-        found, not_found = _do_batch(identifiers)
-        for card in found:
-            key = ((card.get("name") or "").lower(), (card.get("set") or "").lower())
-            p = card.get("prices") or {}
-            prices = {"usd": _safe_float(p.get("usd")), "usd_foil": _safe_float(p.get("usd_foil"))}
-            set_price_map[key] = prices
-        for nf in not_found:
-            name = (nf.get("name") or "").strip()
-            if name:
-                not_found_names.append(name)
-        if i + 75 < len(items):
-            time.sleep(0.1)
+    latest: dict[tuple[str, str], float | None] = {(r[0], r[1]): r[2] for r in rows}
 
-    # Pass 2: retry not-found by name only (handles set code mismatches)
-    unique_fallback = list({n.lower(): n for n in not_found_names}.values())
-    for i in range(0, len(unique_fallback), 75):
-        batch = unique_fallback[i:i + 75]
-        identifiers = [{"name": n} for n in batch]
-        found, _ = _do_batch(identifiers)
-        for card in found:
-            name_key = (card.get("name") or "").lower()
-            p = card.get("prices") or {}
-            prices = {"usd": _safe_float(p.get("usd")), "usd_foil": _safe_float(p.get("usd_foil"))}
-            name_price_map[name_key] = prices
-        if i + 75 < len(unique_fallback):
-            time.sleep(0.1)
-
-    result = []
-    for row in rows:
-        name_lower = row["card_name"].lower()
-        set_lower = _normalize_set_code(row["set_code"])
-        is_foil = _is_foil(row.get("printing"))
-        p = set_price_map.get((name_lower, set_lower)) or name_price_map.get(name_lower) or {}
-        price_usd = p.get("usd_foil") if is_foil else p.get("usd")
-        result.append({
-            **row,
-            "market_price_usd": price_usd,
-            "market_price_jpy": round(price_usd * fx) if price_usd is not None else None,
-        })
-    return result
+    inserts = [
+        (card_name, set_code, is_foil, latest.get((uuid, finish)), fetched_at)
+        for (uuid, finish), (card_name, set_code, is_foil) in uuid_to_db_key.items()
+    ]
+    with db.get_conn() as conn:
+        conn.executemany(
+            """INSERT OR REPLACE INTO market_prices
+               (card_name, set_code, is_foil, price_usd, fetched_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            inserts,
+        )
 
 
 def _import_mtgjson_history(rows: list[dict], *, progress_cb=None) -> tuple[int, int]:
@@ -721,29 +692,18 @@ def _import_mtgjson_history(rows: list[dict], *, progress_cb=None) -> tuple[int,
 
     history_duckdb_path = _mtgjson_history_duckdb_path()
     history_row_count = 0
-    today_date = datetime.now(timezone.utc).date().isoformat()
-    with db.get_conn() as conn:
-        last_built_at = _read_meta(conn, "mtgjson_history_db_built_at")
-        today_merged_date = _read_meta(conn, "mtgjson_today_merged_date")
 
-    is_today_merge = history_duckdb_path.exists() and bool(last_built_at)
-    already_done_today = is_today_merge and today_merged_date == today_date
-
-    if already_done_today:
-        _progress(96, "Up to date", "Today's prices are already in the local history database.")
-    elif is_today_merge:
-        today_path = _mtgjson_today_path()
-        _progress(32, "Downloading today's prices", "Downloading MTGJSON AllPricesToday snapshot...")
-        _download_file(f"{_MTGJSON_BASE_URL}/AllPricesToday.json.xz", today_path)
-        with _history_duckdb_lock:
-            history_row_count = history_import.merge_today_prices(
-                today_path, history_duckdb_path, downloaded_at, progress_cb=_progress
-            )
-        today_path.unlink(missing_ok=True)
-    else:
+    if not history_duckdb_path.exists():
         history_path = _mtgjson_history_path()
         _progress(32, "Downloading history", "Downloading MTGJSON AllPrices history...")
-        _download_file(f"{_MTGJSON_BASE_URL}/AllPrices.json.xz", history_path)
+        try:
+            _download_file(f"{_MTGJSON_BASE_URL}/AllPrices.json.xz", history_path)
+        except requests.HTTPError as exc:
+            if exc.response is not None and exc.response.status_code == 404:
+                raise RuntimeError(
+                    "MTGJSON price files are temporarily unavailable. Please try again later."
+                ) from exc
+            raise
         with _history_duckdb_lock:
             history_row_count = history_import.rebuild_history_db(
                 history_path,
@@ -752,6 +712,8 @@ def _import_mtgjson_history(rows: list[dict], *, progress_cb=None) -> tuple[int,
                 progress_cb=_progress,
             )
         history_path.unlink(missing_ok=True)
+    else:
+        _progress(40, "History ready", "Using existing local price history database.")
 
     _progress(96, "Saving mappings", "Updating local card-to-MTGJSON mappings...")
     with db.get_conn() as conn:
@@ -771,15 +733,15 @@ def _import_mtgjson_history(rows: list[dict], *, progress_cb=None) -> tuple[int,
         _write_meta(conn, "mtgjson_history_downloaded_at", downloaded_at)
         if history_row_count:
             _write_meta(conn, "mtgjson_history_db_built_at", downloaded_at)
-            if not is_today_merge:
-                _write_meta(conn, "mtgjson_history_db_row_count", str(history_row_count))
-            else:
-                _write_meta(conn, "mtgjson_today_merged_date", today_date)
+            _write_meta(conn, "mtgjson_history_db_row_count", str(history_row_count))
 
     if not history_row_count:
         with db.get_conn() as conn:
             row_count = _read_meta(conn, "mtgjson_history_db_row_count")
             history_row_count = int(row_count) if row_count else 0
+
+    _progress(98, "Updating prices", "Writing latest prices to market table...")
+    _populate_market_prices_from_history(card_maps, history_duckdb_path, downloaded_at)
 
     _progress(100, "Done", f"Indexed {history_row_count:,} MTGJSON price points and mapped {len(card_maps)} lot(s).")
     return len(card_maps), history_row_count
@@ -888,49 +850,6 @@ def market():
         history_db_exists=history_db_exists,
         active="market",
     )
-
-
-@app.route("/market/refresh", methods=["POST"])
-def market_refresh():
-    inv.init_schema()
-    inventory_rows = inv.list_all()
-
-    if not inventory_rows:
-        flash("No inventory to price.")
-        return redirect(url_for("market"))
-
-    fx = _get_fx()
-    if fx is None:
-        flash("Could not fetch FX rate; try again later.")
-        return redirect(url_for("market"))
-
-    priced = _fetch_market_prices(inventory_rows, fx)
-
-    fetched_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    seen: dict[tuple, float | None] = {}
-    for row in priced:
-        is_foil = int(_is_foil(row.get("printing")))
-        key = (row["card_name"], _normalize_set_code(row["set_code"], upper=True), is_foil)
-        if key not in seen:
-            seen[key] = row.get("market_price_usd")
-
-    with db.get_conn() as conn:
-        conn.executemany(
-            """INSERT OR REPLACE INTO market_prices
-               (card_name, set_code, is_foil, price_usd, fetched_at)
-               VALUES (?, ?, ?, ?, ?)""",
-            [(name, set_code, is_foil, price, fetched_at)
-             for (name, set_code, is_foil), price in seen.items()],
-        )
-        conn.executemany(
-            """INSERT OR REPLACE INTO market_price_history
-               (card_name, set_code, is_foil, price_usd, fetched_at)
-               VALUES (?, ?, ?, ?, ?)""",
-            [(name, set_code, is_foil, price, fetched_at)
-             for (name, set_code, is_foil), price in seen.items()],
-        )
-
-    return redirect(url_for("market"))
 
 
 @app.route("/market/history/download", methods=["POST"])

@@ -344,17 +344,10 @@
       {% else %}
         Prices not yet loaded
       {% endif %}
-      <br>
-      Price history:
-      <strong>{{ mtgjson_last_downloaded or 'not downloaded' }}</strong>
     </div>
     <div class="mkt-actions">
-      <form method="post" action="{{ url_for('market_refresh') }}"
-            onsubmit="this.querySelector('button').disabled=true; this.querySelector('button').textContent='Fetching...';">
-        <button type="submit">Refresh prices</button>
-      </form>
       <div class="mkt-history-download">
-        <button type="button" id="mkt-history-download-btn">Download history</button>
+        <button type="button" id="mkt-history-download-btn">Update prices</button>
         <div id="mkt-history-progress" class="mkt-progress" aria-live="polite">
           <div class="mkt-progress-meta">
             <span id="mkt-history-phase">Idle</span>
@@ -376,7 +369,7 @@
 
   {% elif not has_cache %}
     <div class="mkt-first-time">
-      <p>{{ rows|length }} lot{{ 's' if rows|length != 1 else '' }} in inventory. Click <strong>Refresh prices</strong> to fetch current market prices.</p>
+      <p>{{ rows|length }} lot{{ 's' if rows|length != 1 else '' }} in inventory. Click <strong>Update prices</strong> to download market prices and history.</p>
     </div>
 
   {% else %}
@@ -416,9 +409,9 @@
     </div>
 
     <p class="mkt-note">
-      Spot prices come from Scryfall / TCGPlayer.
+      Prices sourced from MTGJSON / TCGPlayer daily data.
       {% if fx %}FX JPY {{ '%.2f'|format(fx) }} per $1.{% endif %}
-      Card charts use downloaded MTGJSON history and show blank days when MTGJSON has no price for that date or the local history download is out of date.
+      Charts show blank days when MTGJSON has no price for that date.
     </p>
 
     <div id="mkt-filter">
@@ -703,7 +696,7 @@
           setDelta(stats.delta);
 
           if (!activeHistory.has_history) {
-            stageEl.innerHTML = '<div class="market-chart-empty">No MTGJSON history has been downloaded for this card yet.<br>Use <strong>Download history</strong> in Market to import it.</div>';
+            stageEl.innerHTML = '<div class="market-chart-empty">No MTGJSON history has been downloaded for this card yet.<br>Use <strong>Update prices</strong> to import it.</div>';
           } else if (!priced.length) {
             stageEl.innerHTML = '<div class="market-chart-empty">There is no priced data in this range.<br>Blank days are preserved when MTGJSON has no value.</div>';
           } else if (priced.length === 1) {
@@ -784,9 +777,9 @@
           progressDetailEl.textContent = job.error || job.detail || '';
           downloadBtn.disabled = job.state === 'running';
           if (job.state === 'running') {
-            downloadBtn.textContent = 'Downloading...';
+            downloadBtn.textContent = 'Updating...';
           } else {
-            downloadBtn.textContent = 'Download history';
+            downloadBtn.textContent = 'Update prices';
           }
         }
 
@@ -813,18 +806,18 @@
             .catch(() => {
               stopPolling();
               downloadBtn.disabled = false;
-              downloadBtn.textContent = 'Download history';
+              downloadBtn.textContent = 'Update prices';
               progressEl.classList.add('open');
               progressPhaseEl.textContent = 'Failed';
               progressPctEl.textContent = '';
               progressFillEl.style.width = '0%';
-              progressDetailEl.textContent = 'Could not read MTGJSON download status.';
+              progressDetailEl.textContent = 'Could not read status.';
             });
         }
 
         downloadBtn.addEventListener('click', () => {
           if (isFirstDownload && !confirm(
-            'Downloading price history for the first time requires fetching a large file (~150 MB) and rebuilding a local database. This can take 5–15 minutes depending on your connection and machine.\n\nContinue?'
+            'First-time setup fetches a large file (~150 MB) and builds a local price database. This takes 5–15 minutes depending on your connection and machine.\n\nContinue?'
           )) return;
           downloadBtn.disabled = true;
           downloadBtn.textContent = 'Starting...';
@@ -832,7 +825,7 @@
           progressPhaseEl.textContent = 'Queued';
           progressPctEl.textContent = '0%';
           progressFillEl.style.width = '0%';
-          progressDetailEl.textContent = 'Starting MTGJSON history download...';
+          progressDetailEl.textContent = 'Starting price update...';
 
           fetch(historyDownloadUrl, {
             method: 'POST',
@@ -848,11 +841,11 @@
             })
             .catch(err => {
               downloadBtn.disabled = false;
-              downloadBtn.textContent = 'Download history';
+              downloadBtn.textContent = 'Update prices';
               progressPhaseEl.textContent = 'Failed';
               progressPctEl.textContent = '';
               progressFillEl.style.width = '0%';
-              progressDetailEl.textContent = err.message || 'Could not start MTGJSON history download.';
+              progressDetailEl.textContent = err.message || 'Could not start price update.';
             });
         });
 

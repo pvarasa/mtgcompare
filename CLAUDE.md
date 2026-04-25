@@ -59,20 +59,19 @@ Repo-specific guidance for coding sessions.
 - The Search page supports both single-card search and decklist search.
 - Single-card search can optionally include per-shop shipping overrides in sort order.
 - Market prices are cached in the `market_prices` table inside `inventory.db`.
-- The Market page does not fetch live prices on GET; refresh happens only through `POST /market/refresh`.
+- The Market page does not fetch live prices on GET. Prices are populated via **Update prices** (`POST /market/history/download`), which downloads MTGJSON history and writes the latest price per mapped lot into `market_prices` as a side effect (`_populate_market_prices_from_history`).
+- There is no separate Scryfall refresh; prices come from MTGJSON/TCGPlayer daily data.
 - Market cache keys are `(card_name, normalized set_code, is_foil)`.
 
 ## MTGJSON price history
 
 - Price history is stored in `mtgjson/AllPricesHistory.duckdb` (DuckDB, single file). No SQLite history DB.
 - Table: `price_rows(uuid, finish, market_date, price_usd, source_updated)` with PRIMARY KEY `(uuid, finish, market_date)`.
-- Both full rebuild and incremental merge use the same XZ → NDJSON → DuckDB SQL path (`_build_load_sql` in `history_import.py`). The merge uses `INSERT OR REPLACE`; the rebuild uses plain `INSERT INTO` on a fresh table.
-- Full rebuild (`AllPrices.json.xz`): `history_import.rebuild_history_db()` — builds to a `.tmp` file and renames atomically.
-- Incremental daily merge (`AllPricesToday.json.xz`): `history_import.merge_today_prices()` — upserts into the existing DuckDB.
+- Full rebuild (`AllPrices.json.xz`): `history_import.rebuild_history_db()` — builds to a `.tmp` file and renames atomically. Only runs once; if the DuckDB already exists the download is skipped.
+- `history_import.merge_today_prices()` exists for future incremental updates but is not currently called from `web.py`.
 - Concurrency: all DuckDB access in `web.py` is serialized via `_history_duckdb_lock` (reads use `read_only=True`).
 - Card-to-UUID mapping lives in `mtgjson_card_map` table inside `inventory.db`; only sets with unmapped lots are reprocessed.
-- Duplicate-day protection: `mtgjson_today_merged_date` meta key prevents downloading AllPricesToday twice on the same day.
-- `isFirstDownload` on the Market page is based on whether `AllPricesHistory.duckdb` exists on disk, not whether the meta key is set.
+- `isFirstDownload` on the Market page is based on whether `AllPricesHistory.duckdb` exists on disk.
 
 ## Scripts
 
