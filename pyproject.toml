@@ -28,7 +28,8 @@ desktop = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-m 'not live'"
+addopts = "-m 'not live and not canary'"
 markers = [
     "live: hits real external sites; opt-in with `uv run pytest -m live`",
+    "canary: smoke-tests all shop endpoints for API/structure changes; opt-in with `uv run pytest -m canary`",
 ]

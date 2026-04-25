@@ -92,17 +92,3 @@ def test_parse_concatenates_multiple_pages():
     }
     records = parse_search_response([page1, page2], "Foo", fx_jpy_per_usd=100.0)
     assert [r["set"] for r in records] == ["A", "B"]
-
-
-@pytest.mark.live
-def test_live_scryfall_returns_results():
-    """Hits Scryfall for real. Opt in: `uv run pytest -m live`."""
-    from mtgcompare.scrappers.scryfall import ScryfallScrapper
-
-    scraper = ScryfallScrapper(fx=150.0)
-    records = scraper.get_prices("Force of Will")
-    assert records, "expected live Scryfall to return at least one record"
-    for r in records:
-        assert r["card"].lower() == "force of will"
-        assert r["price_usd"] > 0
-        assert r["link"].startswith("http")

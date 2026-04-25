@@ -121,17 +121,3 @@ def test_parse_skips_japanese_edition():
     </li>
     """
     assert parse_search_html(html, "Force of Will", fx_jpy_per_usd=150.0) == []
-
-
-@pytest.mark.live
-def test_live_singlestar_returns_results():
-    """Hits SingleStar for real. Opt in: `uv run pytest -m live`."""
-    from mtgcompare.scrappers.singlestar import SingleStarScrapper
-
-    scraper = SingleStarScrapper(fx=150.0)
-    records = scraper.get_prices("Force of Will")
-    assert records, "expected live SingleStar to return at least one result"
-    for r in records:
-        assert r["card"].lower() == "force of will"
-        assert r["price_jpy"] > 0
-        assert r["link"].startswith("https://www.singlestar.jp/")

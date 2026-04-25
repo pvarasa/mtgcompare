@@ -72,17 +72,3 @@ def test_parse_skips_zero_stock():
     </div>
     """
     assert parse_lazy_html(html, "Foo", fx_jpy_per_usd=150.0) == []
-
-
-@pytest.mark.live
-def test_live_hareruya_returns_results():
-    """Hits Hareruya for real. Opt in: `uv run pytest -m live`."""
-    from mtgcompare.scrappers.hareruya import HareruyaScrapper
-
-    scraper = HareruyaScrapper(fx=150.0)
-    records = scraper.get_prices("Force of Will")
-    assert records, "expected live Hareruya to return at least one result"
-    for r in records:
-        assert r["card"].lower() == "force of will"
-        assert r["price_jpy"] > 0
-        assert r["link"].startswith("https://www.hareruyamtg.com/")

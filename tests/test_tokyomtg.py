@@ -140,17 +140,3 @@ def test_parse_ignores_foil_only_stock():
     </div></div>
     """
     assert parse_search_html(html, "Force of Will", fx_jpy_per_usd=150.0) == []
-
-
-@pytest.mark.live
-def test_live_tokyomtg_returns_results():
-    """Hits TokyoMTG for real. Opt in: `uv run pytest -m live`."""
-    from mtgcompare.scrappers.tokyomtg import TokyoMtgScrapper
-
-    scraper = TokyoMtgScrapper(fx=150.0)
-    records = scraper.get_prices("Force of Will")
-    assert records, "expected live TokyoMTG to return at least one result"
-    for r in records:
-        assert r["card"].lower() == "force of will"
-        assert r["price_jpy"] > 0
-        assert r["link"].startswith("https://tokyomtg.com/")
