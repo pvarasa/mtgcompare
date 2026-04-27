@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 
+import mtgcompare.db as db_module
 from mtgcompare import web
 
 
@@ -151,5 +152,34 @@ def test_densify_daily_points_fills_gaps():
 
 def test_mtgjson_set_candidates_include_trimmed_variants():
     assert web._mtgjson_set_candidates("FMB1")[:2] == ["FMB1", "FMB"]
+
+
+# ---------------------------------------------------------------------------
+# _get_user_id
+# ---------------------------------------------------------------------------
+
+def test_get_user_id_returns_local_in_sqlite_mode(monkeypatch):
+    monkeypatch.setattr(db_module, "IS_POSTGRES", False)
+    with web.app.test_request_context("/"):
+        assert web._get_user_id() == "local"
+
+
+def test_get_user_id_reads_header_in_postgres_mode(monkeypatch):
+    monkeypatch.setattr(db_module, "IS_POSTGRES", True)
+    with web.app.test_request_context("/", headers={"X-User-ID": "alice"}):
+        assert web._get_user_id() == "alice"
+
+
+def test_get_user_id_defaults_to_anonymous_when_header_absent(monkeypatch):
+    monkeypatch.setattr(db_module, "IS_POSTGRES", True)
+    with web.app.test_request_context("/"):
+        assert web._get_user_id() == "anonymous"
+
+
+def test_get_user_id_respects_custom_header_name(monkeypatch):
+    monkeypatch.setattr(db_module, "IS_POSTGRES", True)
+    monkeypatch.setattr(web, "_USER_ID_HEADER", "X-Auth-Sub")
+    with web.app.test_request_context("/", headers={"X-Auth-Sub": "bob"}):
+        assert web._get_user_id() == "bob"
 
 

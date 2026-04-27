@@ -34,4 +34,5 @@ addopts = "-m 'not live and not canary'"
 markers = [
     "live: hits real external sites; opt-in with `uv run pytest -m live`",
     "canary: smoke-tests all shop endpoints for API/structure changes; opt-in with `uv run pytest -m canary`",
+    "pg: requires a real PostgreSQL instance (DATABASE_URL env var); opt-in with `uv run pytest -m pg`",
 ]
