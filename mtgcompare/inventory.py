@@ -16,7 +16,9 @@ import csv
 import sys
 from typing import IO, Iterator
 
-from .db import get_conn, init_schema
+from sqlalchemy import text
+
+from .db import get_conn, init_schema, upsert
 
 
 def _rows_from_csv(f: IO[str]) -> Iterator[dict]:
@@ -46,30 +48,34 @@ def _to_float(s: str) -> float | None:
         return None
 
 
-_INSERT_SQL = """INSERT INTO inventory
-    (card_name, set_code, set_name, card_number, quantity,
-     condition, printing, language, price_bought, date_bought)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""
+def _dict(r: dict, user_id: str) -> dict:
+    return {
+        "user_id":      user_id,
+        "card_name":    r["card_name"],
+        "set_code":     r["set_code"],
+        "set_name":     r.get("set_name") or "",
+        "card_number":  r.get("card_number") or "",
+        "quantity":     r["quantity"],
+        "condition":    r.get("condition") or "NM",
+        "printing":     r.get("printing") or "Normal",
+        "language":     r.get("language") or "English",
+        "price_bought": r.get("price_bought"),
+        "date_bought":  r.get("date_bought"),
+    }
 
 
-def _tuple(r: dict) -> tuple:
-    """Coerce a record dict into the _INSERT_SQL parameter tuple."""
-    return (
-        r["card_name"],
-        r["set_code"],
-        r.get("set_name") or "",
-        r.get("card_number") or "",
-        r["quantity"],
-        r.get("condition") or "NM",
-        r.get("printing") or "Normal",
-        r.get("language") or "English",
-        r.get("price_bought"),
-        r.get("date_bought"),
-    )
+_INSERT_SQL = text("""
+    INSERT INTO inventory
+        (user_id, card_name, set_code, set_name, card_number, quantity,
+         condition, printing, language, price_bought, date_bought)
+    VALUES
+        (:user_id, :card_name, :set_code, :set_name, :card_number, :quantity,
+         :condition, :printing, :language, :price_bought, :date_bought)
+""")
 
 
-def import_csv(path: str, replace: bool = True) -> int:
-    """Load a Deckbox CSV at `path`. `replace=True` clobbers the table first."""
+def import_csv(path: str, replace: bool = True, user_id: str = "local") -> int:
+    """Load a Deckbox CSV at `path`. `replace=True` clobbers the user's rows first."""
     init_schema()
     with open(path, encoding="utf-8-sig", newline="") as f:
         records = [
@@ -89,52 +95,71 @@ def import_csv(path: str, replace: bool = True) -> int:
         ]
     with get_conn() as conn:
         if replace:
-            conn.execute("DELETE FROM inventory")
-        conn.executemany(_INSERT_SQL, [_tuple(r) for r in records])
+            conn.execute(
+                text("DELETE FROM inventory WHERE user_id = :uid"),
+                {"uid": user_id},
+            )
+        conn.execute(_INSERT_SQL, [_dict(r, user_id) for r in records])
     return len(records)
 
 
-def add_one(record: dict) -> None:
+def add_one(record: dict, user_id: str = "local") -> None:
     """Append a single lot to the inventory table."""
     init_schema()
     with get_conn() as conn:
-        conn.execute(_INSERT_SQL, _tuple(record))
+        conn.execute(_INSERT_SQL, _dict(record, user_id))
 
 
-def add_many(records: list[dict]) -> int:
+def add_many(records: list[dict], user_id: str = "local") -> int:
     """Append multiple lots in a single transaction. Returns count inserted."""
     if not records:
         return 0
     init_schema()
     with get_conn() as conn:
-        conn.executemany(_INSERT_SQL, [_tuple(r) for r in records])
+        conn.execute(_INSERT_SQL, [_dict(r, user_id) for r in records])
     return len(records)
 
 
-def list_all() -> list[dict]:
+def list_all(user_id: str = "local") -> list[dict]:
+    """Return all inventory rows for the given user."""
     with get_conn() as conn:
         rows = conn.execute(
-            """SELECT card_name, set_code, set_name, card_number, quantity,
-                      condition, printing, language, price_bought, date_bought
-               FROM inventory
-               ORDER BY card_name, set_code, card_number"""
-        ).fetchall()
+            text("""SELECT card_name, set_code, set_name, card_number, quantity,
+                          condition, printing, language, price_bought, date_bought
+                   FROM inventory
+                   WHERE user_id = :uid
+                   ORDER BY card_name, set_code, card_number"""),
+            {"uid": user_id},
+        ).mappings().all()
     return [dict(r) for r in rows]
 
 
-def stats() -> dict:
+def list_all_global() -> list[dict]:
+    """Return all inventory rows across all users (used for shared price updates)."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            text("""SELECT card_name, set_code, set_name, card_number, quantity,
+                          condition, printing, language, price_bought, date_bought
+                   FROM inventory
+                   ORDER BY card_name, set_code, card_number"""),
+        ).mappings().all()
+    return [dict(r) for r in rows]
+
+
+def stats(user_id: str = "local") -> dict:
     with get_conn() as conn:
         row = conn.execute(
-            """SELECT COUNT(*)                            AS printings,
-                      COALESCE(SUM(quantity), 0)          AS total_copies,
-                      COALESCE(SUM(quantity * COALESCE(price_bought, 0)), 0.0)
-                                                          AS total_cost
-               FROM inventory"""
-        ).fetchone()
+            text("""SELECT COUNT(*) AS printings,
+                          COALESCE(SUM(quantity), 0) AS total_copies,
+                          COALESCE(SUM(quantity * COALESCE(price_bought, 0)), 0.0) AS total_cost
+                   FROM inventory
+                   WHERE user_id = :uid"""),
+            {"uid": user_id},
+        ).mappings().first()
     return {
-        "printings": row["printings"],
+        "printings":    row["printings"],
         "total_copies": row["total_copies"],
-        "total_cost": round(row["total_cost"], 2),
+        "total_cost":   round(float(row["total_cost"]), 2),
     }
 
 

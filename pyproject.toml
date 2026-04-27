@@ -8,7 +8,9 @@ dependencies = [
     "beautifulsoup4>=4.14",
     "duckdb>=1.2",
     "flask>=3.1",
+    "psycopg2-binary>=2.9",
     "requests>=2.33",
+    "sqlalchemy>=2.0",
     "yfinance>=1.3",
 ]
 

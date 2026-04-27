@@ -1,0 +1,30 @@
+.venv/
+.pytest_cache/
+__pycache__/
+*.py[cod]
+*.pyc
+
+# Local state — never goes in the image
+inventory.db
+binder.csv
+app.pid
+app.log
+app.err.log
+
+# MTGJSON data — downloaded at runtime
+mtgjson/
+
+# Build artefacts
+build/
+dist/
+*.spec
+*.spec.bak
+
+# Dev / editor
+.idea/
+.git/
+.tk_home.html
+.tk_search.html
+
+# Claude
+.claude/

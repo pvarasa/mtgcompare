@@ -6,6 +6,7 @@ Visit: http://127.0.0.1:5000
 import logging.config
 import lzma
 import json
+import os
 import re
 import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -16,6 +17,7 @@ from uuid import uuid4
 
 import duckdb
 import requests
+from sqlalchemy import text
 
 from flask import Flask, flash, jsonify, redirect, render_template, request, url_for
 
@@ -29,8 +31,21 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 LOGGING_CONF = ROOT_DIR / "logging.conf"
 
 app = Flask(__name__)
-# `flash()` needs a session cookie; the value only needs to be stable per process.
-app.secret_key = "mtgcompare-local"
+app.secret_key = os.environ.get("SECRET_KEY", "mtgcompare-local-dev")
+
+_USER_ID_HEADER = os.environ.get("USER_ID_HEADER", "X-User-ID")
+_CRON_SECRET = os.environ.get("CRON_SECRET", "")
+
+
+def _get_user_id() -> str:
+    """Return the current user identity.
+
+    In local SQLite mode always returns 'local' (no auth required).
+    In PostgreSQL mode reads the plain header set by the auth proxy.
+    """
+    if not db.IS_POSTGRES:
+        return "local"
+    return request.headers.get(_USER_ID_HEADER, "anonymous").strip() or "anonymous"
 
 _CONDITION_ABBR = {
     "nearmint": "NM", "nm": "NM",
@@ -215,7 +230,8 @@ def decklist_search():
     inv_map: dict[str, int] = {}
     if use_inventory:
         inv.init_schema()
-        for row in inv.list_all():
+        user_id = _get_user_id()
+        for row in inv.list_all(user_id):
             k = row["card_name"].lower()
             inv_map[k] = inv_map.get(k, 0) + row["quantity"]
 
@@ -370,7 +386,10 @@ def _slice_history(points: list[dict], period: str, *, now: datetime | None = No
 
 
 def _mtgjson_cache_dir() -> Path:
-    cache_dir = db.DB_PATH.parent / "mtgjson"
+    if db.IS_POSTGRES:
+        cache_dir = Path(os.environ.get("MTGJSON_CACHE_DIR", "/tmp/mtgjson"))
+    else:
+        cache_dir = db.DB_PATH.parent / "mtgjson"
     cache_dir.mkdir(parents=True, exist_ok=True)
     return cache_dir
 
@@ -436,15 +455,14 @@ def _download_mtgjson_set_file(set_code: str) -> tuple[str, Path] | None:
 
 
 def _read_meta(conn, key: str) -> str | None:
-    row = conn.execute("SELECT value FROM app_meta WHERE key = ?", (key,)).fetchone()
+    row = conn.execute(
+        text("SELECT value FROM app_meta WHERE key = :key"), {"key": key}
+    ).mappings().first()
     return row["value"] if row else None
 
 
 def _write_meta(conn, key: str, value: str) -> None:
-    conn.execute(
-        "INSERT OR REPLACE INTO app_meta (key, value) VALUES (?, ?)",
-        (key, value),
-    )
+    db.upsert(conn, "app_meta", ["key"], [{"key": key, "value": value}])
 
 
 def _init_download_job(job_id: str) -> None:
@@ -478,7 +496,26 @@ def _get_download_job(job_id: str) -> dict | None:
 _history_duckdb_lock = Lock()
 
 
+def _has_price_history() -> bool:
+    if db.IS_POSTGRES:
+        with db.get_conn() as conn:
+            return conn.execute(text("SELECT 1 FROM price_rows LIMIT 1")).fetchone() is not None
+    return _mtgjson_history_duckdb_path().exists()
+
+
 def _query_history(uuid: str, finish: str) -> dict[str, float]:
+    if db.IS_POSTGRES:
+        with db.get_conn() as conn:
+            rows = conn.execute(
+                text("SELECT market_date, price_usd FROM price_rows"
+                     " WHERE uuid = :uuid AND finish = :finish ORDER BY market_date ASC"),
+                {"uuid": uuid, "finish": finish},
+            ).fetchall()
+        return {
+            (r[0].isoformat() if isinstance(r[0], date) else str(r[0])): float(r[1])
+            for r in rows if r[1] is not None
+        }
+
     duckdb_path = _mtgjson_history_duckdb_path()
     if not duckdb_path.exists():
         return {}
@@ -571,14 +608,14 @@ def _densify_daily_points(
 
 def _populate_market_prices_from_history(
     card_maps: list[tuple],
-    duckdb_path: Path,
+    duckdb_path: Path | None,
     fetched_at: str,
 ) -> None:
-    """Write the latest DuckDB price for each mapped inventory lot into market_prices.
+    """Write the latest price for each mapped inventory lot into market_prices.
 
     card_maps: list of (card_name, set_code, card_number, is_foil, uuid, updated_at)
     """
-    if not card_maps or not duckdb_path.exists():
+    if not card_maps:
         return
 
     # Deduplicate to one market_prices row per (card_name, set_code, is_foil).
@@ -594,32 +631,53 @@ def _populate_market_prices_from_history(
     if not uuid_to_db_key:
         return
 
-    uuid_list = ", ".join(f"'{u}'" for u, _ in uuid_to_db_key)
-    with _history_duckdb_lock:
-        conn = duckdb.connect(str(duckdb_path), read_only=True)
-        try:
-            rows = conn.execute(f"""
-                SELECT uuid, finish, price_usd
-                FROM price_rows
-                WHERE uuid IN ({uuid_list})
-                QUALIFY ROW_NUMBER() OVER (PARTITION BY uuid, finish ORDER BY market_date DESC) = 1
-            """).fetchall()
-        finally:
-            conn.close()
-
-    latest: dict[tuple[str, str], float | None] = {(r[0], r[1]): r[2] for r in rows}
+    if db.IS_POSTGRES:
+        uuid_list = list({u for (u, _) in uuid_to_db_key})
+        params = {f"u{i}": u for i, u in enumerate(uuid_list)}
+        placeholders = ", ".join(f":u{i}" for i in range(len(uuid_list)))
+        with db.get_conn() as conn:
+            rows = conn.execute(
+                text(f"""
+                    SELECT DISTINCT ON (uuid, finish) uuid, finish, price_usd
+                    FROM price_rows
+                    WHERE uuid IN ({placeholders})
+                    ORDER BY uuid, finish, market_date DESC
+                """),
+                params,
+            ).fetchall()
+        latest: dict[tuple[str, str], float | None] = {
+            (r[0], r[1]): float(r[2]) if r[2] is not None else None
+            for r in rows
+        }
+    else:
+        if not duckdb_path or not duckdb_path.exists():
+            return
+        uuid_str = ", ".join(f"'{u}'" for u, _ in uuid_to_db_key)
+        with _history_duckdb_lock:
+            conn_duck = duckdb.connect(str(duckdb_path), read_only=True)
+            try:
+                rows = conn_duck.execute(f"""
+                    SELECT uuid, finish, price_usd
+                    FROM price_rows
+                    WHERE uuid IN ({uuid_str})
+                    QUALIFY ROW_NUMBER() OVER (PARTITION BY uuid, finish ORDER BY market_date DESC) = 1
+                """).fetchall()
+            finally:
+                conn_duck.close()
+        latest = {(r[0], r[1]): r[2] for r in rows}
 
     inserts = [
-        (card_name, set_code, is_foil, latest.get((uuid, finish)), fetched_at)
+        {
+            "card_name": card_name,
+            "set_code":  set_code,
+            "is_foil":   is_foil,
+            "price_usd": latest.get((uuid, finish)),
+            "fetched_at": fetched_at,
+        }
         for (uuid, finish), (card_name, set_code, is_foil) in uuid_to_db_key.items()
     ]
     with db.get_conn() as conn:
-        conn.executemany(
-            """INSERT OR REPLACE INTO market_prices
-               (card_name, set_code, is_foil, price_usd, fetched_at)
-               VALUES (?, ?, ?, ?, ?)""",
-            inserts,
-        )
+        db.upsert(conn, "market_prices", ["card_name", "set_code", "is_foil"], inserts)
 
 
 def _import_mtgjson_history(rows: list[dict], *, progress_cb=None) -> tuple[int, int]:
@@ -641,8 +699,8 @@ def _import_mtgjson_history(rows: list[dict], *, progress_cb=None) -> tuple[int,
     # Load existing mappings so we can skip sets that are already fully resolved.
     with db.get_conn() as conn:
         existing_rows = conn.execute(
-            "SELECT card_name, set_code, card_number, is_foil, uuid FROM mtgjson_card_map"
-        ).fetchall()
+            text("SELECT card_name, set_code, card_number, is_foil, uuid FROM mtgjson_card_map")
+        ).mappings().all()
     existing_uuid: dict[tuple[str, str, str, int], str] = {
         (r["card_name"].lower(), r["set_code"], r["card_number"], r["is_foil"]): r["uuid"]
         for r in existing_rows
@@ -693,7 +751,26 @@ def _import_mtgjson_history(rows: list[dict], *, progress_cb=None) -> tuple[int,
     history_duckdb_path = _mtgjson_history_duckdb_path()
     history_row_count = 0
 
-    if not history_duckdb_path.exists():
+    if db.IS_POSTGRES:
+        has_history = _has_price_history()
+        if not has_history:
+            history_path = _mtgjson_history_path()
+            _progress(32, "Downloading history", "Downloading MTGJSON AllPrices history...")
+            try:
+                _download_file(f"{_MTGJSON_BASE_URL}/AllPrices.json.xz", history_path)
+            except requests.HTTPError as exc:
+                if exc.response is not None and exc.response.status_code == 404:
+                    raise RuntimeError(
+                        "MTGJSON price files are temporarily unavailable. Please try again later."
+                    ) from exc
+                raise
+            history_row_count = history_import.rebuild_history_pg(
+                history_path, downloaded_at, db.engine, progress_cb=_progress,
+            )
+            history_path.unlink(missing_ok=True)
+        else:
+            _progress(40, "History ready", "Using existing PostgreSQL price history.")
+    elif not history_duckdb_path.exists():
         history_path = _mtgjson_history_path()
         _progress(32, "Downloading history", "Downloading MTGJSON AllPrices history...")
         try:
@@ -706,10 +783,7 @@ def _import_mtgjson_history(rows: list[dict], *, progress_cb=None) -> tuple[int,
             raise
         with _history_duckdb_lock:
             history_row_count = history_import.rebuild_history_db(
-                history_path,
-                downloaded_at,
-                history_duckdb_path,
-                progress_cb=_progress,
+                history_path, downloaded_at, history_duckdb_path, progress_cb=_progress,
             )
         history_path.unlink(missing_ok=True)
     else:
@@ -718,18 +792,21 @@ def _import_mtgjson_history(rows: list[dict], *, progress_cb=None) -> tuple[int,
     _progress(96, "Saving mappings", "Updating local card-to-MTGJSON mappings...")
     with db.get_conn() as conn:
         if sets_needing_load:
-            placeholders = ",".join("?" * len(sets_needing_load))
+            params = {f"s{i}": s for i, s in enumerate(sets_needing_load)}
+            placeholders = ", ".join(f":s{i}" for i in range(len(sets_needing_load)))
             conn.execute(
-                f"DELETE FROM mtgjson_card_map WHERE set_code IN ({placeholders})",
-                list(sets_needing_load),
+                text(f"DELETE FROM mtgjson_card_map WHERE set_code IN ({placeholders})"),
+                params,
             )
         if card_maps:
-            conn.executemany(
-                """INSERT OR REPLACE INTO mtgjson_card_map
-                   (card_name, set_code, card_number, is_foil, uuid, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
-                card_maps,
-            )
+            card_map_dicts = [
+                {"card_name": m[0], "set_code": m[1], "card_number": m[2],
+                 "is_foil": m[3], "uuid": m[4], "updated_at": m[5]}
+                for m in card_maps
+            ]
+            db.upsert(conn, "mtgjson_card_map",
+                      ["card_name", "set_code", "card_number", "is_foil"],
+                      card_map_dicts)
         _write_meta(conn, "mtgjson_history_downloaded_at", downloaded_at)
         if history_row_count:
             _write_meta(conn, "mtgjson_history_db_built_at", downloaded_at)
@@ -741,7 +818,11 @@ def _import_mtgjson_history(rows: list[dict], *, progress_cb=None) -> tuple[int,
             history_row_count = int(row_count) if row_count else 0
 
     _progress(98, "Updating prices", "Writing latest prices to market table...")
-    _populate_market_prices_from_history(card_maps, history_duckdb_path, downloaded_at)
+    _populate_market_prices_from_history(
+        card_maps,
+        None if db.IS_POSTGRES else history_duckdb_path,
+        downloaded_at,
+    )
 
     _progress(100, "Done", f"Indexed {history_row_count:,} MTGJSON price points and mapped {len(card_maps)} lot(s).")
     return len(card_maps), history_row_count
@@ -750,13 +831,14 @@ def _import_mtgjson_history(rows: list[dict], *, progress_cb=None) -> tuple[int,
 @app.route("/market")
 def market():
     inv.init_schema()
-    inventory_rows = inv.list_all()
+    user_id = _get_user_id()
+    inventory_rows = inv.list_all(user_id)
 
     # Load cached prices — no live fetch on GET.
     with db.get_conn() as conn:
         cache_rows = conn.execute(
-            "SELECT card_name, set_code, is_foil, price_usd, fetched_at FROM market_prices"
-        ).fetchall()
+            text("SELECT card_name, set_code, is_foil, price_usd, fetched_at FROM market_prices")
+        ).mappings().all()
         mtgjson_downloaded_at = _read_meta(conn, "mtgjson_history_downloaded_at")
 
     price_cache: dict[tuple, float | None] = {}
@@ -769,7 +851,7 @@ def market():
 
     has_cache = bool(price_cache)
     last_refreshed = _format_ago(last_fetched_at)
-    history_db_exists = _mtgjson_history_duckdb_path().exists()
+    history_db_exists = _has_price_history()
     mtgjson_last_downloaded = _format_ago(mtgjson_downloaded_at) if history_db_exists else None
 
     if not inventory_rows:
@@ -855,7 +937,8 @@ def market():
 @app.route("/market/history/download", methods=["POST"])
 def market_history_download():
     inv.init_schema()
-    inventory_rows = inv.list_all()
+    # Use global inventory so all users' cards get UUID-mapped and priced.
+    inventory_rows = inv.list_all_global()
 
     if not inventory_rows:
         return jsonify({"ok": False, "error": "No inventory to build MTGJSON history for."}), 400
@@ -923,15 +1006,16 @@ def market_history():
     with db.get_conn() as conn:
         downloaded_at = _read_meta(conn, "mtgjson_history_downloaded_at")
         mapped = conn.execute(
-            """SELECT uuid
-               FROM mtgjson_card_map
-               WHERE lower(card_name) = lower(?)
-                 AND set_code = ?
-                 AND card_number = ?
-                 AND is_foil = ?
-               LIMIT 1""",
-            (card_name, set_code, card_number, is_foil),
-        ).fetchone()
+            text("""SELECT uuid
+                    FROM mtgjson_card_map
+                    WHERE lower(card_name) = lower(:card_name)
+                      AND set_code = :set_code
+                      AND card_number = :card_number
+                      AND is_foil = :is_foil
+                    LIMIT 1"""),
+            {"card_name": card_name, "set_code": set_code,
+             "card_number": card_number, "is_foil": is_foil},
+        ).mappings().first()
 
     finish = "foil" if is_foil else "normal"
     history = _query_history(mapped["uuid"], finish) if mapped else {}
@@ -973,10 +1057,11 @@ def market_history():
 @app.route("/inventory")
 def inventory():
     inv.init_schema()
+    user_id = _get_user_id()
     return render_template(
         "inventory.html",
-        rows=inv.list_all(),
-        stats=inv.stats(),
+        rows=inv.list_all(user_id),
+        stats=inv.stats(user_id),
         active="inventory",
     )
 
@@ -993,6 +1078,7 @@ def _opt_float(value: str) -> float | None:
 
 @app.route("/inventory/add", methods=["POST"])
 def inventory_add():
+    user_id = _get_user_id()
     try:
         record = {
             "card_name": request.form["card_name"].strip(),
@@ -1009,7 +1095,7 @@ def inventory_add():
         if not record["card_name"] or not record["set_code"]:
             flash("Card name and set are required.")
             return redirect(url_for("inventory"))
-        inv.add_one(record)
+        inv.add_one(record, user_id)
     except Exception as exc:
         app.logger.exception("single-card add failed")
         flash(f"Add failed: {exc}")
@@ -1021,12 +1107,13 @@ def inventory_add():
 
 @app.route("/inventory/add-bulk", methods=["POST"])
 def inventory_add_bulk():
+    user_id = _get_user_id()
     payload = request.get_json(silent=True) or {}
     records = payload.get("records") or []
     if not records:
         return {"ok": False, "error": "No records"}, 400
     try:
-        count = inv.add_many(records)
+        count = inv.add_many(records, user_id)
     except Exception as exc:
         app.logger.exception("bulk add failed")
         return {"ok": False, "error": str(exc)}, 500
@@ -1036,6 +1123,7 @@ def inventory_add_bulk():
 
 @app.route("/inventory/import", methods=["POST"])
 def inventory_import():
+    user_id = _get_user_id()
     uploaded = request.files.get("file")
     if not uploaded or not uploaded.filename:
         flash("No file selected.")
@@ -1048,7 +1136,7 @@ def inventory_import():
         uploaded.save(tmp.name)
         tmp_path = tmp.name
     try:
-        count = inv.import_csv(tmp_path, replace=replace)
+        count = inv.import_csv(tmp_path, replace=replace, user_id=user_id)
     except Exception as exc:
         app.logger.exception("inventory import failed")
         flash(f"Import failed: {exc}")
@@ -1059,6 +1147,93 @@ def inventory_import():
     verb = "Replaced inventory with" if replace else "Appended"
     flash(f"{verb} {count} rows from {uploaded.filename}.")
     return redirect(url_for("inventory"))
+
+
+def _run_daily_price_update(progress_cb=None) -> tuple[int, int]:
+    """Download today's incremental prices and refresh market_prices.
+
+    Used by the cron endpoint. Returns (mapped_count, row_count).
+    """
+    def _progress(progress: int, phase: str, detail: str) -> None:
+        if progress_cb:
+            progress_cb(progress, phase, detail)
+
+    inventory_rows = inv.list_all_global()
+    if not inventory_rows:
+        return 0, 0
+
+    downloaded_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    cache_dir = _mtgjson_cache_dir()
+
+    if db.IS_POSTGRES:
+        today_xz = cache_dir / "AllPricesToday.json.xz"
+        _progress(10, "Downloading today's prices", "Downloading AllPricesToday.json.xz...")
+        try:
+            _download_file(f"{_MTGJSON_BASE_URL}/AllPricesToday.json.xz", today_xz)
+        except requests.HTTPError as exc:
+            if exc.response is not None and exc.response.status_code == 404:
+                raise RuntimeError("MTGJSON AllPricesToday not available yet.") from exc
+            raise
+        row_count = history_import.merge_today_prices_pg(
+            today_xz, downloaded_at, db.engine, progress_cb=_progress,
+        )
+        today_xz.unlink(missing_ok=True)
+    else:
+        today_xz = cache_dir / "AllPricesToday.json.xz"
+        _progress(10, "Downloading today's prices", "Downloading AllPricesToday.json.xz...")
+        try:
+            _download_file(f"{_MTGJSON_BASE_URL}/AllPricesToday.json.xz", today_xz)
+        except requests.HTTPError as exc:
+            if exc.response is not None and exc.response.status_code == 404:
+                raise RuntimeError("MTGJSON AllPricesToday not available yet.") from exc
+            raise
+        duckdb_path = _mtgjson_history_duckdb_path()
+        with _history_duckdb_lock:
+            row_count = history_import.merge_today_prices(
+                today_xz, duckdb_path, downloaded_at, progress_cb=_progress,
+            )
+        today_xz.unlink(missing_ok=True)
+
+    mapped_count, _ = _import_mtgjson_history(inventory_rows, progress_cb=_progress)
+    return mapped_count, row_count
+
+
+@app.route("/internal/cron/update-prices", methods=["POST"])
+def cron_update_prices():
+    """Protected endpoint for the daily K8s CronJob.
+
+    Requires Authorization: Bearer <CRON_SECRET> header.
+    """
+    if _CRON_SECRET:
+        auth = request.headers.get("Authorization", "")
+        if auth != f"Bearer {_CRON_SECRET}":
+            return jsonify({"ok": False, "error": "Unauthorized"}), 401
+
+    with _download_jobs_lock:
+        running = next((j for j in _download_jobs.values() if j["state"] == "running"), None)
+    if running:
+        return jsonify({"ok": True, "job_id": running["id"], "already_running": True})
+
+    job_id = uuid4().hex
+    _init_download_job(job_id)
+
+    def _progress(progress: int, phase: str, detail: str) -> None:
+        _set_download_job(job_id, progress=progress, phase=phase, detail=detail)
+
+    def _worker() -> None:
+        try:
+            mapped_count, row_count = _run_daily_price_update(progress_cb=_progress)
+            _set_download_job(
+                job_id, state="done", progress=100, phase="Done",
+                detail=f"Updated {row_count:,} price points for {mapped_count} lot(s).",
+            )
+        except Exception as exc:
+            app.logger.exception("Daily price update failed")
+            _set_download_job(job_id, state="error", phase="Failed",
+                              detail="Daily price update failed.", error=str(exc))
+
+    Thread(target=_worker, daemon=True).start()
+    return jsonify({"ok": True, "job_id": job_id, "already_running": False})
 
 
 def main() -> None:

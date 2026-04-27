@@ -2,9 +2,11 @@
 
   1. Stream: AllPrices.json.xz → NDJSON (lightweight Python; one compact JSON object per UUID)
   2. Flatten: DuckDB reads NDJSON and unnests date→price maps into rows with a PRIMARY KEY
-  3. Atomic rename of the .tmp DuckDB file into place (full rebuild only)
+  3a. Local mode:  Atomic rename of the .tmp DuckDB file into place (full rebuild only)
+  3b. Remote mode: Stream CSV from DuckDB → PostgreSQL via COPY FROM STDIN (bulk load)
 
-Public API: rebuild_history_db(), merge_today_prices()
+Public API (local/DuckDB):  rebuild_history_db(), merge_today_prices()
+Public API (PostgreSQL):     rebuild_history_pg(), merge_today_prices_pg()
 """
 import json
 import lzma
@@ -302,6 +304,159 @@ def rebuild_history_db(
 
     if progress_cb:
         progress_cb(92, "Finishing import", f"Local MTGJSON history DB ready with {row_count:,} price points.")
+
+    return row_count
+
+
+def _duckdb_to_csv(duck_conn: "duckdb.DuckDBPyConnection", csv_path: Path) -> int:
+    """Export DuckDB price_rows to CSV. Returns row count."""
+    csv_str = str(csv_path).replace("\\", "/")
+    duck_conn.execute(f"COPY price_rows TO '{csv_str}' WITH (FORMAT CSV, HEADER FALSE, NULL '')")
+    return duck_conn.execute("SELECT COUNT(*) FROM price_rows").fetchone()[0]
+
+
+def _csv_to_postgres(csv_path: Path, engine, *, initial: bool) -> None:
+    """COPY CSV into PostgreSQL price_rows.
+
+    initial=True: direct COPY into the (empty) table — fastest path.
+    initial=False: COPY into temp table then upsert — safe for incremental updates.
+    """
+    raw = engine.raw_connection()
+    try:
+        with raw.cursor() as cur:
+            if initial:
+                with open(csv_path, "rb") as f:
+                    cur.copy_expert(
+                        "COPY price_rows (uuid, finish, market_date, price_usd, source_updated)"
+                        " FROM STDIN WITH (FORMAT CSV, NULL '')",
+                        f,
+                    )
+            else:
+                cur.execute(
+                    "CREATE TEMP TABLE price_rows_stage"
+                    " (uuid TEXT, finish TEXT, market_date DATE,"
+                    "  price_usd NUMERIC(10,4), source_updated TEXT)"
+                )
+                with open(csv_path, "rb") as f:
+                    cur.copy_expert(
+                        "COPY price_rows_stage (uuid, finish, market_date, price_usd, source_updated)"
+                        " FROM STDIN WITH (FORMAT CSV, NULL '')",
+                        f,
+                    )
+                cur.execute("""
+                    INSERT INTO price_rows
+                        (uuid, finish, market_date, price_usd, source_updated)
+                    SELECT uuid, finish, market_date, price_usd, source_updated
+                    FROM price_rows_stage
+                    ON CONFLICT (uuid, finish, market_date) DO UPDATE
+                        SET price_usd      = EXCLUDED.price_usd,
+                            source_updated = EXCLUDED.source_updated
+                """)
+                cur.execute("DROP TABLE price_rows_stage")
+        raw.commit()
+    finally:
+        raw.close()
+
+
+def rebuild_history_pg(
+    xz_path: Path,
+    source_updated: str,
+    engine,
+    *,
+    progress_cb: Callable[[int, str, str], None] | None = None,
+) -> int:
+    """Full rebuild: AllPrices.json.xz → NDJSON → DuckDB (ephemeral) → PostgreSQL via COPY.
+
+    DuckDB is used as an ETL engine only — no .duckdb file is persisted.
+    Returns the number of price rows written to PostgreSQL.
+    """
+    cache_dir = xz_path.parent
+    ndjson_path = cache_dir / "AllPrices.ndjson"
+    csv_path = cache_dir / "AllPrices_flat.csv"
+
+    for f in (ndjson_path, csv_path):
+        if f.exists():
+            f.unlink()
+
+    if progress_cb:
+        progress_cb(40, "Decompressing history", "Streaming AllPrices.json.xz to NDJSON...")
+
+    uuid_count = _stream_to_ndjson(xz_path, ndjson_path, progress_cb=progress_cb)
+
+    if progress_cb:
+        progress_cb(52, "Flattening history", f"Streamed {uuid_count:,} cards. Flattening via DuckDB...")
+
+    ndjson_str = str(ndjson_path).replace("\\", "/")
+    conn = duckdb.connect(":memory:")
+    try:
+        conn.execute(_DUCKDB_SCHEMA)
+        conn.execute(_build_load_sql(ndjson_str, source_updated, upsert=False))
+        row_count = _duckdb_to_csv(conn, csv_path)
+    finally:
+        conn.close()
+
+    ndjson_path.unlink(missing_ok=True)
+
+    if row_count == 0:
+        csv_path.unlink(missing_ok=True)
+        raise RuntimeError("DuckDB flatten produced 0 rows — aborting rebuild.")
+
+    if progress_cb:
+        progress_cb(65, "Loading to PostgreSQL", f"COPY {row_count:,} rows via COPY FROM STDIN...")
+
+    # Detect whether this is the initial load (empty table) for the faster COPY path.
+    from sqlalchemy import text as _text
+    with engine.connect() as sa_conn:
+        has_rows = sa_conn.execute(_text("SELECT 1 FROM price_rows LIMIT 1")).fetchone() is not None
+
+    _csv_to_postgres(csv_path, engine, initial=not has_rows)
+    csv_path.unlink(missing_ok=True)
+
+    if progress_cb:
+        progress_cb(92, "Finishing import", f"PostgreSQL price_rows updated with {row_count:,} price points.")
+
+    return row_count
+
+
+def merge_today_prices_pg(
+    xz_path: Path,
+    source_updated: str,
+    engine,
+    *,
+    progress_cb: Callable[[int, str, str], None] | None = None,
+) -> int:
+    """Upsert today's prices from AllPricesToday.json.xz into PostgreSQL price_rows."""
+    cache_dir = xz_path.parent
+    ndjson_path = cache_dir / "AllPricesToday.ndjson"
+    csv_path = cache_dir / "AllPricesToday_flat.csv"
+
+    if progress_cb:
+        progress_cb(40, "Merging today's prices", "Streaming AllPricesToday.json.xz to NDJSON...")
+
+    uuid_count = _stream_to_ndjson(xz_path, ndjson_path, progress_cb=progress_cb)
+
+    if progress_cb:
+        progress_cb(58, "Merging today's prices", f"Streamed {uuid_count:,} cards. Flattening via DuckDB...")
+
+    ndjson_str = str(ndjson_path).replace("\\", "/")
+    conn = duckdb.connect(":memory:")
+    try:
+        conn.execute(_DUCKDB_SCHEMA)
+        conn.execute(_build_load_sql(ndjson_str, source_updated, upsert=False))
+        row_count = _duckdb_to_csv(conn, csv_path)
+    finally:
+        conn.close()
+
+    ndjson_path.unlink(missing_ok=True)
+
+    if progress_cb:
+        progress_cb(75, "Upserting to PostgreSQL", f"Upserting {row_count:,} rows...")
+
+    _csv_to_postgres(csv_path, engine, initial=False)
+    csv_path.unlink(missing_ok=True)
+
+    if progress_cb:
+        progress_cb(95, "Done", f"Merged {row_count:,} price points into PostgreSQL.")
 
     return row_count
 

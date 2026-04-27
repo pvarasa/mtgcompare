@@ -1,0 +1,31 @@
+services:
+  app:
+    build: .
+    ports:
+      - "5000:5000"
+    environment:
+      DATABASE_URL: postgresql+psycopg2://mtgcompare:mtgcompare@db:5432/mtgcompare
+      SECRET_KEY: change-me-in-production
+      CRON_SECRET: change-me-in-production
+      MTGJSON_CACHE_DIR: /tmp/mtgjson
+      # USER_ID_HEADER: X-User-ID  # set by your auth proxy; default value shown
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: mtgcompare
+      POSTGRES_USER: mtgcompare
+      POSTGRES_PASSWORD: mtgcompare
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mtgcompare"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pgdata:
