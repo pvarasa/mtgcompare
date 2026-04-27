@@ -22,11 +22,20 @@ mtgcompare-app = "mtgcompare.launcher:main"
 [dependency-groups]
 dev = [
     "pytest>=9.0",
+    "ruff>=0.15.12",
 ]
 desktop = [
     "pillow>=10.0",
     "pystray>=0.19",
 ]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E701"]  # allow compact single-line if/return style
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

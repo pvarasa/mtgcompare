@@ -3,9 +3,9 @@
 Run: uv run python -m mtgcompare.web
 Visit: http://127.0.0.1:5000
 """
+import json
 import logging.config
 import lzma
-import json
 import os
 import re
 import tempfile
@@ -17,12 +17,10 @@ from uuid import uuid4
 
 import duckdb
 import requests
+from flask import Flask, flash, jsonify, redirect, render_template, request, url_for
 from sqlalchemy import text
 
-from flask import Flask, flash, jsonify, redirect, render_template, request, url_for
-
-from . import db
-from . import history_import
+from . import db, history_import
 from . import inventory as inv
 from .shops import SHIPPING_JPY, SHOP_FLAGS, collect_prices, shop_slug
 from .utils import get_fx
@@ -1047,7 +1045,10 @@ def market_history():
         "has_history": bool(history),
         "source": {
             "label": "MTGJSON / TCGplayer retail",
-            "detail": "Imported from MTGJSON price history. Blank days mean MTGJSON has no value for that day or the local download is behind.",
+            "detail": (
+                "Imported from MTGJSON price history. Blank days mean MTGJSON has no value"
+                " for that day or the local download is behind."
+            ),
         },
         "points": dense_points,
         "all_points_count": len(dense_points),
