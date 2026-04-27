@@ -3,7 +3,7 @@
 [![Latest Release](https://img.shields.io/github/v/release/pvarasa/mtgcompare?label=download)](https://github.com/pvarasa/mtgcompare/releases/latest)
 [![Build](https://github.com/pvarasa/mtgcompare/actions/workflows/release.yml/badge.svg)](https://github.com/pvarasa/mtgcompare/actions/workflows/release.yml)
 
-Compare *Magic: The Gathering* card prices across Japanese and US shops, track your collection, and estimate decklist costs — all running locally on your machine.
+Compare *Magic: The Gathering* card prices across Japanese and US shops, track your collection, and estimate decklist costs. Runs as a local desktop app on Windows/macOS or as a self-hosted server with PostgreSQL.
 
 ---
 
@@ -47,10 +47,13 @@ Your inventory is stored in `~/Library/Application Support/mtgcompare/inventory.
 ### Inventory
 - Add cards one at a time (Scryfall autocomplete for name and set), paste a decklist, or import a Deckbox/CardCastle CSV.
 - Filter by name or purchase price; select any subset and export as a decklist `.txt` or CSV.
+- In server mode, each user's inventory is isolated by the identity provided by your auth proxy.
 
 ### Market valuation
-- Click **Refresh prices** to fetch current Scryfall/TCGPlayer market prices for your whole collection in one go.
+- Click **Update prices** to download MTGJSON/TCGPlayer price history for your whole collection in one go.
 - See total cost basis, total market value, and unrealized PnL per lot and in aggregate.
+- Price history charts show daily price movements per card.
+- Prices are shared across all users; inventory is per-user.
 
 ### Shops covered
 
@@ -72,7 +75,7 @@ Prices are shown in both ¥ and $ using a live FX rate fetched at startup. Resul
 - Python 3.12+
 - [uv](https://github.com/astral-sh/uv)
 
-### Install & run
+### Install & run (local / SQLite)
 
 ```bash
 uv sync
@@ -85,6 +88,28 @@ Or use the start/stop helpers:
 ./scripts/start.sh
 ./scripts/stop.sh
 ```
+
+### Run with Docker (PostgreSQL)
+
+```bash
+docker compose up
+```
+
+Starts the app at `http://localhost:5000` backed by a local PostgreSQL instance. Data is persisted in the `pgdata` Docker volume.
+
+### Deploy to Kubernetes
+
+The app is a stateless container when `DATABASE_URL` is set. Point it at your PostgreSQL instance and configure the following environment variables:
+
+| Variable | Description |
+|---|---|
+| `DATABASE_URL` | SQLAlchemy PostgreSQL URL, e.g. `postgresql+psycopg2://user:pass@host/db` |
+| `SECRET_KEY` | Flask session secret (required in production) |
+| `USER_ID_HEADER` | HTTP header carrying the user identity from your auth proxy (default: `X-User-ID`) |
+| `CRON_SECRET` | Bearer token protecting the daily price-refresh endpoint |
+| `MTGJSON_CACHE_DIR` | Scratch directory for price import temp files (default: `/tmp/mtgjson`) |
+
+**Daily price refresh** is triggered by a `POST /internal/cron/update-prices` request with an `Authorization: Bearer <CRON_SECRET>` header. Wire this up as a K8s CronJob hitting the cluster-internal service URL so it is never exposed externally.
 
 ### CLI
 
@@ -125,8 +150,9 @@ uv run python -m mtgcompare.inventory stats
 ### Testing
 
 ```bash
-uv run pytest          # offline tests (default)
-uv run pytest -m live  # live scraper tests — hits real sites
+uv run pytest                                              # offline tests (default)
+uv run pytest -m live                                      # live scraper tests — hits real sites
+DATABASE_URL=postgresql+psycopg2://... uv run pytest -m pg # PostgreSQL bulk-load tests
 ```
 
 ### Building the Windows app
@@ -138,7 +164,7 @@ uv run pytest -m live  # live scraper tests — hits real sites
 Produces `dist/mtgcompare-windows.zip`. To publish a release, push a version tag:
 
 ```bash
-git tag v1.2.0 && git push --tags
+git tag v1.3.0 && git push --tags
 ```
 
 GitHub Actions builds and attaches the zip to the GitHub Release automatically.
@@ -147,17 +173,20 @@ GitHub Actions builds and attaches the zip to the GitHub Release automatically.
 
 ```
 mtgcompare/
-  web.py          Flask UI (search, decklist, inventory, market)
+  web.py          Flask UI (search, decklist, inventory, market, cron endpoint)
   compare.py      CLI entry point
-  inventory.py    Inventory storage + CSV import
+  inventory.py    Inventory storage + CSV import (per-user scoping)
+  history_import.py  MTGJSON price history pipeline (DuckDB ETL → SQLite or PostgreSQL)
   launcher.py     Packaged-app entry point (tray icon + browser open)
-  db.py           SQLite connection + schema
+  db.py           SQLAlchemy engine + schema (SQLite and PostgreSQL backends)
   shops.py        Shop registry + collect_prices()
   scrappers/      Per-shop scraper implementations
   templates/      Jinja2 HTML templates
   static/         CSS, JS, images
 scripts/          start/stop helpers + build.ps1
 tests/            Pytest suite
+Dockerfile        Multi-stage container build
+docker-compose.yml  Local dev stack (app + postgres)
 ```
 
 ### Limitations
