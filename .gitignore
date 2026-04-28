@@ -1,5 +1,6 @@
 .venv/
 .idea/
+.claude/
 .pytest_cache/
 __pycache__/
 *.py[cod]
@@ -14,6 +15,7 @@ app.log
 app.err.log
 inventory.db
 binder.csv
+mtgjson/
 
 .tk_home.html
 .tk_search.html
