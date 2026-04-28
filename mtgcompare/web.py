@@ -938,9 +938,6 @@ def market_history_download():
     # Use global inventory so all users' cards get UUID-mapped and priced.
     inventory_rows = inv.list_all_global()
 
-    if not inventory_rows:
-        return jsonify({"ok": False, "error": "No inventory to build MTGJSON history for."}), 400
-
     with _download_jobs_lock:
         running = next((job for job in _download_jobs.values() if job["state"] == "running"), None)
     if running:
@@ -1151,7 +1148,7 @@ def inventory_import():
 
 
 def _run_daily_price_update(progress_cb=None) -> tuple[int, int]:
-    """Download today's incremental prices and refresh market_prices.
+    """Download today's prices for all cards and update UUID mappings for inventory.
 
     Used by the cron endpoint. Returns (mapped_count, row_count).
     """
@@ -1160,9 +1157,6 @@ def _run_daily_price_update(progress_cb=None) -> tuple[int, int]:
             progress_cb(progress, phase, detail)
 
     inventory_rows = inv.list_all_global()
-    if not inventory_rows:
-        return 0, 0
-
     cache_dir = _mtgjson_cache_dir()
 
     if db.IS_POSTGRES:
