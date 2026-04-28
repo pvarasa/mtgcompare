@@ -17,11 +17,10 @@ import duckdb
 
 _DUCKDB_SCHEMA = """
 CREATE TABLE price_rows (
-    uuid           VARCHAR NOT NULL,
-    finish         VARCHAR NOT NULL,
-    market_date    VARCHAR NOT NULL,
-    price_usd      DOUBLE,
-    source_updated VARCHAR NOT NULL,
+    uuid        VARCHAR NOT NULL,
+    finish      VARCHAR NOT NULL,
+    market_date VARCHAR NOT NULL,
+    price_usd   DOUBLE,
     PRIMARY KEY (uuid, finish, market_date)
 )
 """
@@ -215,7 +214,7 @@ def _stream_to_ndjson(
 # Step 2: DuckDB load NDJSON → price_rows
 # ---------------------------------------------------------------------------
 
-def _build_load_sql(ndjson_str: str, source_updated: str, *, upsert: bool) -> str:
+def _build_load_sql(ndjson_str: str, *, upsert: bool) -> str:
     """Return DuckDB SQL that loads price_rows from the given NDJSON file.
 
     upsert=False: plain INSERT INTO (table must be empty; no conflict check).
@@ -235,20 +234,17 @@ WITH src AS (
 )
 SELECT uuid, 'normal' AS finish,
        unnest(map_keys(normal_map)) AS market_date,
-       unnest(map_values(normal_map)) AS price_usd,
-       '{source_updated}' AS source_updated
+       unnest(map_values(normal_map)) AS price_usd
 FROM src WHERE normal_map IS NOT NULL AND cardinality(normal_map) > 0
 UNION ALL
 SELECT uuid, 'foil',
        unnest(map_keys(foil_map)),
-       unnest(map_values(foil_map)),
-       '{source_updated}'
+       unnest(map_values(foil_map))
 FROM src WHERE foil_map IS NOT NULL AND cardinality(foil_map) > 0
 UNION ALL
 SELECT uuid, 'etched',
        unnest(map_keys(etched_map)),
-       unnest(map_values(etched_map)),
-       '{source_updated}'
+       unnest(map_values(etched_map))
 FROM src WHERE etched_map IS NOT NULL AND cardinality(etched_map) > 0
 """
 
@@ -259,7 +255,6 @@ FROM src WHERE etched_map IS NOT NULL AND cardinality(etched_map) > 0
 
 def rebuild_history_db(
     xz_path: Path,
-    source_updated: str,
     duckdb_path: Path,
     *,
     progress_cb: Callable[[int, str, str], None] | None = None,
@@ -289,7 +284,7 @@ def rebuild_history_db(
     conn = duckdb.connect(str(duckdb_tmp))
     try:
         conn.execute(_DUCKDB_SCHEMA)
-        conn.execute(_build_load_sql(ndjson_str, source_updated, upsert=False))
+        conn.execute(_build_load_sql(ndjson_str, upsert=False))
         row_count: int = conn.execute("SELECT COUNT(*) FROM price_rows").fetchone()[0]
     finally:
         conn.close()
@@ -327,30 +322,27 @@ def _csv_to_postgres(csv_path: Path, engine, *, initial: bool) -> None:
             if initial:
                 with open(csv_path, "rb") as f:
                     cur.copy_expert(
-                        "COPY price_rows (uuid, finish, market_date, price_usd, source_updated)"
+                        "COPY price_rows (uuid, finish, market_date, price_usd)"
                         " FROM STDIN WITH (FORMAT CSV, NULL '')",
                         f,
                     )
             else:
                 cur.execute(
                     "CREATE TEMP TABLE price_rows_stage"
-                    " (uuid TEXT, finish TEXT, market_date DATE,"
-                    "  price_usd NUMERIC(10,4), source_updated TEXT)"
+                    " (uuid TEXT, finish TEXT, market_date DATE, price_usd NUMERIC(10,4))"
                 )
                 with open(csv_path, "rb") as f:
                     cur.copy_expert(
-                        "COPY price_rows_stage (uuid, finish, market_date, price_usd, source_updated)"
+                        "COPY price_rows_stage (uuid, finish, market_date, price_usd)"
                         " FROM STDIN WITH (FORMAT CSV, NULL '')",
                         f,
                     )
                 cur.execute("""
-                    INSERT INTO price_rows
-                        (uuid, finish, market_date, price_usd, source_updated)
-                    SELECT uuid, finish, market_date, price_usd, source_updated
+                    INSERT INTO price_rows (uuid, finish, market_date, price_usd)
+                    SELECT uuid, finish, market_date, price_usd
                     FROM price_rows_stage
                     ON CONFLICT (uuid, finish, market_date) DO UPDATE
-                        SET price_usd      = EXCLUDED.price_usd,
-                            source_updated = EXCLUDED.source_updated
+                        SET price_usd = EXCLUDED.price_usd
                 """)
                 cur.execute("DROP TABLE price_rows_stage")
         raw.commit()
@@ -360,7 +352,6 @@ def _csv_to_postgres(csv_path: Path, engine, *, initial: bool) -> None:
 
 def rebuild_history_pg(
     xz_path: Path,
-    source_updated: str,
     engine,
     *,
     progress_cb: Callable[[int, str, str], None] | None = None,
@@ -390,7 +381,7 @@ def rebuild_history_pg(
     conn = duckdb.connect(":memory:")
     try:
         conn.execute(_DUCKDB_SCHEMA)
-        conn.execute(_build_load_sql(ndjson_str, source_updated, upsert=False))
+        conn.execute(_build_load_sql(ndjson_str, upsert=False))
         row_count = _duckdb_to_csv(conn, csv_path)
     finally:
         conn.close()
@@ -420,7 +411,6 @@ def rebuild_history_pg(
 
 def merge_today_prices_pg(
     xz_path: Path,
-    source_updated: str,
     engine,
     *,
     progress_cb: Callable[[int, str, str], None] | None = None,
@@ -442,7 +432,7 @@ def merge_today_prices_pg(
     conn = duckdb.connect(":memory:")
     try:
         conn.execute(_DUCKDB_SCHEMA)
-        conn.execute(_build_load_sql(ndjson_str, source_updated, upsert=False))
+        conn.execute(_build_load_sql(ndjson_str, upsert=False))
         row_count = _duckdb_to_csv(conn, csv_path)
     finally:
         conn.close()
@@ -464,7 +454,6 @@ def merge_today_prices_pg(
 def merge_today_prices(
     xz_path: Path,
     duckdb_path: Path,
-    source_updated: str,
     *,
     progress_cb: Callable[[int, str, str], None] | None = None,
 ) -> int:
@@ -485,12 +474,19 @@ def merge_today_prices(
         progress_cb(58, "Merging today's prices", f"Streamed {uuid_count:,} cards. Upserting into DuckDB...")
 
     ndjson_str = str(ndjson_path).replace("\\", "/")
+
+    # Count rows in today's file before touching the persistent DB.
+    tmp = duckdb.connect(":memory:")
+    try:
+        tmp.execute(_DUCKDB_SCHEMA)
+        tmp.execute(_build_load_sql(ndjson_str, upsert=False))
+        row_count: int = tmp.execute("SELECT COUNT(*) FROM price_rows").fetchone()[0]
+    finally:
+        tmp.close()
+
     conn = duckdb.connect(str(duckdb_path))
     try:
-        conn.execute(_build_load_sql(ndjson_str, source_updated, upsert=True))
-        row_count: int = conn.execute(
-            "SELECT COUNT(*) FROM price_rows WHERE source_updated = ?", [source_updated]
-        ).fetchone()[0]
+        conn.execute(_build_load_sql(ndjson_str, upsert=True))
     finally:
         conn.close()
 

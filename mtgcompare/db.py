@@ -86,7 +86,6 @@ _price_rows = Table(
     Column("finish", Text, nullable=False),
     Column("market_date", Date, nullable=False),
     Column("price_usd", Numeric(10, 4)),
-    Column("source_updated", Text),
     PrimaryKeyConstraint("uuid", "finish", "market_date"),
 )
 Index("price_rows_uuid_date", _price_rows.c.uuid, _price_rows.c.finish, _price_rows.c.market_date)
@@ -149,6 +148,20 @@ def _migrate(conn) -> None:
             conn.execute(text(
                 "CREATE INDEX IF NOT EXISTS idx_inventory_user_card ON inventory (user_id, card_name)"
             ))
+
+        conn.execute(text(
+            "ALTER TABLE price_rows DROP COLUMN IF EXISTS source_updated"
+        ))
+
+        for table in ("price_rows", "mtgjson_card_map"):
+            col_type = conn.execute(text("""
+                SELECT data_type FROM information_schema.columns
+                WHERE table_name = :t AND column_name = 'uuid'
+            """), {"t": table}).scalar()
+            if col_type == "text":
+                conn.execute(text(
+                    f"ALTER TABLE {table} ALTER COLUMN uuid TYPE UUID USING uuid::UUID"
+                ))
     else:
         cols = {r[1] for r in conn.execute(text("PRAGMA table_info(inventory)")).fetchall()}
         if "user_id" not in cols:

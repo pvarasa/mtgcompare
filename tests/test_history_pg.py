@@ -37,11 +37,10 @@ def price_rows_table(pg_engine):
         conn.execute(text("DROP TABLE IF EXISTS price_rows"))
         conn.execute(text("""
             CREATE TABLE price_rows (
-                uuid           TEXT    NOT NULL,
-                finish         TEXT    NOT NULL,
-                market_date    DATE    NOT NULL,
-                price_usd      NUMERIC(10,4),
-                source_updated TEXT,
+                uuid        UUID        NOT NULL,
+                finish      TEXT        NOT NULL,
+                market_date DATE        NOT NULL,
+                price_usd   NUMERIC(10,4),
                 PRIMARY KEY (uuid, finish, market_date)
             )
         """))
@@ -55,10 +54,13 @@ def _make_xz(path, data: dict):
         json.dump(data, fh, separators=(",", ":"))
 
 
+_UUID_A = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+_UUID_B = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+
 _SAMPLE_PRICES = {
     "meta": {"date": "2026-04-23"},
     "data": {
-        "uuid-a": {
+        _UUID_A: {
             "paper": {
                 "tcgplayer": {
                     "retail": {
@@ -68,7 +70,7 @@ _SAMPLE_PRICES = {
                 }
             }
         },
-        "uuid-b": {
+        _UUID_B: {
             "paper": {
                 "tcgplayer": {
                     "retail": {
@@ -84,7 +86,7 @@ _SAMPLE_PRICES = {
 def _query_pg(engine) -> list[tuple]:
     with engine.connect() as conn:
         return conn.execute(
-            text("SELECT uuid, finish, CAST(market_date AS TEXT), price_usd, source_updated"
+            text("SELECT CAST(uuid AS TEXT), finish, CAST(market_date AS TEXT), price_usd"
                  " FROM price_rows ORDER BY uuid, finish, market_date")
         ).fetchall()
 
@@ -93,37 +95,24 @@ def test_rebuild_history_pg_loads_all_rows(price_rows_table, pg_engine, tmp_path
     xz_path = tmp_path / "AllPrices.json.xz"
     _make_xz(xz_path, _SAMPLE_PRICES)
 
-    row_count = history_import.rebuild_history_pg(
-        xz_path, "2026-04-23T00:00:00+00:00", pg_engine,
-    )
+    row_count = history_import.rebuild_history_pg(xz_path, pg_engine)
 
-    # 2 normal + 1 foil from uuid-a, 1 etched from uuid-b = 4
+    # 2 normal + 1 foil from _UUID_A, 1 etched from _UUID_B = 4
     assert row_count == 4
     rows = _query_pg(pg_engine)
     assert len(rows) == 4
     found = {(r[0], r[1], r[2]): float(r[3]) for r in rows}
-    assert found[("uuid-a", "normal", "2026-04-20")] == pytest.approx(1.5)
-    assert found[("uuid-a", "normal", "2026-04-21")] == pytest.approx(1.6)
-    assert found[("uuid-a", "foil",   "2026-04-20")] == pytest.approx(3.0)
-    assert found[("uuid-b", "etched", "2026-04-20")] == pytest.approx(2.5)
-
-
-def test_rebuild_history_pg_source_updated_stored(price_rows_table, pg_engine, tmp_path):
-    xz_path = tmp_path / "AllPrices.json.xz"
-    _make_xz(xz_path, _SAMPLE_PRICES)
-    ts = "2026-04-23T12:00:00+00:00"
-
-    history_import.rebuild_history_pg(xz_path, ts, pg_engine)
-
-    rows = _query_pg(pg_engine)
-    assert all(r[4] == ts for r in rows)
+    assert found[(_UUID_A, "normal", "2026-04-20")] == pytest.approx(1.5)
+    assert found[(_UUID_A, "normal", "2026-04-21")] == pytest.approx(1.6)
+    assert found[(_UUID_A, "foil",   "2026-04-20")] == pytest.approx(3.0)
+    assert found[(_UUID_B, "etched", "2026-04-20")] == pytest.approx(2.5)
 
 
 def test_rebuild_history_pg_cleans_up_temp_files(price_rows_table, pg_engine, tmp_path):
     xz_path = tmp_path / "AllPrices.json.xz"
     _make_xz(xz_path, _SAMPLE_PRICES)
 
-    history_import.rebuild_history_pg(xz_path, "2026-04-23T00:00:00+00:00", pg_engine)
+    history_import.rebuild_history_pg(xz_path, pg_engine)
 
     assert not (tmp_path / "AllPrices.ndjson").exists()
     assert not (tmp_path / "AllPrices_flat.csv").exists()
@@ -134,19 +123,19 @@ def test_rebuild_history_pg_raises_on_empty_data(price_rows_table, pg_engine, tm
     _make_xz(xz_path, {"meta": {}, "data": {}})
 
     with pytest.raises(RuntimeError, match="0 rows"):
-        history_import.rebuild_history_pg(xz_path, "2026-04-23T00:00:00+00:00", pg_engine)
+        history_import.rebuild_history_pg(xz_path, pg_engine)
 
 
 def test_merge_today_prices_pg_upserts(price_rows_table, pg_engine, tmp_path):
     # Seed with initial data
     xz_path = tmp_path / "AllPrices.json.xz"
     _make_xz(xz_path, _SAMPLE_PRICES)
-    history_import.rebuild_history_pg(xz_path, "2026-04-23T00:00:00+00:00", pg_engine)
+    history_import.rebuild_history_pg(xz_path, pg_engine)
 
     today_data = {
         "meta": {"date": "2026-04-24"},
         "data": {
-            "uuid-a": {
+            _UUID_A: {
                 "paper": {
                     "tcgplayer": {
                         "retail": {
@@ -160,31 +149,28 @@ def test_merge_today_prices_pg_upserts(price_rows_table, pg_engine, tmp_path):
     today_xz = tmp_path / "AllPricesToday.json.xz"
     _make_xz(today_xz, today_data)
 
-    merged = history_import.merge_today_prices_pg(
-        today_xz, "2026-04-24T00:00:00+00:00", pg_engine,
-    )
+    merged = history_import.merge_today_prices_pg(today_xz, pg_engine)
 
     assert merged == 2
 
     rows = _query_pg(pg_engine)
-    found = {(r[0], r[1], r[2]): (float(r[3]), r[4]) for r in rows}
+    found = {(r[0], r[1], r[2]): float(r[3]) for r in rows}
     # Existing row updated
-    assert found[("uuid-a", "normal", "2026-04-20")][0] == pytest.approx(1.9)
-    assert found[("uuid-a", "normal", "2026-04-20")][1] == "2026-04-24T00:00:00+00:00"
+    assert found[(_UUID_A, "normal", "2026-04-20")] == pytest.approx(1.9)
     # New row inserted
-    assert found[("uuid-a", "normal", "2026-04-24")][0] == pytest.approx(2.1)
+    assert found[(_UUID_A, "normal", "2026-04-24")] == pytest.approx(2.1)
     # Untouched rows from initial load
-    assert ("uuid-b", "etched", "2026-04-20") in found
+    assert (_UUID_B, "etched", "2026-04-20") in found
 
 
 def test_merge_today_prices_pg_cleans_up_temp_files(price_rows_table, pg_engine, tmp_path):
     xz_path = tmp_path / "AllPrices.json.xz"
     _make_xz(xz_path, _SAMPLE_PRICES)
-    history_import.rebuild_history_pg(xz_path, "2026-04-23T00:00:00+00:00", pg_engine)
+    history_import.rebuild_history_pg(xz_path, pg_engine)
 
     today_xz = tmp_path / "AllPricesToday.json.xz"
     _make_xz(today_xz, _SAMPLE_PRICES)
-    history_import.merge_today_prices_pg(today_xz, "2026-04-24T00:00:00+00:00", pg_engine)
+    history_import.merge_today_prices_pg(today_xz, pg_engine)
 
     assert not (tmp_path / "AllPricesToday.ndjson").exists()
     assert not (tmp_path / "AllPricesToday_flat.csv").exists()

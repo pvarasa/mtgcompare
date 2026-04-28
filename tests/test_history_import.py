@@ -80,7 +80,7 @@ def _query_price_rows(duckdb_path) -> list[tuple]:
     conn = duckdb.connect(str(duckdb_path), read_only=True)
     try:
         return conn.execute(
-            "SELECT uuid, finish, market_date, price_usd, source_updated "
+            "SELECT uuid, finish, market_date, price_usd "
             "FROM price_rows ORDER BY uuid, finish, market_date"
         ).fetchall()
     finally:
@@ -92,11 +92,7 @@ def test_rebuild_history_db_produces_duckdb(tmp_path):
     _make_xz(xz_path, _SAMPLE_PRICES)
     duckdb_path = tmp_path / "AllPricesHistory.duckdb"
 
-    row_count = history_import.rebuild_history_db(
-        xz_path,
-        "2026-04-23T00:00:00+00:00",
-        duckdb_path,
-    )
+    row_count = history_import.rebuild_history_db(xz_path, duckdb_path)
 
     # 2 normal + 1 foil from uuid-a, 1 etched from uuid-b = 4 total
     assert row_count == 4
@@ -111,18 +107,6 @@ def test_rebuild_history_db_produces_duckdb(tmp_path):
     assert found[("uuid-b", "etched", "2026-04-20")] == pytest.approx(2.5)
 
 
-def test_rebuild_history_db_source_updated_stored(tmp_path):
-    xz_path = tmp_path / "AllPrices.json.xz"
-    _make_xz(xz_path, _SAMPLE_PRICES)
-    duckdb_path = tmp_path / "AllPricesHistory.duckdb"
-    ts = "2026-04-23T12:00:00+00:00"
-
-    history_import.rebuild_history_db(xz_path, ts, duckdb_path)
-
-    rows = _query_price_rows(duckdb_path)
-    assert all(r[4] == ts for r in rows)
-
-
 def test_rebuild_history_db_atomic_on_empty_data(tmp_path):
     empty = {"meta": {}, "data": {}}
     xz_path = tmp_path / "AllPrices.json.xz"
@@ -131,7 +115,7 @@ def test_rebuild_history_db_atomic_on_empty_data(tmp_path):
 
     with pytest.raises(RuntimeError, match="0 rows"):
         history_import.rebuild_history_db(
-            xz_path, "2026-04-23T00:00:00+00:00", duckdb_path
+            xz_path, duckdb_path
         )
 
     assert not duckdb_path.exists()
@@ -143,9 +127,7 @@ def test_rebuild_history_db_cleans_up_ndjson(tmp_path):
     _make_xz(xz_path, _SAMPLE_PRICES)
     duckdb_path = tmp_path / "AllPricesHistory.duckdb"
 
-    history_import.rebuild_history_db(
-        xz_path, "2026-04-23T00:00:00+00:00", duckdb_path
-    )
+    history_import.rebuild_history_db(xz_path, duckdb_path)
 
     assert not (tmp_path / "AllPrices.ndjson").exists()
 
@@ -157,7 +139,7 @@ def test_merge_today_prices_upserts_into_duckdb(tmp_path):
     ts1 = "2026-04-23T00:00:00+00:00"
     ts2 = "2026-04-24T00:00:00+00:00"
 
-    history_import.rebuild_history_db(xz_path, ts1, duckdb_path)
+    history_import.rebuild_history_db(xz_path, duckdb_path)
 
     today_data = {
         "meta": {"date": "2026-04-24"},
@@ -176,15 +158,14 @@ def test_merge_today_prices_upserts_into_duckdb(tmp_path):
     today_xz = tmp_path / "AllPricesToday.json.xz"
     _make_xz(today_xz, today_data)
 
-    merged = history_import.merge_today_prices(today_xz, duckdb_path, ts2)
+    merged = history_import.merge_today_prices(today_xz, duckdb_path)
 
     assert merged == 2
     rows = _query_price_rows(duckdb_path)
-    found = {(r[0], r[1], r[2]): (r[3], r[4]) for r in rows}
-    # existing row updated with new price and timestamp
-    assert found[("uuid-a", "normal", "2026-04-20")][0] == pytest.approx(1.7)
-    assert found[("uuid-a", "normal", "2026-04-20")][1] == ts2
+    found = {(r[0], r[1], r[2]): r[3] for r in rows}
+    # existing row updated with new price
+    assert found[("uuid-a", "normal", "2026-04-20")] == pytest.approx(1.7)
     # new row added
-    assert found[("uuid-a", "normal", "2026-04-24")][0] == pytest.approx(2.0)
+    assert found[("uuid-a", "normal", "2026-04-24")] == pytest.approx(2.0)
     # untouched rows from original build still present
     assert ("uuid-b", "etched", "2026-04-20") in found

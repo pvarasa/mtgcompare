@@ -763,7 +763,7 @@ def _import_mtgjson_history(rows: list[dict], *, progress_cb=None) -> tuple[int,
                     ) from exc
                 raise
             history_row_count = history_import.rebuild_history_pg(
-                history_path, downloaded_at, db.engine, progress_cb=_progress,
+                history_path, db.engine, progress_cb=_progress,
             )
             history_path.unlink(missing_ok=True)
         else:
@@ -781,7 +781,7 @@ def _import_mtgjson_history(rows: list[dict], *, progress_cb=None) -> tuple[int,
             raise
         with _history_duckdb_lock:
             history_row_count = history_import.rebuild_history_db(
-                history_path, downloaded_at, history_duckdb_path, progress_cb=_progress,
+                history_path, history_duckdb_path, progress_cb=_progress,
             )
         history_path.unlink(missing_ok=True)
     else:
@@ -1176,7 +1176,7 @@ def _run_daily_price_update(progress_cb=None) -> tuple[int, int]:
                 raise RuntimeError("MTGJSON AllPricesToday not available yet.") from exc
             raise
         row_count = history_import.merge_today_prices_pg(
-            today_xz, downloaded_at, db.engine, progress_cb=_progress,
+            today_xz, db.engine, progress_cb=_progress,
         )
         today_xz.unlink(missing_ok=True)
     else:
@@ -1191,7 +1191,7 @@ def _run_daily_price_update(progress_cb=None) -> tuple[int, int]:
         duckdb_path = _mtgjson_history_duckdb_path()
         with _history_duckdb_lock:
             row_count = history_import.merge_today_prices(
-                today_xz, duckdb_path, downloaded_at, progress_cb=_progress,
+                today_xz, duckdb_path, progress_cb=_progress,
             )
         today_xz.unlink(missing_ok=True)
 
