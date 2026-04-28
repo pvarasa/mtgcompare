@@ -381,7 +381,8 @@ def rebuild_history_pg(
     conn = duckdb.connect(":memory:")
     try:
         conn.execute("SET preserve_insertion_order=false")
-        conn.execute("SET memory_limit='1GB'")
+        conn.execute("SET threads=1")
+        conn.execute("SET memory_limit='1.5GB'")
         conn.execute(_DUCKDB_SCHEMA)
         conn.execute(_build_load_sql(ndjson_str, upsert=False))
         row_count = _duckdb_to_csv(conn, csv_path)
