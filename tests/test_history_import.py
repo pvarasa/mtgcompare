@@ -136,9 +136,6 @@ def test_merge_today_prices_upserts_into_duckdb(tmp_path):
     xz_path = tmp_path / "AllPrices.json.xz"
     _make_xz(xz_path, _SAMPLE_PRICES)
     duckdb_path = tmp_path / "AllPricesHistory.duckdb"
-    ts1 = "2026-04-23T00:00:00+00:00"
-    ts2 = "2026-04-24T00:00:00+00:00"
-
     history_import.rebuild_history_db(xz_path, duckdb_path)
 
     today_data = {

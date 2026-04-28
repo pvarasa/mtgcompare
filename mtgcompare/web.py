@@ -1163,7 +1163,6 @@ def _run_daily_price_update(progress_cb=None) -> tuple[int, int]:
     if not inventory_rows:
         return 0, 0
 
-    downloaded_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     cache_dir = _mtgjson_cache_dir()
 
     if db.IS_POSTGRES:
