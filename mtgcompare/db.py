@@ -149,10 +149,6 @@ def _migrate(conn) -> None:
                 "CREATE INDEX IF NOT EXISTS idx_inventory_user_card ON inventory (user_id, card_name)"
             ))
 
-        conn.execute(text(
-            "ALTER TABLE price_rows DROP COLUMN IF EXISTS source_updated"
-        ))
-
         for table in ("price_rows", "mtgjson_card_map"):
             col_type = conn.execute(text("""
                 SELECT data_type FROM information_schema.columns
