@@ -380,6 +380,8 @@ def rebuild_history_pg(
     ndjson_str = str(ndjson_path).replace("\\", "/")
     conn = duckdb.connect(":memory:")
     try:
+        conn.execute("SET preserve_insertion_order=false")
+        conn.execute("SET memory_limit='1GB'")
         conn.execute(_DUCKDB_SCHEMA)
         conn.execute(_build_load_sql(ndjson_str, upsert=False))
         row_count = _duckdb_to_csv(conn, csv_path)
@@ -431,6 +433,8 @@ def merge_today_prices_pg(
     ndjson_str = str(ndjson_path).replace("\\", "/")
     conn = duckdb.connect(":memory:")
     try:
+        conn.execute("SET preserve_insertion_order=false")
+        conn.execute("SET memory_limit='1GB'")
         conn.execute(_DUCKDB_SCHEMA)
         conn.execute(_build_load_sql(ndjson_str, upsert=False))
         row_count = _duckdb_to_csv(conn, csv_path)
