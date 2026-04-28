@@ -1210,6 +1210,8 @@ def cron_update_prices():
         if auth != f"Bearer {_CRON_SECRET}":
             return jsonify({"ok": False, "error": "Unauthorized"}), 401
 
+    inv.init_schema()
+
     with _download_jobs_lock:
         running = next((j for j in _download_jobs.values() if j["state"] == "running"), None)
     if running:
