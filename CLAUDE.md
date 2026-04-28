@@ -105,7 +105,7 @@ When adding inventory fields, update `mtgcompare/db.py` (Table definition + `_mi
 
 ### PostgreSQL mode
 
-- Price history is stored in the `price_rows` table: `(uuid, finish, market_date DATE, price_usd, source_updated)` with PRIMARY KEY `(uuid, finish, market_date)`.
+- Price history is stored in the `price_rows` table: `(uuid UUID, finish TEXT, market_date DATE, price_usd NUMERIC(10,4))` with PRIMARY KEY `(uuid, finish, market_date)`.
 - DuckDB is used as an **ephemeral ETL engine only** — no `.duckdb` file is persisted. The pipeline is: XZ → NDJSON → in-memory DuckDB → CSV → PostgreSQL `COPY FROM STDIN`.
 - Full rebuild: `history_import.rebuild_history_pg()` — detects empty table and uses direct COPY (fastest path); subsequent runs use temp-table upsert.
 - Incremental update: `history_import.merge_today_prices_pg()` — always uses temp-table upsert.

@@ -329,7 +329,7 @@ def _csv_to_postgres(csv_path: Path, engine, *, initial: bool) -> None:
             else:
                 cur.execute(
                     "CREATE TEMP TABLE price_rows_stage"
-                    " (uuid TEXT, finish TEXT, market_date DATE, price_usd NUMERIC(10,4))"
+                    " (uuid UUID, finish TEXT, market_date DATE, price_usd NUMERIC(10,4))"
                 )
                 with open(csv_path, "rb") as f:
                     cur.copy_expert(

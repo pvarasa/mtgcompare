@@ -163,6 +163,23 @@ def test_merge_today_prices_pg_upserts(price_rows_table, pg_engine, tmp_path):
     assert (_UUID_B, "etched", "2026-04-20") in found
 
 
+def test_csv_to_postgres_incremental_accepts_uuid_values(price_rows_table, pg_engine, tmp_path):
+    """Regression: staging temp table must declare uuid as UUID, not TEXT.
+
+    If the DDL uses TEXT, the INSERT INTO price_rows ... SELECT ... raises
+    psycopg2.errors.DatatypeMismatch because price_rows.uuid is UUID type.
+    """
+    csv_path = tmp_path / "test.csv"
+    csv_path.write_text(f"{_UUID_A},normal,2026-04-20,1.50\n", encoding="utf-8")
+
+    history_import._csv_to_postgres(csv_path, pg_engine, initial=False)
+
+    rows = _query_pg(pg_engine)
+    assert len(rows) == 1
+    assert rows[0][0] == _UUID_A
+    assert float(rows[0][3]) == pytest.approx(1.50)
+
+
 def test_merge_today_prices_pg_cleans_up_temp_files(price_rows_table, pg_engine, tmp_path):
     xz_path = tmp_path / "AllPrices.json.xz"
     _make_xz(xz_path, _SAMPLE_PRICES)
