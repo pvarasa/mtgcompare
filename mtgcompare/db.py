@@ -10,8 +10,17 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from sqlalchemy import (
-    Column, Date, Index, Integer, MetaData, Numeric,
-    PrimaryKeyConstraint, Table, Text, create_engine, text,
+    Column,
+    Date,
+    Index,
+    Integer,
+    MetaData,
+    Numeric,
+    PrimaryKeyConstraint,
+    Table,
+    Text,
+    create_engine,
+    text,
 )
 
 

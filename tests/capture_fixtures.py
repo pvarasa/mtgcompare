@@ -11,18 +11,26 @@ from pathlib import Path
 from mtgcompare.scrappers.hareruya import (
     UNISEARCH_API,
     UNISEARCH_LAZY,
+)
+from mtgcompare.scrappers.hareruya import (
     make_session as hareruya_session,
 )
 from mtgcompare.scrappers.scryfall import (
     SEARCH_URL as SCRYFALL_SEARCH_URL,
+)
+from mtgcompare.scrappers.scryfall import (
     make_session as scryfall_session,
 )
 from mtgcompare.scrappers.singlestar import (
     SEARCH_URL as SINGLESTAR_SEARCH_URL,
+)
+from mtgcompare.scrappers.singlestar import (
     make_session as singlestar_session,
 )
 from mtgcompare.scrappers.tokyomtg import (
     SEARCH_URL as TOKYOMTG_SEARCH_URL,
+)
+from mtgcompare.scrappers.tokyomtg import (
     make_session as tokyomtg_session,
 )
 

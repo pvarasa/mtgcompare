@@ -1239,9 +1239,11 @@ def cron_update_prices():
 
 def main() -> None:
     logging.config.fileConfig(LOGGING_CONF)
+    host = os.environ.get("FLASK_RUN_HOST", "127.0.0.1")
+    port = int(os.environ.get("FLASK_RUN_PORT", "5000"))
     # use_reloader=False so start/stop scripts have a single PID to manage;
     # debug features (interactive tracebacks) are still active.
-    app.run(debug=True, use_reloader=False)
+    app.run(host=host, port=port, debug=True, use_reloader=False)
 
 
 if __name__ == "__main__":

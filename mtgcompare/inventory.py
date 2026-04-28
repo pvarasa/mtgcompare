@@ -18,7 +18,7 @@ from typing import IO, Iterator
 
 from sqlalchemy import text
 
-from .db import get_conn, init_schema, upsert
+from .db import get_conn, init_schema
 
 
 def _rows_from_csv(f: IO[str]) -> Iterator[dict]:

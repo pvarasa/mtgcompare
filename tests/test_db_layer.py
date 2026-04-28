@@ -3,8 +3,6 @@
 
 All tests use a temporary SQLite engine so they never touch inventory.db.
 """
-import csv
-import io
 import textwrap
 
 import pytest
@@ -12,7 +10,6 @@ from sqlalchemy import create_engine, text
 
 import mtgcompare.db as db_module
 from mtgcompare import inventory as inv
-
 
 # ---------------------------------------------------------------------------
 # Fixture: redirect db.engine to a fresh per-test SQLite file

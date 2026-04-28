@@ -33,7 +33,7 @@ def _data_dir() -> Path:
 
 
 def _setup_logging() -> None:
-    """Route WARNING+ logs to %APPDATA%\mtgcompare\app.log when frozen."""
+    """Route WARNING+ logs to %APPDATA%\\mtgcompare\app.log when frozen."""
     if not getattr(sys, "frozen", False):
         return
     log_dir = _data_dir()
