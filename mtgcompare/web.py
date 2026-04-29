@@ -859,6 +859,7 @@ def market():
             last_refreshed=last_refreshed,
             mtgjson_last_downloaded=mtgjson_last_downloaded,
             history_db_exists=history_db_exists,
+            allow_price_update=not db.IS_POSTGRES,
             active="market",
         )
 
@@ -882,6 +883,7 @@ def market():
             last_refreshed=None,
             mtgjson_last_downloaded=mtgjson_last_downloaded,
             history_db_exists=history_db_exists,
+            allow_price_update=not db.IS_POSTGRES,
             active="market",
         )
 
@@ -928,6 +930,7 @@ def market():
         has_cache=True, last_refreshed=last_refreshed,
         mtgjson_last_downloaded=mtgjson_last_downloaded,
         history_db_exists=history_db_exists,
+        allow_price_update=not db.IS_POSTGRES,
         active="market",
     )
 
