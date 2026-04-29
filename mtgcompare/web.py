@@ -834,16 +834,16 @@ def market():
 
     # Load cached prices — no live fetch on GET.
     with db.get_conn() as conn:
-        cache_rows = conn.execute(
+        cache_rows = [db.row_to_dict(r) for r in conn.execute(
             text("SELECT card_name, set_code, is_foil, price_usd, fetched_at FROM market_prices")
-        ).mappings().all()
+        ).mappings().all()]
         mtgjson_downloaded_at = _read_meta(conn, "mtgjson_history_downloaded_at")
 
     price_cache: dict[tuple, float | None] = {}
     last_fetched_at: str | None = None
     for cr in cache_rows:
         key = (cr["card_name"].lower(), cr["set_code"].lower(), cr["is_foil"])
-        price_cache[key] = float(cr["price_usd"]) if cr["price_usd"] is not None else None
+        price_cache[key] = cr["price_usd"]
         if last_fetched_at is None or cr["fetched_at"] > last_fetched_at:
             last_fetched_at = cr["fetched_at"]
 

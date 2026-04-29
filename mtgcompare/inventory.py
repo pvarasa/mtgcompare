@@ -18,7 +18,7 @@ from typing import IO, Iterator
 
 from sqlalchemy import text
 
-from .db import get_conn, init_schema
+from .db import get_conn, init_schema, row_to_dict
 
 
 def _rows_from_csv(f: IO[str]) -> Iterator[dict]:
@@ -131,7 +131,7 @@ def list_all(user_id: str = "local") -> list[dict]:
                    ORDER BY card_name, set_code, card_number"""),
             {"uid": user_id},
         ).mappings().all()
-    return [dict(r) for r in rows]
+    return [row_to_dict(r) for r in rows]
 
 
 def list_all_global() -> list[dict]:
@@ -143,7 +143,7 @@ def list_all_global() -> list[dict]:
                    FROM inventory
                    ORDER BY card_name, set_code, card_number"""),
         ).mappings().all()
-    return [dict(r) for r in rows]
+    return [row_to_dict(r) for r in rows]
 
 
 def stats(user_id: str = "local") -> dict:
@@ -156,6 +156,7 @@ def stats(user_id: str = "local") -> dict:
                    WHERE user_id = :uid"""),
             {"uid": user_id},
         ).mappings().first()
+    row = row_to_dict(row)
     return {
         "printings":    row["printings"],
         "total_copies": row["total_copies"],

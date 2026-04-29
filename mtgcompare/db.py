@@ -7,6 +7,7 @@ DATABASE_URL env var selects the backend:
 import os
 import sys
 from contextlib import contextmanager
+from decimal import Decimal
 from pathlib import Path
 
 from sqlalchemy import (
@@ -106,6 +107,15 @@ _app_meta = Table(
     Column("key", Text, primary_key=True),
     Column("value", Text),
 )
+
+
+def row_to_dict(row) -> dict:
+    """Convert a SQLAlchemy RowMapping to a plain dict with uniform numeric types.
+
+    psycopg2 returns decimal.Decimal for NUMERIC columns; SQLite returns float.
+    Coercing Decimal→float here means callers never need backend-specific casts.
+    """
+    return {k: float(v) if isinstance(v, Decimal) else v for k, v in row.items()}
 
 
 @contextmanager

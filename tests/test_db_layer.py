@@ -4,6 +4,7 @@
 All tests use a temporary SQLite engine so they never touch inventory.db.
 """
 import textwrap
+from decimal import Decimal
 
 import pytest
 from sqlalchemy import create_engine, text
@@ -254,3 +255,47 @@ class TestInventoryUserScoping:
         assert len(rows) == 1
         rows_local = inv.list_all("local")
         assert len(rows_local) == 1
+
+    def test_list_all_price_bought_is_float(self, test_db):
+        # price_bought is NUMERIC; list_all() must return float so callers can
+        # do arithmetic without backend-specific casts. Use a non-integer value
+        # to avoid SQLite's numeric affinity returning int for whole numbers.
+        card = {**_CARD_A, "price_bought": 50.75}
+        inv.add_one(card, user_id="alice")
+        row = inv.list_all("alice")[0]
+        assert isinstance(row["price_bought"], float)
+        assert row["price_bought"] == pytest.approx(50.75)
+
+    def test_list_all_price_bought_none_stays_none(self, test_db):
+        card = {**_CARD_A, "price_bought": None}
+        inv.add_one(card, user_id="alice")
+        row = inv.list_all("alice")[0]
+        assert row["price_bought"] is None
+
+
+# ---------------------------------------------------------------------------
+# db.row_to_dict — type normalisation contract
+# ---------------------------------------------------------------------------
+
+class TestRowToDict:
+    def test_decimal_coerced_to_float(self):
+        from unittest.mock import MagicMock
+        row = MagicMock()
+        row.items.return_value = [("price_usd", Decimal("12.34")), ("card_name", "Sol Ring")]
+        result = db_module.row_to_dict(row)
+        assert result["price_usd"] == pytest.approx(12.34)
+        assert isinstance(result["price_usd"], float)
+
+    def test_none_stays_none(self):
+        from unittest.mock import MagicMock
+        row = MagicMock()
+        row.items.return_value = [("price_bought", None), ("quantity", 3)]
+        result = db_module.row_to_dict(row)
+        assert result["price_bought"] is None
+
+    def test_non_decimal_types_unchanged(self):
+        from unittest.mock import MagicMock
+        row = MagicMock()
+        row.items.return_value = [("quantity", 4), ("card_name", "Bolt"), ("is_foil", 0)]
+        result = db_module.row_to_dict(row)
+        assert result == {"quantity": 4, "card_name": "Bolt", "is_foil": 0}
