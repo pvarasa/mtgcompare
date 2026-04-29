@@ -45,6 +45,11 @@ def _get_user_id() -> str:
         return "local"
     return request.headers.get(_USER_ID_HEADER, "anonymous").strip() or "anonymous"
 
+
+@app.context_processor
+def _inject_current_user():
+    return {"current_user": _get_user_id()}
+
 _CONDITION_ABBR = {
     "nearmint": "NM", "nm": "NM",
     "lightlyplayed": "LP", "lightplay": "LP", "lp": "LP",

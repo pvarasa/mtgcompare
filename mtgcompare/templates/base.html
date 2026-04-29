@@ -44,6 +44,15 @@
       display: flex;
       align-items: center;
       gap: .55rem;
+      justify-content: space-between;
+    }
+    .user-greeting {
+      font-family: 'Inter', system-ui, sans-serif;
+      font-size: .8rem;
+      font-weight: 400;
+      letter-spacing: .03em;
+      text-transform: none;
+      color: var(--fg-muted, #888);
     }
     h2 {
       font-family: 'Inter', system-ui, sans-serif;
@@ -223,11 +232,14 @@
 </head>
 <body>
   <h1>
-    <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" style="flex-shrink:0">
-      <path d="M12 2 L22 12 L12 22 L2 12 Z" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/>
-      <path d="M12 6.5 L17.5 12 L12 17.5 L6.5 12 Z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" opacity="0.55"/>
-    </svg>
-    MTG Compare
+    <span style="display:flex;align-items:center;gap:.55rem">
+      <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" style="flex-shrink:0">
+        <path d="M12 2 L22 12 L12 22 L2 12 Z" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/>
+        <path d="M12 6.5 L17.5 12 L12 17.5 L6.5 12 Z" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" opacity="0.55"/>
+      </svg>
+      MTG Compare
+    </span>
+    <span class="user-greeting">Hello, {{ current_user }}</span>
   </h1>
   {% include "_nav.html" %}
 
