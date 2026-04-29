@@ -1,3 +1,4 @@
+import uuid
 from datetime import datetime, timezone
 
 import mtgcompare.db as db_module
@@ -215,4 +216,52 @@ def test_get_display_name_falls_back_to_user_id_when_display_header_unconfigured
     with web.app.test_request_context("/", headers={"X-UID": "uid-123", "X-Username": "pablo"}):
         assert web._get_display_name() == "uid-123"
 
+
+# ---------------------------------------------------------------------------
+# _populate_market_prices_from_history — UUID type normalisation
+# ---------------------------------------------------------------------------
+
+def test_populate_market_prices_uuid_string_vs_uuid_object(monkeypatch, tmp_path):
+    # Simulate the first-run case: card_maps contains string UUIDs (from MTGJSON
+    # JSON), but price_rows returns uuid.UUID objects (psycopg2 behaviour).
+    # Before the fix, latest.get((str_uuid, finish)) would always miss the
+    # (UUID_obj, finish) key, leaving every market_prices row with price_usd=None.
+    raw_uuid = "df0e1ede-b627-5b95-8eed-0ce7d08a897b"
+    uuid_obj = uuid.UUID(raw_uuid)
+
+    # card_maps entry with a plain string UUID (as returned by _resolve_candidate_uuid)
+    card_maps = [("Sol Ring", "C21", "", 0, raw_uuid, "2026-04-29T00:00:00+00:00")]
+
+    captured = {}
+
+    def fake_get_conn():
+        import contextlib
+
+        class FakeConn:
+            def execute(self, stmt, params=None):
+                class FakeResult:
+                    def fetchall(self_):
+                        # Return uuid.UUID object as psycopg2 would
+                        return [(uuid_obj, "normal", 1.23)]
+                return FakeResult()
+
+        @contextlib.contextmanager
+        def _ctx():
+            yield FakeConn()
+
+        return _ctx()
+
+    import mtgcompare.db as db_mod
+
+    monkeypatch.setattr(db_mod, "IS_POSTGRES", True)
+    monkeypatch.setattr(db_mod, "get_conn", fake_get_conn)
+
+    def fake_upsert(conn, table, conflict_cols, rows):
+        captured["rows"] = rows
+
+    monkeypatch.setattr(db_mod, "upsert", fake_upsert)
+
+    web._populate_market_prices_from_history(card_maps, None, "2026-04-29T00:00:00+00:00")
+
+    assert captured["rows"][0]["price_usd"] == 1.23
 

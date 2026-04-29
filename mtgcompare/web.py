@@ -368,13 +368,6 @@ _SCRYFALL_COLLECTION = "https://api.scryfall.com/cards/collection"
 _SCRYFALL_HEADERS = {"User-Agent": "mtgcompare/0.1", "Accept": "application/json"}
 
 
-def _safe_float(val) -> float | None:
-    try:
-        return float(val) if val is not None else None
-    except (TypeError, ValueError):
-        return None
-
-
 _MARKET_HISTORY_PERIODS = {
     "1w": 7,
     "1m": 30,
@@ -644,7 +637,7 @@ def _populate_market_prices_from_history(
         db_key = (card_name, set_code, is_foil)
         if db_key not in seen_db_keys:
             seen_db_keys.add(db_key)
-            uuid_to_db_key[(uuid, finish)] = db_key
+            uuid_to_db_key[(str(uuid), finish)] = db_key
 
     if not uuid_to_db_key:
         return
@@ -664,7 +657,7 @@ def _populate_market_prices_from_history(
                 params,
             ).fetchall()
         latest: dict[tuple[str, str], float | None] = {
-            (r[0], r[1]): float(r[2]) if r[2] is not None else None
+            (str(r[0]), r[1]): float(r[2]) if r[2] is not None else None
             for r in rows
         }
     else:
@@ -769,26 +762,8 @@ def _import_mtgjson_history(rows: list[dict], *, progress_cb=None) -> tuple[int,
     history_duckdb_path = _mtgjson_history_duckdb_path()
     history_row_count = 0
 
-    if db.IS_POSTGRES:
-        has_history = _has_price_history()
-        if not has_history:
-            history_path = _mtgjson_history_path()
-            _progress(32, "Downloading history", "Downloading MTGJSON AllPrices history...")
-            try:
-                _download_file(f"{_MTGJSON_BASE_URL}/AllPrices.json.xz", history_path)
-            except requests.HTTPError as exc:
-                if exc.response is not None and exc.response.status_code == 404:
-                    raise RuntimeError(
-                        "MTGJSON price files are temporarily unavailable. Please try again later."
-                    ) from exc
-                raise
-            history_row_count = history_import.rebuild_history_pg(
-                history_path, db.engine, progress_cb=_progress,
-            )
-            history_path.unlink(missing_ok=True)
-        else:
-            _progress(40, "History ready", "Using existing PostgreSQL price history.")
-    elif not history_duckdb_path.exists():
+    needs_history = (db.IS_POSTGRES and not _has_price_history()) or (not db.IS_POSTGRES and not history_duckdb_path.exists())
+    if needs_history:
         history_path = _mtgjson_history_path()
         _progress(32, "Downloading history", "Downloading MTGJSON AllPrices history...")
         try:
@@ -799,13 +774,18 @@ def _import_mtgjson_history(rows: list[dict], *, progress_cb=None) -> tuple[int,
                     "MTGJSON price files are temporarily unavailable. Please try again later."
                 ) from exc
             raise
-        with _history_duckdb_lock:
-            history_row_count = history_import.rebuild_history_db(
-                history_path, history_duckdb_path, progress_cb=_progress,
+        if db.IS_POSTGRES:
+            history_row_count = history_import.rebuild_history_pg(
+                history_path, db.engine, progress_cb=_progress,
             )
+        else:
+            with _history_duckdb_lock:
+                history_row_count = history_import.rebuild_history_db(
+                    history_path, history_duckdb_path, progress_cb=_progress,
+                )
         history_path.unlink(missing_ok=True)
     else:
-        _progress(40, "History ready", "Using existing local price history database.")
+        _progress(40, "History ready", "Using existing price history.")
 
     _progress(96, "Saving mappings", "Updating local card-to-MTGJSON mappings...")
     with db.get_conn() as conn:
@@ -1040,7 +1020,8 @@ def market_history():
     ) if history else []
     if period != "all" and dense_points:
         cutoff = _history_cutoff(period)
-        assert cutoff is not None
+        if cutoff is None:
+            raise ValueError(f"Unknown history period: {period!r}")
         dense_points = [
             point for point in dense_points
             if datetime.fromisoformat(point["market_date"]).replace(tzinfo=timezone.utc) >= cutoff
@@ -1179,34 +1160,25 @@ def _run_daily_price_update(progress_cb=None) -> tuple[int, int]:
     inventory_rows = inv.list_all_global()
     cache_dir = _mtgjson_cache_dir()
 
+    today_xz = cache_dir / "AllPricesToday.json.xz"
+    _progress(10, "Downloading today's prices", "Downloading AllPricesToday.json.xz...")
+    try:
+        _download_file(f"{_MTGJSON_BASE_URL}/AllPricesToday.json.xz", today_xz)
+    except requests.HTTPError as exc:
+        if exc.response is not None and exc.response.status_code == 404:
+            raise RuntimeError("MTGJSON AllPricesToday not available yet.") from exc
+        raise
     if db.IS_POSTGRES:
-        today_xz = cache_dir / "AllPricesToday.json.xz"
-        _progress(10, "Downloading today's prices", "Downloading AllPricesToday.json.xz...")
-        try:
-            _download_file(f"{_MTGJSON_BASE_URL}/AllPricesToday.json.xz", today_xz)
-        except requests.HTTPError as exc:
-            if exc.response is not None and exc.response.status_code == 404:
-                raise RuntimeError("MTGJSON AllPricesToday not available yet.") from exc
-            raise
         row_count = history_import.merge_today_prices_pg(
             today_xz, db.engine, progress_cb=_progress,
         )
-        today_xz.unlink(missing_ok=True)
     else:
-        today_xz = cache_dir / "AllPricesToday.json.xz"
-        _progress(10, "Downloading today's prices", "Downloading AllPricesToday.json.xz...")
-        try:
-            _download_file(f"{_MTGJSON_BASE_URL}/AllPricesToday.json.xz", today_xz)
-        except requests.HTTPError as exc:
-            if exc.response is not None and exc.response.status_code == 404:
-                raise RuntimeError("MTGJSON AllPricesToday not available yet.") from exc
-            raise
         duckdb_path = _mtgjson_history_duckdb_path()
         with _history_duckdb_lock:
             row_count = history_import.merge_today_prices(
                 today_xz, duckdb_path, progress_cb=_progress,
             )
-        today_xz.unlink(missing_ok=True)
+    today_xz.unlink(missing_ok=True)
 
     mapped_count, _ = _import_mtgjson_history(inventory_rows, progress_cb=_progress)
     return mapped_count, row_count
