@@ -1,13 +1,16 @@
-"""DuckDB-accelerated MTGJSON AllPrices history import pipeline.
+"""MTGJSON AllPrices history import pipeline.
 
   1. Stream: AllPrices.json.xz → NDJSON (lightweight Python; one compact JSON object per UUID)
-  2. Flatten: DuckDB reads NDJSON and unnests date→price maps into rows with a PRIMARY KEY
+  2. Flatten:
+     - Local mode:  DuckDB reads NDJSON and unnests date→price maps into a persistent DuckDB file
+     - Remote mode: Pure Python streams NDJSON → CSV line-by-line (O(1) memory) → PostgreSQL COPY
   3a. Local mode:  Atomic rename of the .tmp DuckDB file into place (full rebuild only)
-  3b. Remote mode: Stream CSV from DuckDB → PostgreSQL via COPY FROM STDIN (bulk load)
+  3b. Remote mode: Stream CSV → PostgreSQL via COPY FROM STDIN (bulk load)
 
 Public API (local/DuckDB):  rebuild_history_db(), merge_today_prices()
 Public API (PostgreSQL):     rebuild_history_pg(), merge_today_prices_pg()
 """
+import csv
 import json
 import lzma
 from pathlib import Path
@@ -310,6 +313,23 @@ def _duckdb_to_csv(duck_conn: "duckdb.DuckDBPyConnection", csv_path: Path) -> in
     return duck_conn.execute("SELECT COUNT(*) FROM price_rows").fetchone()[0]
 
 
+def _ndjson_to_csv(ndjson_path: Path, csv_path: Path) -> int:
+    """Flatten NDJSON price rows to CSV with O(1) memory. Returns row count."""
+    count = 0
+    with ndjson_path.open("r", encoding="utf-8") as ndjson_fh, \
+         csv_path.open("w", encoding="utf-8", newline="") as csv_fh:
+        writer = csv.writer(csv_fh)
+        for line in ndjson_fh:
+            row = json.loads(line)
+            uuid = row["uuid"]
+            for finish in ("normal", "foil", "etched"):
+                for date, price in (row.get(finish) or {}).items():
+                    if price is not None:
+                        writer.writerow([uuid, finish, date, price])
+                        count += 1
+    return count
+
+
 def _csv_to_postgres(csv_path: Path, engine, *, initial: bool) -> None:
     """COPY CSV into PostgreSQL price_rows.
 
@@ -375,25 +395,14 @@ def rebuild_history_pg(
     uuid_count = _stream_to_ndjson(xz_path, ndjson_path, progress_cb=progress_cb)
 
     if progress_cb:
-        progress_cb(52, "Flattening history", f"Streamed {uuid_count:,} cards. Flattening via DuckDB...")
+        progress_cb(52, "Flattening history", f"Streamed {uuid_count:,} cards. Flattening to CSV...")
 
-    ndjson_str = str(ndjson_path).replace("\\", "/")
-    conn = duckdb.connect(":memory:")
-    try:
-        conn.execute("SET preserve_insertion_order=false")
-        conn.execute("SET threads=1")
-        conn.execute("SET memory_limit='1.5GB'")
-        conn.execute(_DUCKDB_SCHEMA)
-        conn.execute(_build_load_sql(ndjson_str, upsert=False))
-        row_count = _duckdb_to_csv(conn, csv_path)
-    finally:
-        conn.close()
-
+    row_count = _ndjson_to_csv(ndjson_path, csv_path)
     ndjson_path.unlink(missing_ok=True)
 
     if row_count == 0:
         csv_path.unlink(missing_ok=True)
-        raise RuntimeError("DuckDB flatten produced 0 rows — aborting rebuild.")
+        raise RuntimeError("Flatten produced 0 rows — aborting rebuild.")
 
     if progress_cb:
         progress_cb(65, "Loading to PostgreSQL", f"COPY {row_count:,} rows via COPY FROM STDIN...")
@@ -429,19 +438,9 @@ def merge_today_prices_pg(
     uuid_count = _stream_to_ndjson(xz_path, ndjson_path, progress_cb=progress_cb)
 
     if progress_cb:
-        progress_cb(58, "Merging today's prices", f"Streamed {uuid_count:,} cards. Flattening via DuckDB...")
+        progress_cb(58, "Merging today's prices", f"Streamed {uuid_count:,} cards. Flattening to CSV...")
 
-    ndjson_str = str(ndjson_path).replace("\\", "/")
-    conn = duckdb.connect(":memory:")
-    try:
-        conn.execute("SET preserve_insertion_order=false")
-        conn.execute("SET memory_limit='1GB'")
-        conn.execute(_DUCKDB_SCHEMA)
-        conn.execute(_build_load_sql(ndjson_str, upsert=False))
-        row_count = _duckdb_to_csv(conn, csv_path)
-    finally:
-        conn.close()
-
+    row_count = _ndjson_to_csv(ndjson_path, csv_path)
     ndjson_path.unlink(missing_ok=True)
 
     if progress_cb:
