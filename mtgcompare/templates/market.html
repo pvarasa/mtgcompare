@@ -724,48 +724,48 @@
           if (event.key === 'Escape') closeModal();
         });
 
-        document.querySelectorAll('.market-chart-trigger').forEach(button => {
-          button.addEventListener('click', () => {
-            openModal();
-            titleEl.textContent = button.dataset.chartCard;
-            subtitleEl.textContent = `${button.dataset.chartSet}${button.dataset.chartPrinting.toLowerCase() === 'foil' ? ' / Foil' : ' / Non-foil'}`;
-            currentEl.textContent = '-';
-            lowEl.textContent = '-';
-            setDelta(null);
-            controlsEl.innerHTML = '';
-            stageEl.innerHTML = '<div class="market-chart-loading">Loading chart...</div>';
-            footnoteEl.textContent = '';
+        document.querySelector('#mkt-table tbody').addEventListener('click', event => {
+          const btn = event.target.closest('.market-chart-trigger');
+          if (!btn) return;
+          openModal();
+          titleEl.textContent = btn.dataset.chartCard;
+          subtitleEl.textContent = `${btn.dataset.chartSet}${btn.dataset.chartPrinting.toLowerCase() === 'foil' ? ' / Foil' : ' / Non-foil'}`;
+          currentEl.textContent = '-';
+          lowEl.textContent = '-';
+          setDelta(null);
+          controlsEl.innerHTML = '';
+          stageEl.innerHTML = '<div class="market-chart-loading">Loading chart...</div>';
+          footnoteEl.textContent = '';
 
-            const params = new URLSearchParams({
-              card_name: button.dataset.chartCard,
-              set_code: button.dataset.chartSet,
-              card_number: button.dataset.chartNumber,
-              printing: button.dataset.chartPrinting,
-              period: 'all',
-            });
-
-            fetch(`${historyUrl}?${params.toString()}`)
-              .then(response => response.json())
-              .then(data => {
-                if (!data.ok) throw new Error(data.error || 'History fetch failed');
-                activeHistory = data;
-                subtitleEl.textContent = `${data.set_code}${data.card_number ? ` #${data.card_number}` : ''}${data.is_foil ? ' / Foil' : ' / Non-foil'}${data.available_since ? ` / tracking since ${formatDate(data.available_since)}` : ''}`;
-                controlsEl.innerHTML = data.available_periods.map(period => `
-                  <button type="button" class="market-chart-range${period === data.default_period ? ' active' : ''}" data-period="${period}">
-                    ${period.toUpperCase()}
-                  </button>
-                `).join('');
-                controlsEl.querySelectorAll('.market-chart-range').forEach(rangeButton => {
-                  rangeButton.addEventListener('click', () => renderPeriod(rangeButton.dataset.period));
-                });
-                renderPeriod(data.default_period || '1m');
-              })
-              .catch(() => {
-                activeHistory = null;
-                stageEl.innerHTML = '<div class="market-chart-empty">Could not load market history for this card.</div>';
-                footnoteEl.textContent = 'Download history first if MTGJSON data is not available locally.';
-              });
+          const params = new URLSearchParams({
+            card_name: btn.dataset.chartCard,
+            set_code: btn.dataset.chartSet,
+            card_number: btn.dataset.chartNumber,
+            printing: btn.dataset.chartPrinting,
+            period: 'all',
           });
+
+          fetch(`${historyUrl}?${params.toString()}`)
+            .then(response => response.json())
+            .then(data => {
+              if (!data.ok) throw new Error(data.error || 'History fetch failed');
+              activeHistory = data;
+              subtitleEl.textContent = `${data.set_code}${data.card_number ? ` #${data.card_number}` : ''}${data.is_foil ? ' / Foil' : ' / Non-foil'}${data.available_since ? ` / tracking since ${formatDate(data.available_since)}` : ''}`;
+              controlsEl.innerHTML = data.available_periods.map(period => `
+                <button type="button" class="market-chart-range${period === data.default_period ? ' active' : ''}" data-period="${period}">
+                  ${period.toUpperCase()}
+                </button>
+              `).join('');
+              controlsEl.querySelectorAll('.market-chart-range').forEach(rangeButton => {
+                rangeButton.addEventListener('click', () => renderPeriod(rangeButton.dataset.period));
+              });
+              renderPeriod(data.default_period || '1m');
+            })
+            .catch(() => {
+              activeHistory = null;
+              stageEl.innerHTML = '<div class="market-chart-empty">Could not load market history for this card.</div>';
+              footnoteEl.textContent = 'Download history first if MTGJSON data is not available locally.';
+            });
         });
 
         function setProgress(job) {
@@ -903,7 +903,9 @@
               if (typeof av === 'string') return sortAsc ? av.localeCompare(bv) : bv.localeCompare(av);
               return sortAsc ? av - bv : bv - av;
             });
-            sorted.forEach(tr => tbody.appendChild(tr));
+            const frag = document.createDocumentFragment();
+            sorted.forEach(tr => frag.appendChild(tr));
+            tbody.appendChild(frag);
           });
         });
       })();
