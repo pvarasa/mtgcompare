@@ -843,7 +843,7 @@ def market():
     last_fetched_at: str | None = None
     for cr in cache_rows:
         key = (cr["card_name"].lower(), cr["set_code"].lower(), cr["is_foil"])
-        price_cache[key] = cr["price_usd"]
+        price_cache[key] = float(cr["price_usd"]) if cr["price_usd"] is not None else None
         if last_fetched_at is None or cr["fetched_at"] > last_fetched_at:
             last_fetched_at = cr["fetched_at"]
 
