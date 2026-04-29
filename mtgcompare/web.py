@@ -32,23 +32,38 @@ app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "mtgcompare-local-dev")
 
 _USER_ID_HEADER = os.environ.get("USER_ID_HEADER", "X-User-ID")
+_USER_DISPLAY_HEADER = os.environ.get("USER_DISPLAY_HEADER", "")
 _CRON_SECRET = os.environ.get("CRON_SECRET", "")
 
 
 def _get_user_id() -> str:
-    """Return the current user identity.
+    """Return the stable user identity used as a DB key.
 
     In local SQLite mode always returns 'local' (no auth required).
-    In PostgreSQL mode reads the plain header set by the auth proxy.
+    In PostgreSQL mode reads the immutable UID header set by the auth proxy.
     """
     if not db.IS_POSTGRES:
         return "local"
     return request.headers.get(_USER_ID_HEADER, "anonymous").strip() or "anonymous"
 
 
+def _get_display_name() -> str:
+    """Return a human-readable display name for the current user.
+
+    Falls back to the user ID if no separate display header is configured.
+    """
+    if not db.IS_POSTGRES:
+        return "local"
+    if _USER_DISPLAY_HEADER:
+        name = request.headers.get(_USER_DISPLAY_HEADER, "").strip()
+        if name:
+            return name
+    return _get_user_id()
+
+
 @app.context_processor
 def _inject_current_user():
-    return {"current_user": _get_user_id()}
+    return {"current_user": _get_display_name()}
 
 _CONDITION_ABBR = {
     "nearmint": "NM", "nm": "NM",

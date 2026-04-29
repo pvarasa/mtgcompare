@@ -47,7 +47,8 @@ Repo-specific guidance for coding sessions.
 |---|---|---|
 | `DATABASE_URL` | _(absent)_ | SQLAlchemy URL; absent → local SQLite, set → PostgreSQL |
 | `SECRET_KEY` | `mtgcompare-local-dev` | Flask session secret; must be set in production |
-| `USER_ID_HEADER` | `X-User-ID` | HTTP header carrying the user identity (set by auth proxy) |
+| `USER_ID_HEADER` | `X-User-ID` | HTTP header carrying the stable user UID used as DB key (set by auth proxy) |
+| `USER_DISPLAY_HEADER` | _(empty)_ | HTTP header for human-readable display name in UI; falls back to `USER_ID_HEADER` value if unset |
 | `CRON_SECRET` | _(empty)_ | Bearer token protecting `/internal/cron/update-prices`; if empty, no auth check |
 | `MTGJSON_CACHE_DIR` | `/tmp/mtgjson` | Scratch directory for price import temp files (PostgreSQL mode only) |
 

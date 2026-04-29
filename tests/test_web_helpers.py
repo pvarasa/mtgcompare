@@ -183,3 +183,36 @@ def test_get_user_id_respects_custom_header_name(monkeypatch):
         assert web._get_user_id() == "bob"
 
 
+# _get_display_name
+# ---------------------------------------------------------------------------
+
+def test_get_display_name_returns_local_in_sqlite_mode(monkeypatch):
+    monkeypatch.setattr(db_module, "IS_POSTGRES", False)
+    with web.app.test_request_context("/"):
+        assert web._get_display_name() == "local"
+
+
+def test_get_display_name_uses_display_header_when_set(monkeypatch):
+    monkeypatch.setattr(db_module, "IS_POSTGRES", True)
+    monkeypatch.setattr(web, "_USER_ID_HEADER", "X-UID")
+    monkeypatch.setattr(web, "_USER_DISPLAY_HEADER", "X-Username")
+    with web.app.test_request_context("/", headers={"X-UID": "uid-123", "X-Username": "pablo"}):
+        assert web._get_display_name() == "pablo"
+
+
+def test_get_display_name_falls_back_to_user_id_when_display_header_absent(monkeypatch):
+    monkeypatch.setattr(db_module, "IS_POSTGRES", True)
+    monkeypatch.setattr(web, "_USER_ID_HEADER", "X-UID")
+    monkeypatch.setattr(web, "_USER_DISPLAY_HEADER", "X-Username")
+    with web.app.test_request_context("/", headers={"X-UID": "uid-123"}):
+        assert web._get_display_name() == "uid-123"
+
+
+def test_get_display_name_falls_back_to_user_id_when_display_header_unconfigured(monkeypatch):
+    monkeypatch.setattr(db_module, "IS_POSTGRES", True)
+    monkeypatch.setattr(web, "_USER_ID_HEADER", "X-UID")
+    monkeypatch.setattr(web, "_USER_DISPLAY_HEADER", "")
+    with web.app.test_request_context("/", headers={"X-UID": "uid-123", "X-Username": "pablo"}):
+        assert web._get_display_name() == "uid-123"
+
+
