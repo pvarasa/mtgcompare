@@ -105,9 +105,16 @@ The app is a stateless container when `DATABASE_URL` is set. Point it at your Po
 |---|---|
 | `DATABASE_URL` | SQLAlchemy PostgreSQL URL, e.g. `postgresql+psycopg2://user:pass@host/db` |
 | `SECRET_KEY` | Flask session secret (required in production) |
-| `USER_ID_HEADER` | HTTP header carrying the user identity from your auth proxy (default: `X-User-ID`) |
+| `WORKOS_API_KEY` | WorkOS server-side API key — presence enables the full WorkOS auth flow |
+| `WORKOS_CLIENT_ID` | WorkOS workspace client ID |
+| `WORKOS_REDIRECT_URI` | OAuth callback URL registered in the WorkOS dashboard |
+| `WORKOS_WEBHOOK_SECRET` | Signing secret for HMAC verification on `/webhooks/workos` |
+| `AUTHKIT_DOMAIN` | AuthKit hosted-login domain (e.g. `your-team.authkit.com`) |
+| `USER_ID_HEADER` | Legacy fallback used only when WorkOS env vars are unset: HTTP header carrying the user identity from an upstream auth proxy (default: `X-User-ID`) |
 | `CRON_SECRET` | Bearer token protecting the daily price-refresh endpoint |
 | `MTGJSON_CACHE_DIR` | Scratch directory for price import temp files (default: `/tmp/mtgjson`) |
+
+When the WorkOS env vars are set, the app validates a session cookie issued by AuthKit on every non-public request; `/auth/login` redirects to AuthKit, `/auth/callback` exchanges the OAuth code, and `/webhooks/workos` syncs user CRUD events. When they are unset, the app falls back to trusting `USER_ID_HEADER` (PostgreSQL mode) or treating the user as `"local"` (SQLite / desktop mode), so local development and the packaged Windows/macOS apps continue to work without any auth configuration.
 
 **Daily price refresh** is triggered by a `POST /internal/cron/update-prices` request with an `Authorization: Bearer <CRON_SECRET>` header. Wire this up as a K8s CronJob hitting the cluster-internal service URL so it is never exposed externally.
 
@@ -174,6 +181,7 @@ GitHub Actions builds and attaches the zip to the GitHub Release automatically.
 ```
 mtgcompare/
   web.py          Flask UI (search, decklist, inventory, market, cron endpoint)
+  auth.py         WorkOS AuthKit Blueprint (auth gate + login/callback/logout/me + webhook)
   compare.py      CLI entry point
   inventory.py    Inventory storage + CSV import (per-user scoping)
   history_import.py  MTGJSON price history pipeline (DuckDB ETL → SQLite or PostgreSQL)

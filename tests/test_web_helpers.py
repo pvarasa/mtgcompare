@@ -4,6 +4,7 @@ from decimal import Decimal
 
 import pytest
 
+import mtgcompare.auth as auth_module
 import mtgcompare.db as db_module
 from mtgcompare import web
 
@@ -218,6 +219,135 @@ def test_get_display_name_falls_back_to_user_id_when_display_header_unconfigured
     monkeypatch.setattr(web, "_USER_DISPLAY_HEADER", "")
     with web.app.test_request_context("/", headers={"X-UID": "uid-123", "X-Username": "pablo"}):
         assert web._get_display_name() == "uid-123"
+
+
+# ---------------------------------------------------------------------------
+# WorkOS-enabled identity path
+# ---------------------------------------------------------------------------
+
+def test_get_user_id_uses_g_when_workos_enabled(monkeypatch):
+    from flask import g
+    monkeypatch.setattr(auth_module, "WORKOS_ENABLED", True)
+    with web.app.test_request_context("/"):
+        g.user_id = "user_01ABC"
+        assert web._get_user_id() == "user_01ABC"
+
+
+def test_get_user_id_anonymous_when_workos_enabled_but_unset(monkeypatch):
+    monkeypatch.setattr(auth_module, "WORKOS_ENABLED", True)
+    with web.app.test_request_context("/"):
+        assert web._get_user_id() == "anonymous"
+
+
+def test_get_display_name_uses_email_when_workos_enabled(monkeypatch):
+    from flask import g
+    monkeypatch.setattr(auth_module, "WORKOS_ENABLED", True)
+    with web.app.test_request_context("/"):
+        g.user = {"id": "user_01", "email": "alice@example.com"}
+        assert web._get_display_name() == "alice@example.com"
+
+
+def test_inject_current_user_exposes_workos_flag(monkeypatch):
+    monkeypatch.setattr(auth_module, "WORKOS_ENABLED", False)
+    with web.app.test_request_context("/"):
+        ctx = web._inject_current_user()
+        assert ctx["workos_enabled"] is False
+    monkeypatch.setattr(auth_module, "WORKOS_ENABLED", True)
+    with web.app.test_request_context("/"):
+        ctx = web._inject_current_user()
+        assert ctx["workos_enabled"] is True
+
+
+# ---------------------------------------------------------------------------
+# /healthz + webhook handler
+# ---------------------------------------------------------------------------
+
+def test_healthz_returns_200_without_auth(monkeypatch):
+    monkeypatch.setattr(auth_module, "WORKOS_ENABLED", True)
+    with web.app.test_client() as client:
+        resp = client.get("/healthz")
+        assert resp.status_code == 200
+        assert resp.get_json() == {"ok": True}
+
+
+def test_webhook_rejects_missing_signature(monkeypatch):
+    monkeypatch.setattr(auth_module, "WORKOS_ENABLED", True)
+    with web.app.test_client() as client:
+        resp = client.post("/webhooks/workos", data=b"{}", content_type="application/json")
+        assert resp.status_code == 400
+
+
+def test_webhook_rejects_bad_signature(monkeypatch):
+    monkeypatch.setattr(auth_module, "WORKOS_ENABLED", True)
+
+    def fake_verify(raw_body, sig):
+        raise ValueError("signature mismatch")
+
+    monkeypatch.setattr(auth_module, "verify_webhook", fake_verify)
+    with web.app.test_client() as client:
+        resp = client.post(
+            "/webhooks/workos", data=b"{}",
+            content_type="application/json",
+            headers={"WorkOS-Signature": "t=1,v1=bogus"},
+        )
+        assert resp.status_code == 401
+
+
+def test_auth_routes_404_when_workos_disabled(monkeypatch):
+    monkeypatch.setattr(auth_module, "WORKOS_ENABLED", False)
+    with web.app.test_client() as client:
+        assert client.get("/auth/login").status_code == 404
+        assert client.get("/auth/me").status_code == 404
+        assert client.post("/webhooks/workos").status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Public-path allowlist + auth-gate redirect
+# ---------------------------------------------------------------------------
+
+def test_is_public_path_allowlist():
+    is_public = auth_module._is_public_path
+    # Exact match for /healthz; prefixes (all ending in /) for the rest.
+    assert is_public("/healthz") is True
+    assert is_public("/auth/login") is True
+    assert is_public("/auth/callback") is True
+    assert is_public("/static/cardpreview.js") is True
+    assert is_public("/webhooks/workos") is True
+    assert is_public("/internal/cron/update-prices") is True
+    # Non-allowlisted paths must NOT be public.
+    assert is_public("/") is False
+    assert is_public("/inventory") is False
+    assert is_public("/market/history") is False
+    # Guard against prefix over-match — /healthzfoo must not be treated as /healthz.
+    assert is_public("/healthzfoo") is False
+
+
+def test_auth_gate_redirects_anonymous_to_authkit(monkeypatch):
+    monkeypatch.setattr(auth_module, "WORKOS_ENABLED", True)
+    monkeypatch.setattr(
+        auth_module, "authorization_url",
+        lambda *, state: f"https://vpablo.authkit.com/?state={state}",
+    )
+    with web.app.test_client() as client:
+        resp = client.get("/inventory", follow_redirects=False)
+    assert resp.status_code == 302
+    assert resp.headers["Location"].startswith("https://vpablo.authkit.com/")
+    cookies = resp.headers.get_all("Set-Cookie")
+    assert any(c.startswith(f"{auth_module.STATE_COOKIE}=") for c in cookies)
+    assert any(c.startswith(f"{auth_module.RETURN_TO_COOKIE}=") for c in cookies)
+
+
+def test_auth_gate_skips_public_paths_without_invoking_workos(monkeypatch):
+    # /healthz must succeed even when AuthKit is unreachable; if the gate
+    # inadvertently called authorization_url for a public path, this test
+    # would raise from the lambda.
+    monkeypatch.setattr(auth_module, "WORKOS_ENABLED", True)
+    def _explode(**_kwargs):
+        raise AssertionError("auth gate must not invoke authorization_url for public paths")
+    monkeypatch.setattr(auth_module, "authorization_url", _explode)
+    with web.app.test_client() as client:
+        assert client.get("/healthz").status_code == 200
+        assert client.get("/static/cardpreview.js").status_code in (200, 404)
 
 
 # ---------------------------------------------------------------------------
