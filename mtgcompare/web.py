@@ -28,6 +28,11 @@ from .utils import get_fx
 ROOT_DIR = Path(__file__).resolve().parent.parent
 LOGGING_CONF = ROOT_DIR / "logging.conf"
 
+# Apply file-based logging config at import time so it takes effect under
+# gunicorn (which imports `mtgcompare.web:app` and never calls main()).
+# disable_existing_loggers=False keeps gunicorn's own loggers intact.
+logging.config.fileConfig(LOGGING_CONF, disable_existing_loggers=False)
+
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "mtgcompare-local-dev")
 
@@ -1228,7 +1233,6 @@ def cron_update_prices():
 
 
 def main() -> None:
-    logging.config.fileConfig(LOGGING_CONF)
     host = os.environ.get("FLASK_RUN_HOST", "127.0.0.1")
     port = int(os.environ.get("FLASK_RUN_PORT", "5000"))
     # use_reloader=False so start/stop scripts have a single PID to manage;

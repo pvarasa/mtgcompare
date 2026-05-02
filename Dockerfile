@@ -21,4 +21,4 @@ ENV PATH="/app/.venv/bin:$PATH" \
 
 EXPOSE 5000
 
-CMD ["gunicorn", "--workers=1", "--threads=4", "--bind=0.0.0.0:5000", "mtgcompare.web:app"]
+CMD ["gunicorn", "--workers=1", "--threads=4", "--bind=0.0.0.0:5000", "--access-logfile=-", "--error-logfile=-", "mtgcompare.web:app"]
