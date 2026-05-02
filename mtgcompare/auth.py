@@ -39,7 +39,6 @@ WORKOS_API_KEY        = os.environ.get("WORKOS_API_KEY", "")
 WORKOS_CLIENT_ID      = os.environ.get("WORKOS_CLIENT_ID", "")
 WORKOS_REDIRECT_URI   = os.environ.get("WORKOS_REDIRECT_URI", "")
 WORKOS_WEBHOOK_SECRET = os.environ.get("WORKOS_WEBHOOK_SECRET", "")
-AUTHKIT_DOMAIN        = os.environ.get("AUTHKIT_DOMAIN", "")
 
 WORKOS_ENABLED = bool(WORKOS_API_KEY and WORKOS_CLIENT_ID and WORKOS_REDIRECT_URI)
 
@@ -102,12 +101,16 @@ def authorization_url(*, state: str) -> str:
 
 
 def logout_url(*, session_id: str | None = None) -> str:
-    """Build AuthKit's hosted logout URL.
+    """Build the WorkOS hosted-logout URL.
 
-    Without a `session_id` AuthKit logs the user out of its own session
+    Uses `api.workos.com` directly. A tenant-specific `<team>.authkit.com`
+    URL only exists when the paid custom-domain feature is enabled, which
+    is deliberately skipped — see docs/workos-setup.md.
+
+    Without a `session_id` WorkOS logs the user out of its own session
     but can't tell which device's session is being revoked.
     """
-    base = f"https://{AUTHKIT_DOMAIN}/user_management/sessions/logout"
+    base = "https://api.workos.com/user_management/sessions/logout"
     return f"{base}?session_id={session_id}" if session_id else base
 
 
@@ -205,6 +208,27 @@ def _is_public_path(path: str) -> bool:
     return path in _PUBLIC_EXACT_PATHS or any(path.startswith(p) for p in _PUBLIC_PATH_PREFIXES)
 
 
+def _load_user_record(workos_user_id: str) -> dict | None:
+    """Read the cached user fields (email, name) from the local users table.
+
+    WorkOS access-token JWTs only carry `sub` + `sid`; profile fields
+    (email, first/last name) live in the API response from the OAuth
+    code-exchange and the webhook payload, both of which we mirror into
+    `users` via `_upsert_user`. The auth gate consults that mirror so
+    every authenticated request has access to the email + name without
+    a round-trip to WorkOS.
+    """
+    with db.get_conn() as conn:
+        row = conn.execute(
+            text(
+                "SELECT email, first_name, last_name FROM users"
+                " WHERE workos_user_id = :uid"
+            ),
+            {"uid": workos_user_id},
+        ).mappings().first()
+    return dict(row) if row else None
+
+
 # ---------------------------------------------------------------------------
 # Flask blueprint — middleware + routes
 # ---------------------------------------------------------------------------
@@ -248,11 +272,12 @@ def _auth_gate():
         return resp
 
     g.user_id = claims["sub"]
+    record = _load_user_record(claims["sub"]) or {}
     g.user = {
         "id": claims["sub"],
-        "email": claims.get("email"),
-        "first_name": claims.get("first_name"),
-        "last_name": claims.get("last_name"),
+        "email": record.get("email") or "",
+        "first_name": record.get("first_name"),
+        "last_name": record.get("last_name"),
         "session_id": claims.get("sid"),
     }
     if refreshed is not None:

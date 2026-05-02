@@ -339,7 +339,8 @@ def test_auth_gate_redirects_anonymous_to_authkit(monkeypatch):
 
 def test_index_renders_for_authenticated_user(monkeypatch):
     """Catches stale endpoint names in templates (e.g. `auth_logout` after the
-    Blueprint move where the real endpoint is `auth.logout`).
+    Blueprint move where the real endpoint is `auth.logout`) AND verifies
+    the navbar shows the user's email rather than the WorkOS user_id.
 
     Without this test the bug only surfaces in production: the navbar's
     `{% if workos_enabled %}` branch is dead in unit-test contexts, so a
@@ -348,15 +349,25 @@ def test_index_renders_for_authenticated_user(monkeypatch):
     monkeypatch.setattr(auth_module, "WORKOS_ENABLED", True)
     monkeypatch.setattr(
         auth_module, "verify_access_token",
-        lambda token: {
-            "sub": "user_01TEST", "email": "test@example.com", "sid": "sess_1",
-        },
+        # Note: real WorkOS access tokens do NOT carry an `email` claim;
+        # the gate must source profile fields from the local users table.
+        lambda token: {"sub": "user_01TEST", "sid": "sess_1"},
     )
+    # Seed the users table so the gate's DB lookup finds a profile.
+    db_module.init_schema()
+    auth_module._upsert_user({
+        "id": "user_01TEST",
+        "email": "alice@example.com",
+        "first_name": "Alice",
+        "last_name": "Tester",
+    })
     with web.app.test_client() as client:
         client.set_cookie(auth_module.ACCESS_TOKEN_COOKIE, "fake.jwt")
         resp = client.get("/")
     assert resp.status_code == 200
     assert b"Sign out" in resp.data
+    assert b"alice@example.com" in resp.data
+    assert b"user_01TEST" not in resp.data  # must not fall back to user_id
 
 
 def test_auth_gate_skips_public_paths_without_invoking_workos(monkeypatch):
