@@ -53,7 +53,6 @@ Repo-specific guidance for coding sessions.
 | `WORKOS_CLIENT_ID` | _(absent)_ | WorkOS workspace client ID; required alongside `WORKOS_API_KEY` |
 | `WORKOS_REDIRECT_URI` | _(absent)_ | OAuth callback URL registered in the WorkOS dashboard, e.g. `https://mtg.vpablo.dev/auth/callback` |
 | `WORKOS_WEBHOOK_SECRET` | _(absent)_ | Signing secret for `/webhooks/workos` HMAC verification |
-| `AUTHKIT_DOMAIN` | _(absent)_ | AuthKit hosted-login domain (e.g. `vpablo.authkit.com`); used to build the logout URL |
 | `USER_ID_HEADER` | `X-User-ID` | Legacy/docker-compose fallback: HTTP header carrying user UID when WorkOS is disabled but Postgres is enabled |
 | `USER_DISPLAY_HEADER` | _(empty)_ | Same fallback path: header for display name; falls back to `USER_ID_HEADER` value if unset |
 | `CRON_SECRET` | _(empty)_ | Bearer token protecting `/internal/cron/update-prices`; if empty, no auth check |
@@ -83,7 +82,7 @@ When adding inventory fields, update `mtgcompare/db.py` (Table definition + `_mi
 
 Three modes, in priority order, all funnelled through `web._get_user_id()`:
 
-1. **WorkOS active** (production). All five `WORKOS_*` / `AUTHKIT_DOMAIN` env vars set. The `auth.bp` Blueprint registers a `before_app_request` gate that validates the access-token JWT cookie against WorkOS's JWKS, transparently refreshes it via the refresh-token cookie when expired, and populates `g.user_id` (= JWT `sub`) plus `g.user`. The `users` table is upserted on login and via `/webhooks/workos` (`user.created` / `user.updated` / `user.deleted`).
+1. **WorkOS active** (production). The `WORKOS_API_KEY` / `WORKOS_CLIENT_ID` / `WORKOS_REDIRECT_URI` env vars are all set. The `auth.bp` Blueprint registers a `before_app_request` gate that validates the access-token JWT cookie against WorkOS's JWKS, transparently refreshes it via the refresh-token cookie when expired, and populates `g.user_id` (= JWT `sub`) plus `g.user` (email + names sourced from the local `users` table — access-token JWTs only carry `sub`/`sid`). The `users` table is upserted on login and via `/webhooks/workos` (`user.created` / `user.updated` / `user.deleted`).
 2. **PostgreSQL without WorkOS** (docker-compose dev / legacy). Falls back to trusting `USER_ID_HEADER`. The `users` table exists but is unused on this path.
 3. **SQLite** (desktop / local dev). Always `"local"`. No middleware, no users table use.
 

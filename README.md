@@ -109,7 +109,6 @@ The app is a stateless container when `DATABASE_URL` is set. Point it at your Po
 | `WORKOS_CLIENT_ID` | WorkOS workspace client ID |
 | `WORKOS_REDIRECT_URI` | OAuth callback URL registered in the WorkOS dashboard |
 | `WORKOS_WEBHOOK_SECRET` | Signing secret for HMAC verification on `/webhooks/workos` |
-| `AUTHKIT_DOMAIN` | AuthKit hosted-login domain (e.g. `your-team.authkit.com`) |
 | `USER_ID_HEADER` | Legacy fallback used only when WorkOS env vars are unset: HTTP header carrying the user identity from an upstream auth proxy (default: `X-User-ID`) |
 | `CRON_SECRET` | Bearer token protecting the daily price-refresh endpoint |
 | `MTGJSON_CACHE_DIR` | Scratch directory for price import temp files (default: `/tmp/mtgjson`) |
