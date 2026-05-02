@@ -18,6 +18,8 @@ Repo-specific guidance for coding sessions.
   Packaged-app entry point: starts Flask in a daemon thread, opens the browser, runs the system-tray icon loop.
 - `mtgcompare/db.py`
   SQLAlchemy engine, schema, and DB path resolution. Supports SQLite (local) and PostgreSQL (remote) via `DATABASE_URL`.
+- `mtgcompare/auth.py`
+  WorkOS AuthKit integration. Exposes the `auth.bp` Flask Blueprint (login/callback/logout/me + `/webhooks/workos`), the `before_app_request` auth gate, and pure helpers (`verify_access_token`, `verify_webhook`, etc.). Inert when `WORKOS_API_KEY`/`WORKOS_CLIENT_ID`/`WORKOS_REDIRECT_URI` are unset.
 - `mtgcompare/scrappers/`
   Shop scraper implementations.
 - `mtgcompare/templates/`, `mtgcompare/static/`
@@ -47,8 +49,13 @@ Repo-specific guidance for coding sessions.
 |---|---|---|
 | `DATABASE_URL` | _(absent)_ | SQLAlchemy URL; absent → local SQLite, set → PostgreSQL |
 | `SECRET_KEY` | `mtgcompare-local-dev` | Flask session secret; must be set in production |
-| `USER_ID_HEADER` | `X-User-ID` | HTTP header carrying the stable user UID used as DB key (set by auth proxy) |
-| `USER_DISPLAY_HEADER` | _(empty)_ | HTTP header for human-readable display name in UI; falls back to `USER_ID_HEADER` value if unset |
+| `WORKOS_API_KEY` | _(absent)_ | WorkOS server-side API key. Presence enables the full WorkOS auth flow. |
+| `WORKOS_CLIENT_ID` | _(absent)_ | WorkOS workspace client ID; required alongside `WORKOS_API_KEY` |
+| `WORKOS_REDIRECT_URI` | _(absent)_ | OAuth callback URL registered in the WorkOS dashboard, e.g. `https://mtg.vpablo.dev/auth/callback` |
+| `WORKOS_WEBHOOK_SECRET` | _(absent)_ | Signing secret for `/webhooks/workos` HMAC verification |
+| `AUTHKIT_DOMAIN` | _(absent)_ | AuthKit hosted-login domain (e.g. `vpablo.authkit.com`); used to build the logout URL |
+| `USER_ID_HEADER` | `X-User-ID` | Legacy/docker-compose fallback: HTTP header carrying user UID when WorkOS is disabled but Postgres is enabled |
+| `USER_DISPLAY_HEADER` | _(empty)_ | Same fallback path: header for display name; falls back to `USER_ID_HEADER` value if unset |
 | `CRON_SECRET` | _(empty)_ | Bearer token protecting `/internal/cron/update-prices`; if empty, no auth check |
 | `MTGJSON_CACHE_DIR` | `/tmp/mtgjson` | Scratch directory for price import temp files (PostgreSQL mode only) |
 
@@ -74,9 +81,13 @@ When adding inventory fields, update `mtgcompare/db.py` (Table definition + `_mi
 
 ## User identity
 
-- In PostgreSQL mode the user identity comes from the plain HTTP header named by `USER_ID_HEADER` (default `X-User-ID`), set by the upstream auth proxy.
-- `web._get_user_id()` returns `"local"` in SQLite mode (no header required) and the header value in PostgreSQL mode (falls back to `"anonymous"` if absent).
-- There is no `users` table; the app trusts whatever the header contains.
+Three modes, in priority order, all funnelled through `web._get_user_id()`:
+
+1. **WorkOS active** (production). All five `WORKOS_*` / `AUTHKIT_DOMAIN` env vars set. The `auth.bp` Blueprint registers a `before_app_request` gate that validates the access-token JWT cookie against WorkOS's JWKS, transparently refreshes it via the refresh-token cookie when expired, and populates `g.user_id` (= JWT `sub`) plus `g.user`. The `users` table is upserted on login and via `/webhooks/workos` (`user.created` / `user.updated` / `user.deleted`).
+2. **PostgreSQL without WorkOS** (docker-compose dev / legacy). Falls back to trusting `USER_ID_HEADER`. The `users` table exists but is unused on this path.
+3. **SQLite** (desktop / local dev). Always `"local"`. No middleware, no users table use.
+
+The `users` table is keyed on `workos_user_id`; inventory rows continue to key on the same TEXT `user_id` column they always have, so the same SQLAlchemy code works across all three modes.
 
 ## Decklist preview UI
 

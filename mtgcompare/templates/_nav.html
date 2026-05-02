@@ -2,4 +2,7 @@
   <a href="{{ url_for('index') }}"     class="{% if active == 'search'    %}active{% endif %}">Search</a>
   <a href="{{ url_for('inventory') }}" class="{% if active == 'inventory' %}active{% endif %}">Inventory</a>
   <a href="{{ url_for('market') }}"    class="{% if active == 'market'    %}active{% endif %}">Market</a>
+  {% if workos_enabled %}
+  <a href="{{ url_for('auth_logout') }}" style="margin-left:auto">Sign out</a>
+  {% endif %}
 </nav>

@@ -10,8 +10,10 @@ dependencies = [
     "flask>=3.1",
     "gunicorn>=23.0",
     "psycopg2-binary>=2.9",
+    "pyjwt[crypto]>=2.8",
     "requests>=2.33",
     "sqlalchemy>=2.0",
+    "workos>=5.0",
     "yfinance>=1.3",
 ]
 

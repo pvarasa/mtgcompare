@@ -24,6 +24,7 @@ from sqlalchemy import (
     Table,
     Text,
     create_engine,
+    func,
     text,
 )
 
@@ -131,6 +132,17 @@ _price_update_runs = Table(
     ),
 )
 Index("price_update_runs_triggered_at_desc", _price_update_runs.c.triggered_at.desc())
+
+_users = Table(
+    "users", metadata,
+    Column("workos_user_id", Text, primary_key=True),
+    Column("email", Text, nullable=False),
+    Column("first_name", Text),
+    Column("last_name", Text),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+)
+Index("idx_users_email", _users.c.email, unique=True)
 
 
 def row_to_dict(row) -> dict:
