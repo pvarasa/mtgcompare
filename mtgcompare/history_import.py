@@ -13,10 +13,32 @@ Public API (PostgreSQL):     rebuild_history_pg(), merge_today_prices_pg()
 import csv
 import json
 import lzma
+from datetime import date
 from pathlib import Path
 from typing import Callable
 
 import duckdb
+
+
+def read_meta_date(xz_path: Path) -> date | None:
+    """Read meta.date from an MTGJSON `.json.xz` file head.
+
+    The meta block is always at the start of the file; reading 4 KB of
+    decompressed text is enough to capture it without parsing the full
+    document.
+    """
+    with lzma.open(xz_path, "rt", encoding="utf-8") as fh:
+        head = fh.read(4096)
+    cut = head.find('"data"')
+    if cut == -1:
+        return None
+    fragment = head[:cut].rstrip().rstrip(",") + "}"
+    try:
+        meta = (json.loads(fragment).get("meta") or {})
+    except json.JSONDecodeError:
+        return None
+    iso = meta.get("date")
+    return date.fromisoformat(iso) if iso else None
 
 _DUCKDB_SCHEMA = """
 CREATE TABLE price_rows (
@@ -426,8 +448,12 @@ def merge_today_prices_pg(
     engine,
     *,
     progress_cb: Callable[[int, str, str], None] | None = None,
-) -> int:
-    """Upsert today's prices from AllPricesToday.json.xz into PostgreSQL price_rows."""
+) -> tuple[int, int]:
+    """Upsert today's prices from AllPricesToday.json.xz into PostgreSQL price_rows.
+
+    Returns (uuid_count, row_count): cards seen in the file, and CSV rows
+    upserted (sum across normal/foil/etched and date keys).
+    """
     cache_dir = xz_path.parent
     ndjson_path = cache_dir / "AllPricesToday.ndjson"
     csv_path = cache_dir / "AllPricesToday_flat.csv"
@@ -452,7 +478,7 @@ def merge_today_prices_pg(
     if progress_cb:
         progress_cb(95, "Done", f"Merged {row_count:,} price points into PostgreSQL.")
 
-    return row_count
+    return uuid_count, row_count
 
 
 def merge_today_prices(
@@ -460,11 +486,11 @@ def merge_today_prices(
     duckdb_path: Path,
     *,
     progress_cb: Callable[[int, str, str], None] | None = None,
-) -> int:
+) -> tuple[int, int]:
     """Upsert today's prices from AllPricesToday.json.xz into an existing DuckDB.
 
     Uses the same NDJSON → DuckDB SQL path as rebuild_history_db for speed.
-    Gaps in existing history are left intact. Returns the number of rows upserted.
+    Gaps in existing history are left intact. Returns (uuid_count, row_count).
     """
     cache_dir = xz_path.parent
     ndjson_path = cache_dir / "AllPricesToday.ndjson"
@@ -498,4 +524,4 @@ def merge_today_prices(
 
     if progress_cb:
         progress_cb(95, "Merging today's prices", f"Merged {row_count:,} today's price points.")
-    return row_count
+    return uuid_count, row_count

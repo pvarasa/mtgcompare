@@ -11,8 +11,11 @@ from decimal import Decimal
 from pathlib import Path
 
 from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
     Column,
     Date,
+    DateTime,
     Index,
     Integer,
     MetaData,
@@ -107,6 +110,27 @@ _app_meta = Table(
     Column("key", Text, primary_key=True),
     Column("value", Text),
 )
+
+_price_update_runs = Table(
+    "price_update_runs", metadata,
+    Column("id", BigInteger().with_variant(Integer(), "sqlite"), primary_key=True, autoincrement=True),
+    Column("triggered_at", DateTime(timezone=True), nullable=False),
+    Column("started_at", DateTime(timezone=True)),
+    Column("finished_at", DateTime(timezone=True)),
+    Column("status", Text, nullable=False),
+    Column("duration_ms", Integer),
+    Column("uuids_streamed", Integer),
+    Column("rows_inserted", Integer),
+    Column("market_date", Date),
+    Column("trigger_source", Text),
+    Column("error_message", Text),
+    Column("job_id", Text),
+    CheckConstraint(
+        "status IN ('running','success','failed')",
+        name="price_update_runs_status_check",
+    ),
+)
+Index("price_update_runs_triggered_at_desc", _price_update_runs.c.triggered_at.desc())
 
 
 def row_to_dict(row) -> dict:

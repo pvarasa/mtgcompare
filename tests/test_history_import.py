@@ -14,6 +14,20 @@ def _make_xz(path, data: dict):
         json.dump(data, fh, separators=(",", ":"))
 
 
+def test_read_meta_date_extracts_meta_date(tmp_path):
+    xz_path = tmp_path / "AllPricesToday.json.xz"
+    _make_xz(xz_path, {"meta": {"date": "2026-05-02", "version": "5.3.0"}, "data": {}})
+
+    assert history_import.read_meta_date(xz_path) == __import__("datetime").date(2026, 5, 2)
+
+
+def test_read_meta_date_returns_none_when_missing(tmp_path):
+    xz_path = tmp_path / "AllPricesToday.json.xz"
+    _make_xz(xz_path, {"meta": {"version": "5.3.0"}, "data": {}})
+
+    assert history_import.read_meta_date(xz_path) is None
+
+
 _SAMPLE_PRICES = {
     "meta": {"date": "2026-04-23"},
     "data": {
@@ -155,9 +169,10 @@ def test_merge_today_prices_upserts_into_duckdb(tmp_path):
     today_xz = tmp_path / "AllPricesToday.json.xz"
     _make_xz(today_xz, today_data)
 
-    merged = history_import.merge_today_prices(today_xz, duckdb_path)
+    uuid_count, merged = history_import.merge_today_prices(today_xz, duckdb_path)
 
     assert merged == 2
+    assert uuid_count == 1
     rows = _query_price_rows(duckdb_path)
     found = {(r[0], r[1], r[2]): r[3] for r in rows}
     # existing row updated with new price

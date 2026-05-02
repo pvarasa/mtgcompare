@@ -149,9 +149,10 @@ def test_merge_today_prices_pg_upserts(price_rows_table, pg_engine, tmp_path):
     today_xz = tmp_path / "AllPricesToday.json.xz"
     _make_xz(today_xz, today_data)
 
-    merged = history_import.merge_today_prices_pg(today_xz, pg_engine)
+    uuid_count, merged = history_import.merge_today_prices_pg(today_xz, pg_engine)
 
     assert merged == 2
+    assert uuid_count == 1
 
     rows = _query_pg(pg_engine)
     found = {(r[0], r[1], r[2]): float(r[3]) for r in rows}

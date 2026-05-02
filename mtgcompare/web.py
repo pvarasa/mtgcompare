@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from threading import Lock, Thread
+from time import monotonic
 from uuid import uuid4
 
 import duckdb
@@ -20,7 +21,7 @@ import requests
 from flask import Flask, flash, jsonify, redirect, render_template, request, url_for
 from sqlalchemy import text
 
-from . import db, history_import
+from . import db, history_import, run_log
 from . import inventory as inv
 from .shops import SHIPPING_JPY, SHOP_FLAGS, collect_prices, shop_slug
 from .utils import get_fx
@@ -767,7 +768,10 @@ def _import_mtgjson_history(rows: list[dict], *, progress_cb=None) -> tuple[int,
     history_duckdb_path = _mtgjson_history_duckdb_path()
     history_row_count = 0
 
-    needs_history = (db.IS_POSTGRES and not _has_price_history()) or (not db.IS_POSTGRES and not history_duckdb_path.exists())
+    needs_history = (
+        (db.IS_POSTGRES and not _has_price_history())
+        or (not db.IS_POSTGRES and not history_duckdb_path.exists())
+    )
     if needs_history:
         history_path = _mtgjson_history_path()
         _progress(32, "Downloading history", "Downloading MTGJSON AllPrices history...")
@@ -1156,10 +1160,13 @@ def inventory_import():
     return redirect(url_for("inventory"))
 
 
-def _run_daily_price_update(progress_cb=None) -> tuple[int, int]:
+def _run_daily_price_update(
+    progress_cb=None,
+) -> tuple[int, int, int, "date | None"]:
     """Download today's prices for all cards and update UUID mappings for inventory.
 
-    Used by the cron endpoint. Returns (mapped_count, row_count).
+    Used by the cron endpoint. Returns
+    (mapped_count, rows_inserted, uuids_streamed, market_date).
     """
     def _progress(progress: int, phase: str, detail: str) -> None:
         if progress_cb:
@@ -1176,20 +1183,23 @@ def _run_daily_price_update(progress_cb=None) -> tuple[int, int]:
         if exc.response is not None and exc.response.status_code == 404:
             raise RuntimeError("MTGJSON AllPricesToday not available yet.") from exc
         raise
+
+    market_date = history_import.read_meta_date(today_xz)
+
     if db.IS_POSTGRES:
-        row_count = history_import.merge_today_prices_pg(
+        uuids_streamed, rows_inserted = history_import.merge_today_prices_pg(
             today_xz, db.engine, progress_cb=_progress,
         )
     else:
         duckdb_path = _mtgjson_history_duckdb_path()
         with _history_duckdb_lock:
-            row_count = history_import.merge_today_prices(
+            uuids_streamed, rows_inserted = history_import.merge_today_prices(
                 today_xz, duckdb_path, progress_cb=_progress,
             )
     today_xz.unlink(missing_ok=True)
 
     mapped_count, _ = _import_mtgjson_history(inventory_rows, progress_cb=_progress)
-    return mapped_count, row_count
+    return mapped_count, rows_inserted, uuids_streamed, market_date
 
 
 @app.route("/internal/cron/update-prices", methods=["POST"])
@@ -1197,7 +1207,11 @@ def cron_update_prices():
     """Protected endpoint for the daily K8s CronJob.
 
     Requires Authorization: Bearer <CRON_SECRET> header.
+    Pass `X-Trigger-Source: manual` to mark a hand-fired run.
     """
+    triggered_at = datetime.now(timezone.utc)
+    trigger_source = request.headers.get("X-Trigger-Source", "cron")
+
     if _CRON_SECRET:
         auth = request.headers.get("Authorization", "")
         if auth != f"Bearer {_CRON_SECRET}":
@@ -1212,24 +1226,50 @@ def cron_update_prices():
 
     job_id = uuid4().hex
     _init_download_job(job_id)
+    run_id = run_log.record_start(triggered_at, trigger_source, job_id)
+    app.logger.info(
+        "Daily price update started run_id=%s job_id=%s source=%s",
+        run_id, job_id, trigger_source,
+    )
 
     def _progress(progress: int, phase: str, detail: str) -> None:
         _set_download_job(job_id, progress=progress, phase=phase, detail=detail)
 
     def _worker() -> None:
+        t0 = monotonic()
         try:
-            mapped_count, row_count = _run_daily_price_update(progress_cb=_progress)
+            mapped_count, rows_inserted, uuids_streamed, market_date = (
+                _run_daily_price_update(progress_cb=_progress)
+            )
+            duration_ms = int((monotonic() - t0) * 1000)
             _set_download_job(
                 job_id, state="done", progress=100, phase="Done",
-                detail=f"Updated {row_count:,} price points for {mapped_count} lot(s).",
+                detail=f"Updated {rows_inserted:,} price points for {mapped_count} lot(s).",
+            )
+            run_log.record_finish(
+                run_id=run_id, status="success", duration_ms=duration_ms,
+                uuids_streamed=uuids_streamed, rows_inserted=rows_inserted,
+                market_date=market_date,
+            )
+            app.logger.info(
+                "Daily price update done run_id=%s rows_inserted=%s "
+                "uuids_streamed=%s market_date=%s duration_ms=%s",
+                run_id, rows_inserted, uuids_streamed, market_date, duration_ms,
             )
         except Exception as exc:
-            app.logger.exception("Daily price update failed")
+            duration_ms = int((monotonic() - t0) * 1000)
+            app.logger.exception("Daily price update failed run_id=%s", run_id)
             _set_download_job(job_id, state="error", phase="Failed",
                               detail="Daily price update failed.", error=str(exc))
+            run_log.record_finish(
+                run_id=run_id, status="failed", duration_ms=duration_ms,
+                error_message=str(exc),
+            )
 
     Thread(target=_worker, daemon=True).start()
-    return jsonify({"ok": True, "job_id": job_id, "already_running": False})
+    return jsonify({
+        "ok": True, "job_id": job_id, "run_id": run_id, "already_running": False,
+    })
 
 
 def main() -> None:
