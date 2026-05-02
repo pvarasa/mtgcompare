@@ -337,6 +337,28 @@ def test_auth_gate_redirects_anonymous_to_authkit(monkeypatch):
     assert any(c.startswith(f"{auth_module.RETURN_TO_COOKIE}=") for c in cookies)
 
 
+def test_index_renders_for_authenticated_user(monkeypatch):
+    """Catches stale endpoint names in templates (e.g. `auth_logout` after the
+    Blueprint move where the real endpoint is `auth.logout`).
+
+    Without this test the bug only surfaces in production: the navbar's
+    `{% if workos_enabled %}` branch is dead in unit-test contexts, so a
+    BuildError can ship undetected.
+    """
+    monkeypatch.setattr(auth_module, "WORKOS_ENABLED", True)
+    monkeypatch.setattr(
+        auth_module, "verify_access_token",
+        lambda token: {
+            "sub": "user_01TEST", "email": "test@example.com", "sid": "sess_1",
+        },
+    )
+    with web.app.test_client() as client:
+        client.set_cookie(auth_module.ACCESS_TOKEN_COOKIE, "fake.jwt")
+        resp = client.get("/")
+    assert resp.status_code == 200
+    assert b"Sign out" in resp.data
+
+
 def test_auth_gate_skips_public_paths_without_invoking_workos(monkeypatch):
     # /healthz must succeed even when AuthKit is unreachable; if the gate
     # inadvertently called authorization_url for a public path, this test
