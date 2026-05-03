@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import secrets
+from datetime import datetime, timezone
 from typing import Optional
 
 import jwt
@@ -190,10 +191,18 @@ def _set_transient_cookie(response, name: str, value: str) -> None:
 
 
 def _upsert_user(user: dict) -> None:
-    """Insert or update a row in the local `users` table from JWT claims.
+    """Insert or update a row in the local `users` table.
+
+    Called from both `/auth/callback` (after the OAuth code-exchange) and
+    the webhook handler (`user.created` / `user.updated`); they each
+    build a `user` dict with `id` + the profile fields they have.
 
     Webhooks are eventually consistent — we can't rely on `user.created`
-    having arrived before the user's first authenticated request.
+    having arrived before the user's first authenticated request, so the
+    callback path runs the same upsert.
+
+    `updated_at` is set explicitly because the column's `server_default`
+    only fires on INSERT.
     """
     with db.get_conn() as conn:
         db.upsert(conn, "users", ["workos_user_id"], [{
@@ -201,6 +210,7 @@ def _upsert_user(user: dict) -> None:
             "email": user.get("email") or "",
             "first_name": user.get("first_name"),
             "last_name": user.get("last_name"),
+            "updated_at": datetime.now(timezone.utc),
         }])
 
 
@@ -391,11 +401,10 @@ def webhook():
             conn.execute(text("DELETE FROM inventory WHERE user_id = :uid"), {"uid": user_id})
             conn.execute(text("DELETE FROM users WHERE workos_user_id = :uid"), {"uid": user_id})
     elif event.event in ("user.created", "user.updated"):
-        with db.get_conn() as conn:
-            db.upsert(conn, "users", ["workos_user_id"], [{
-                "workos_user_id": user_id,
-                "email": getattr(data, "email", "") or "",
-                "first_name": getattr(data, "first_name", None),
-                "last_name": getattr(data, "last_name", None),
-            }])
+        _upsert_user({
+            "id": user_id,
+            "email": getattr(data, "email", None),
+            "first_name": getattr(data, "first_name", None),
+            "last_name": getattr(data, "last_name", None),
+        })
     return jsonify({"ok": True}), 200

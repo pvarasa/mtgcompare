@@ -1,8 +1,10 @@
+import time
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import text
 
 import mtgcompare.auth as auth_module
 import mtgcompare.db as db_module
@@ -291,6 +293,27 @@ def test_webhook_rejects_bad_signature(monkeypatch):
             headers={"WorkOS-Signature": "t=1,v1=bogus"},
         )
         assert resp.status_code == 401
+
+
+def test_upsert_user_advances_updated_at_on_repeat():
+    """`updated_at` must move forward when `_upsert_user` is called for an
+    existing row (e.g. via a `user.updated` webhook). The column's PG
+    `server_default=func.now()` only fires on INSERT, so the helper has
+    to pass the timestamp itself.
+    """
+    db_module.init_schema()
+    auth_module._upsert_user({"id": "user_TS", "email": "a@example.com"})
+    with db_module.get_conn() as conn:
+        first = conn.execute(text(
+            "SELECT updated_at FROM users WHERE workos_user_id = 'user_TS'"
+        )).scalar_one()
+    time.sleep(0.05)
+    auth_module._upsert_user({"id": "user_TS", "email": "b@example.com"})
+    with db_module.get_conn() as conn:
+        second = conn.execute(text(
+            "SELECT updated_at FROM users WHERE workos_user_id = 'user_TS'"
+        )).scalar_one()
+    assert second > first
 
 
 def test_auth_routes_404_when_workos_disabled(monkeypatch):
