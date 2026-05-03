@@ -99,7 +99,9 @@
       <div class="search-row">
         <input type="text" name="q" value="{{ q }}"
                placeholder='Card name, e.g. "Force of Will"'
+               list="search-name-suggest"
                autofocus autocomplete="off">
+        <datalist id="search-name-suggest"></datalist>
         <button type="submit">Search</button>
       </div>
 
@@ -185,6 +187,7 @@
     {% endif %}
   {% endif %}
 
+  <script src="{{ url_for('static', filename='searchautocomplete.js') }}" defer></script>
   <script>
     (function () {
       // --- mode toggle ---
