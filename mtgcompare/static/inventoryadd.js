@@ -276,9 +276,10 @@
     dlStatus.textContent = `Adding ${records.length} card(s)...`;
 
     try {
+      const csrf = document.querySelector('meta[name="csrf-token"]')?.content || "";
       const response = await fetch("/inventory/add-bulk", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "X-CSRFToken": csrf },
         body: JSON.stringify({ records }),
       });
       if (!response.ok) {

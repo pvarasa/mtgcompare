@@ -152,8 +152,8 @@ def verify_access_token(token: str) -> dict:
         # signature + the explicit client_id check below instead.
         options={"verify_aud": False, "verify_iss": False},
     )
-    if claims.get("client_id") and claims["client_id"] != WORKOS_CLIENT_ID:
-        raise jwt.InvalidTokenError("client_id claim mismatch")
+    if claims.get("client_id") != WORKOS_CLIENT_ID:
+        raise jwt.InvalidTokenError("client_id claim missing or mismatched")
     return claims
 
 

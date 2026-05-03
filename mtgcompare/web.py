@@ -38,6 +38,45 @@ app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "mtgcompare-local-dev")
 app.register_blueprint(auth.bp)
 
+# CSRF protection for state-changing POSTs from same-origin templates.
+# /webhooks/workos and /internal/cron/update-prices are exempted because
+# they have their own auth (HMAC and bearer respectively).
+from flask_wtf.csrf import CSRFProtect  # noqa: E402
+
+csrf = CSRFProtect(app)
+# Exempt the entire auth blueprint:
+#  - /auth/login, /auth/callback, /auth/me are GET (no CSRF risk)
+#  - /auth/logout is idempotent (clears cookies + redirects)
+#  - /webhooks/workos is machine-to-machine, validated via HMAC
+csrf.exempt(auth.bp)
+
+
+# Inline <style>/<script> blocks throughout the templates require
+# 'unsafe-inline' until those are extracted to /static. Scryfall is the
+# only third-party origin (card image previews + named-card lookup).
+_CSP = (
+    "default-src 'self'; "
+    "script-src 'self' 'unsafe-inline'; "
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+    "font-src 'self' https://fonts.gstatic.com; "
+    "img-src 'self' data: https://cards.scryfall.io; "
+    "connect-src 'self' https://api.scryfall.com; "
+    "frame-ancestors 'none'; "
+    "base-uri 'self'; "
+    "form-action 'self' https://api.workos.com"
+)
+
+
+@app.after_request
+def _security_headers(response):
+    response.headers.setdefault("Strict-Transport-Security",
+                                "max-age=31536000; includeSubDomains; preload")
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault("Content-Security-Policy", _CSP)
+    return response
+
 _USER_ID_HEADER = os.environ.get("USER_ID_HEADER", "X-User-ID")
 _USER_DISPLAY_HEADER = os.environ.get("USER_DISPLAY_HEADER", "")
 _CRON_SECRET = os.environ.get("CRON_SECRET", "")
@@ -1220,6 +1259,7 @@ def _run_daily_price_update(
 
 
 @app.route("/internal/cron/update-prices", methods=["POST"])
+@csrf.exempt
 def cron_update_prices():
     """Protected endpoint for the daily K8s CronJob.
 

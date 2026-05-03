@@ -187,6 +187,7 @@
     </div>
 
     <form id="add-single" class="add-form" method="post" action="{{ url_for('inventory_add') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <label class="grow">Name
         <input id="add-name" name="card_name" list="add-name-suggest"
                required autocomplete="off" placeholder="Sol Ring">
@@ -245,6 +246,7 @@
 
     <form id="add-csv" class="csv-body" method="post" action="{{ url_for('inventory_import') }}"
           enctype="multipart/form-data" style="display: none;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="file" name="file" accept=".csv" required>
       <div class="csv-mode">
         <label><input type="radio" name="mode" value="replace" checked> Replace inventory</label>

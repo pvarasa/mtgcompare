@@ -295,6 +295,98 @@ def test_webhook_rejects_bad_signature(monkeypatch):
         assert resp.status_code == 401
 
 
+def test_csrf_protection_blocks_post_without_token():
+    """flask-wtf is disabled in conftest for ergonomics; flip it on for
+    one test to verify the protection actually fires."""
+    web.app.config["WTF_CSRF_ENABLED"] = True
+    try:
+        with web.app.test_client() as client:
+            resp = client.post("/decklist", data={"decklist": "1 Sol Ring"})
+        assert resp.status_code == 400
+    finally:
+        web.app.config["WTF_CSRF_ENABLED"] = False
+
+
+def test_csrf_exempt_for_cron_and_webhook(monkeypatch):
+    """The cron-trigger endpoint and the WorkOS webhook must remain reachable
+    without a CSRF token — they have their own auth (bearer + HMAC)."""
+    web.app.config["WTF_CSRF_ENABLED"] = True
+    try:
+        with web.app.test_client() as client:
+            # cron rejects on auth, NOT on CSRF (would be 400 if CSRF blocked it)
+            resp = client.post("/internal/cron/update-prices")
+            assert resp.status_code in (401, 200)  # 401 if CRON_SECRET set, 200 otherwise
+            # webhook rejects on missing signature, NOT on CSRF
+            monkeypatch.setattr(auth_module, "WORKOS_ENABLED", True)
+            resp = client.post("/webhooks/workos", data=b"{}",
+                               content_type="application/json")
+            assert resp.status_code == 400  # missing signature, not CSRF
+    finally:
+        web.app.config["WTF_CSRF_ENABLED"] = False
+
+
+def test_security_headers_set_on_responses():
+    """Every response must carry the hardening headers — including the
+    public /healthz, which renders without authentication."""
+    with web.app.test_client() as client:
+        resp = client.get("/healthz")
+    assert resp.headers["X-Content-Type-Options"] == "nosniff"
+    assert resp.headers["X-Frame-Options"] == "DENY"
+    assert resp.headers["Referrer-Policy"] == "strict-origin-when-cross-origin"
+    assert "max-age=" in resp.headers["Strict-Transport-Security"]
+    csp = resp.headers["Content-Security-Policy"]
+    assert "frame-ancestors 'none'" in csp
+    assert "default-src 'self'" in csp
+    assert "https://api.workos.com" in csp
+
+
+def _stub_jwks(monkeypatch):
+    class _Key: key = "stub"
+    class _JWKS:
+        def get_signing_key_from_jwt(self, _token): return _Key()
+    monkeypatch.setattr(auth_module, "_get_jwks", lambda: _JWKS())
+
+
+def test_verify_access_token_rejects_missing_client_id(monkeypatch):
+    """A token whose payload lacks `client_id` must fail closed even if the
+    signature checks out — without this the auth gate would silently accept
+    a signature-valid token from a different WorkOS app."""
+    _stub_jwks(monkeypatch)
+    monkeypatch.setattr(auth_module, "WORKOS_CLIENT_ID", "client_TEST")
+    monkeypatch.setattr(auth_module.jwt, "decode",
+                        lambda *_a, **_kw: {"sub": "user_X", "sid": "sess_1"})
+
+    import jwt as _jwt
+    with pytest.raises(_jwt.InvalidTokenError, match="client_id"):
+        auth_module.verify_access_token("fake.jwt")
+
+
+def test_verify_access_token_rejects_mismatched_client_id(monkeypatch):
+    _stub_jwks(monkeypatch)
+    monkeypatch.setattr(auth_module, "WORKOS_CLIENT_ID", "client_TEST")
+    monkeypatch.setattr(
+        auth_module.jwt, "decode",
+        lambda *_a, **_kw: {"sub": "user_X", "client_id": "client_OTHER"},
+    )
+
+    import jwt as _jwt
+    with pytest.raises(_jwt.InvalidTokenError, match="client_id"):
+        auth_module.verify_access_token("fake.jwt")
+
+
+def test_verify_access_token_returns_claims_on_matching_client_id(monkeypatch):
+    _stub_jwks(monkeypatch)
+    monkeypatch.setattr(auth_module, "WORKOS_CLIENT_ID", "client_TEST")
+    monkeypatch.setattr(
+        auth_module.jwt, "decode",
+        lambda *_a, **_kw: {"sub": "user_X", "client_id": "client_TEST", "sid": "sess_1"},
+    )
+
+    claims = auth_module.verify_access_token("fake.jwt")
+    assert claims["sub"] == "user_X"
+    assert claims["client_id"] == "client_TEST"
+
+
 def test_upsert_user_advances_updated_at_on_repeat():
     """`updated_at` must move forward when `_upsert_user` is called for an
     existing row (e.g. via a `user.updated` webhook). The column's PG

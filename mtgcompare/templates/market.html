@@ -830,9 +830,10 @@
             progressFillEl.style.width = '0%';
             progressDetailEl.textContent = 'Starting price update...';
 
+            const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
             fetch(historyDownloadUrl, {
               method: 'POST',
-              headers: { 'X-Requested-With': 'fetch' },
+              headers: { 'X-Requested-With': 'fetch', 'X-CSRFToken': csrf },
             })
               .then(response => response.json())
               .then(data => {

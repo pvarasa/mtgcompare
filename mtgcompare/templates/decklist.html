@@ -274,6 +274,7 @@
   <div class="dl-refine">
     <h2>Refine search</h2>
     <form method="post" action="{{ url_for('decklist_search') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <textarea name="decklist">{{ decklist }}</textarea>
 
       <details class="ship-details"{% if shipping_total_jpy is defined and shipping_total_jpy > 0 %} open{% endif %}>

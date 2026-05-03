@@ -125,6 +125,7 @@
 
   <div id="panel-decklist" style="display:none">
     <form method="post" action="{{ url_for('decklist_search') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <textarea name="decklist"
                 placeholder="1 Sol Ring&#10;4x Force of Will (FEM)&#10;1 Rhystic Study (C21) 79&#10;..."></textarea>
       <div class="dl-actions">
