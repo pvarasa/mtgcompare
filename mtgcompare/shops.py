@@ -2,6 +2,7 @@ import os
 import re
 
 from .cache import DEFAULT_TTL, CachedScrapper
+from .scrappers.cardrush import CardRushScrapper
 from .scrappers.hareruya import HareruyaScrapper
 from .scrappers.scryfall import ScryfallScrapper
 from .scrappers.singlestar import SingleStarScrapper
@@ -11,6 +12,7 @@ SHOP_FLAGS = {
     "Hareruya": "\U0001F1EF\U0001F1F5",
     "SingleStar": "\U0001F1EF\U0001F1F5",
     "TokyoMTG": "\U0001F1EF\U0001F1F5",
+    "Card Rush": "\U0001F1EF\U0001F1F5",
     "TCGPlayer (Scryfall)": "\U0001F1FA\U0001F1F8",
 }
 
@@ -21,6 +23,7 @@ SHIPPING_JPY: dict[str, int] = {
     "Hareruya":             385,
     "SingleStar":           385,
     "TokyoMTG":             385,
+    "Card Rush":            385,
     "TCGPlayer (Scryfall)": 1200,
 }
 
@@ -39,6 +42,7 @@ def build_scrapers(fx: float) -> list:
         ("TCGPlayer (Scryfall)", ScryfallScrapper(fx=fx)),
         ("SingleStar",           SingleStarScrapper(fx=fx)),
         ("TokyoMTG",             TokyoMtgScrapper(fx=fx)),
+        ("Card Rush",            CardRushScrapper(fx=fx)),
     ]
     if not CACHE_ENABLED:
         return [s for _, s in raw]
