@@ -144,6 +144,45 @@ _users = Table(
 )
 Index("idx_users_email", _users.c.email, unique=True)
 
+# Cached shop listings: one row per (shop, card, set, language, finish, condition).
+# Populated lazily by CachedScrapper on user search; the same table is the read
+# path for any future bulk crawler — bulk just writes rows with source='bulk'.
+_shop_listings = Table(
+    "shop_listings", metadata,
+    Column("id", BigInteger().with_variant(Integer(), "sqlite"), primary_key=True, autoincrement=True),
+    Column("shop", Text, nullable=False),
+    Column("card_name", Text, nullable=False),  # lowercased lookup key
+    Column("card_display", Text, nullable=False),  # original casing from the scraper
+    Column("set_code", Text, nullable=False, server_default=""),
+    Column("language", Text, nullable=False, server_default="EN"),
+    Column("finish", Text, nullable=False, server_default="normal"),
+    Column("condition", Text, nullable=False, server_default="NM"),
+    Column("price_jpy", Numeric(12, 2), nullable=False),
+    Column("price_usd", Numeric(12, 2)),
+    Column("stock", Integer),
+    Column("url", Text),
+    Column("last_checked", DateTime(timezone=True), nullable=False),
+    # Forward-compat: bulk crawler will write source='bulk'; read path
+    # currently doesn't filter on this, but the column avoids a future
+    # schema migration when bulk lands.
+    Column("source", Text, nullable=False, server_default="search"),
+)
+Index("idx_shop_listings_shop_card", _shop_listings.c.shop, _shop_listings.c.card_name)
+Index("idx_shop_listings_last_checked", _shop_listings.c.last_checked)
+
+# Memoizes the act of querying a shop, separate from the listings themselves.
+# Lets us cache *zero-result* lookups so we don't re-scrape every time a user
+# searches for a card the shop genuinely doesn't carry.
+_shop_query_log = Table(
+    "shop_query_log", metadata,
+    Column("shop", Text, nullable=False),
+    Column("card_name", Text, nullable=False),
+    Column("queried_at", DateTime(timezone=True), nullable=False),
+    Column("result_count", Integer, nullable=False, server_default="0"),
+    Column("status", Text, nullable=False, server_default="ok"),
+    PrimaryKeyConstraint("shop", "card_name"),
+)
+
 
 def row_to_dict(row) -> dict:
     """Convert a SQLAlchemy RowMapping to a plain dict with uniform numeric types.

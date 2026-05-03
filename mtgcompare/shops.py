@@ -1,5 +1,7 @@
+import os
 import re
 
+from .cache import DEFAULT_TTL, CachedScrapper
 from .scrappers.hareruya import HareruyaScrapper
 from .scrappers.scryfall import ScryfallScrapper
 from .scrappers.singlestar import SingleStarScrapper
@@ -28,13 +30,19 @@ def shop_slug(name: str) -> str:
     return re.sub(r'[^a-z0-9]+', '_', name.lower()).strip('_')
 
 
+CACHE_ENABLED = os.environ.get("MTGCOMPARE_CACHE_ENABLED", "1") not in ("0", "false", "False")
+
+
 def build_scrapers(fx: float) -> list:
-    return [
-        HareruyaScrapper(fx=fx),
-        ScryfallScrapper(fx=fx),
-        SingleStarScrapper(fx=fx),
-        TokyoMtgScrapper(fx=fx),
+    raw = [
+        ("Hareruya",             HareruyaScrapper(fx=fx)),
+        ("TCGPlayer (Scryfall)", ScryfallScrapper(fx=fx)),
+        ("SingleStar",           SingleStarScrapper(fx=fx)),
+        ("TokyoMTG",             TokyoMtgScrapper(fx=fx)),
     ]
+    if not CACHE_ENABLED:
+        return [s for _, s in raw]
+    return [CachedScrapper(s, shop_name=name, ttl=DEFAULT_TTL) for name, s in raw]
 
 
 def collect_prices(card_name: str, fx: float, logger=None) -> list[dict]:
