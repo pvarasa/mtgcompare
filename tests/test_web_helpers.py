@@ -416,6 +416,44 @@ def test_auth_routes_404_when_workos_disabled(monkeypatch):
         assert client.post("/webhooks/workos").status_code == 404
 
 
+def test_is_safe_return_to_rejects_protocol_relative_and_other_origins():
+    """`startswith("/")` alone accepts `//evil.com/x` (browsers treat
+    that as protocol-relative). Reject those plus the `\\\\` variant."""
+    safe = auth_module._is_safe_return_to
+    # Same-origin paths — accepted.
+    assert safe("/") is True
+    assert safe("/inventory") is True
+    assert safe("/market/history?card_name=foo") is True
+    # Protocol-relative or absolute URLs — rejected.
+    assert safe("//evil.com/x") is False
+    assert safe("//evil.com") is False
+    assert safe("/\\evil.com/x") is False
+    assert safe("https://evil.com/x") is False
+    assert safe("javascript:alert(1)") is False
+    # Empty / missing — rejected.
+    assert safe("") is False
+    assert safe("foo") is False
+
+
+def test_logout_rejects_get_method(monkeypatch):
+    """GET-CSRF on /auth/logout (e.g. <img src="/auth/logout">) is
+    closed by making the route POST-only — Flask returns 405."""
+    monkeypatch.setattr(auth_module, "WORKOS_ENABLED", True)
+    with web.app.test_client() as client:
+        resp = client.get("/auth/logout")
+        assert resp.status_code == 405
+
+
+def test_logout_post_clears_cookies(monkeypatch):
+    monkeypatch.setattr(auth_module, "WORKOS_ENABLED", True)
+    with web.app.test_client() as client:
+        resp = client.post("/auth/logout", follow_redirects=False)
+        assert resp.status_code == 302
+        assert resp.headers["Location"].startswith(
+            "https://api.workos.com/user_management/sessions/logout"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Public-path allowlist + auth-gate redirect
 # ---------------------------------------------------------------------------

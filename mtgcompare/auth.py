@@ -218,6 +218,20 @@ def _is_public_path(path: str) -> bool:
     return path in _PUBLIC_EXACT_PATHS or any(path.startswith(p) for p in _PUBLIC_PATH_PREFIXES)
 
 
+def _is_safe_return_to(value: str) -> bool:
+    """True when `value` is a same-origin path the post-login redirect can use.
+
+    `redirect("//evil.com/x")` is treated by browsers as protocol-relative
+    and lands on evil.com — so a `startswith("/")` check is not enough.
+    Reject `//`, `/\\`, and anything that doesn't start with a single `/`.
+    """
+    if not value or not value.startswith("/"):
+        return False
+    if value.startswith(("//", "/\\")):
+        return False
+    return True
+
+
 def _load_user_record(workos_user_id: str) -> dict | None:
     """Read the cached user fields (email, name) from the local users table.
 
@@ -277,7 +291,7 @@ def _auth_gate():
         state = random_state()
         resp = make_response(redirect(authorization_url(state=state)))
         _set_transient_cookie(resp, STATE_COOKIE, state)
-        if request.method == "GET":
+        if request.method == "GET" and _is_safe_return_to(request.full_path):
             _set_transient_cookie(resp, RETURN_TO_COOKIE, request.full_path)
         return resp
 
@@ -314,7 +328,7 @@ def login():
     resp = make_response(redirect(authorization_url(state=state)))
     _set_transient_cookie(resp, STATE_COOKIE, state)
     return_to = request.args.get("return_to", "").strip()
-    if return_to.startswith("/"):
+    if _is_safe_return_to(return_to):
         _set_transient_cookie(resp, RETURN_TO_COOKIE, return_to)
     return resp
 
@@ -341,7 +355,7 @@ def callback():
     _upsert_user(session["user"])
 
     return_to = request.cookies.get(RETURN_TO_COOKIE, "")
-    if not return_to.startswith("/"):
+    if not _is_safe_return_to(return_to):
         return_to = "/"
 
     resp = make_response(redirect(return_to))
@@ -354,7 +368,7 @@ def callback():
     return resp
 
 
-@bp.route("/auth/logout", methods=["GET", "POST"])
+@bp.route("/auth/logout", methods=["POST"])
 def logout():
     if not WORKOS_ENABLED:
         abort(404)

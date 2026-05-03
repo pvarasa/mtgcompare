@@ -3,6 +3,7 @@
 Run: uv run python -m mtgcompare.web
 Visit: http://127.0.0.1:5000
 """
+import hmac
 import json
 import logging.config
 import lzma
@@ -35,20 +36,28 @@ LOGGING_CONF = ROOT_DIR / "logging.conf"
 logging.config.fileConfig(LOGGING_CONF, disable_existing_loggers=False)
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("SECRET_KEY", "mtgcompare-local-dev")
+
+# Production refuses to boot with the dev fallback secret key — it signs
+# CSRF tokens and flask sessions, and the fallback is in the public repo.
+_SECRET_KEY = os.environ.get("SECRET_KEY", "")
+if db.IS_POSTGRES and not _SECRET_KEY:
+    raise RuntimeError(
+        "SECRET_KEY must be set when DATABASE_URL is set "
+        "(production must not use the public dev fallback)."
+    )
+app.secret_key = _SECRET_KEY or "mtgcompare-local-dev"
+
 app.register_blueprint(auth.bp)
 
 # CSRF protection for state-changing POSTs from same-origin templates.
-# /webhooks/workos and /internal/cron/update-prices are exempted because
-# they have their own auth (HMAC and bearer respectively).
+# /webhooks/workos is exempt because it's machine-to-machine and validated
+# via HMAC. /internal/cron/update-prices is exempted at the route level
+# below (bearer-token auth). /auth/login, /auth/callback, /auth/me are GET
+# and never trigger CSRF; /auth/logout is POST and IS protected.
 from flask_wtf.csrf import CSRFProtect  # noqa: E402
 
 csrf = CSRFProtect(app)
-# Exempt the entire auth blueprint:
-#  - /auth/login, /auth/callback, /auth/me are GET (no CSRF risk)
-#  - /auth/logout is idempotent (clears cookies + redirects)
-#  - /webhooks/workos is machine-to-machine, validated via HMAC
-csrf.exempt(auth.bp)
+csrf.exempt(auth.webhook)
 
 
 # Inline <style>/<script> blocks throughout the templates require
@@ -80,6 +89,26 @@ def _security_headers(response):
 _USER_ID_HEADER = os.environ.get("USER_ID_HEADER", "X-User-ID")
 _USER_DISPLAY_HEADER = os.environ.get("USER_DISPLAY_HEADER", "")
 _CRON_SECRET = os.environ.get("CRON_SECRET", "")
+
+# The legacy `USER_ID_HEADER` path trusts an upstream auth proxy to inject
+# the user identity. Now that mtgcompare is publicly reachable without
+# Cloudflare Access, that path must never silently activate — production
+# (PostgreSQL) requires either WorkOS or an explicit opt-in.
+_TRUST_USER_HEADER = os.environ.get("TRUST_USER_HEADER", "") == "1"
+if db.IS_POSTGRES and not auth.WORKOS_ENABLED and not _TRUST_USER_HEADER:
+    raise RuntimeError(
+        "Authentication is unconfigured: set WORKOS_API_KEY/WORKOS_CLIENT_ID/"
+        "WORKOS_REDIRECT_URI to enable WorkOS, or set TRUST_USER_HEADER=1 to "
+        "explicitly opt into the legacy USER_ID_HEADER fallback."
+    )
+
+# Production refuses to boot without a CRON_SECRET — without it the
+# `/internal/cron/update-prices` endpoint is open to the internet.
+if db.IS_POSTGRES and not _CRON_SECRET:
+    raise RuntimeError(
+        "CRON_SECRET must be set when DATABASE_URL is set "
+        "(otherwise /internal/cron/update-prices has no authentication)."
+    )
 
 
 def _get_user_id() -> str:
@@ -1270,8 +1299,9 @@ def cron_update_prices():
     trigger_source = request.headers.get("X-Trigger-Source", "cron")
 
     if _CRON_SECRET:
-        auth = request.headers.get("Authorization", "")
-        if auth != f"Bearer {_CRON_SECRET}":
+        provided = request.headers.get("Authorization", "")
+        expected = f"Bearer {_CRON_SECRET}"
+        if not hmac.compare_digest(provided, expected):
             return jsonify({"ok": False, "error": "Unauthorized"}), 401
 
     inv.init_schema()

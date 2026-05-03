@@ -3,6 +3,9 @@
   <a href="{{ url_for('inventory') }}" class="{% if active == 'inventory' %}active{% endif %}">Inventory</a>
   <a href="{{ url_for('market') }}"    class="{% if active == 'market'    %}active{% endif %}">Market</a>
   {% if workos_enabled %}
-  <a href="{{ url_for('auth.logout') }}" style="margin-left:auto">Sign out</a>
+  <form method="post" action="{{ url_for('auth.logout') }}" class="logout-form" style="margin-left:auto">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit" class="logout-button">Sign out</button>
+  </form>
   {% endif %}
 </nav>
