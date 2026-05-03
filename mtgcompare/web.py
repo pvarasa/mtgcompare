@@ -132,7 +132,10 @@ def _get_display_name() -> str:
     if auth.WORKOS_ENABLED:
         user = getattr(g, "user", None)
         if user:
-            return user.get("email") or user.get("id") or "anonymous"
+            name = " ".join(
+                p for p in (user.get("first_name"), user.get("last_name")) if p
+            ).strip()
+            return name or user.get("email") or user.get("id") or "anonymous"
         return "anonymous"
     if not db.IS_POSTGRES:
         return "local"
