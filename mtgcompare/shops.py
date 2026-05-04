@@ -7,6 +7,7 @@ from .scrappers.blackfrog import BlackFrogScrapper
 from .scrappers.cardrush import CardRushScrapper
 from .scrappers.enndalgames import EnndalGamesScrapper
 from .scrappers.hareruya import HareruyaScrapper
+from .scrappers.mintmall import MintMallScrapper
 from .scrappers.scryfall import ScryfallScrapper
 from .scrappers.serra import CardshopSerraScrapper
 from .scrappers.singlestar import SingleStarScrapper
@@ -20,6 +21,7 @@ SHOP_FLAGS = {
     "Cardshop Serra": "\U0001F1EF\U0001F1F5",
     "ENNDAL GAMES": "\U0001F1EF\U0001F1F5",
     "BLACK FROG": "\U0001F1EF\U0001F1F5",
+    "MINT MALL": "\U0001F1EF\U0001F1F5",
     "TCGPlayer (Scryfall)": "\U0001F1FA\U0001F1F8",
 }
 
@@ -34,6 +36,7 @@ SHIPPING_JPY: dict[str, int] = {
     "Cardshop Serra":       385,
     "ENNDAL GAMES":         385,
     "BLACK FROG":           385,
+    "MINT MALL":            385,
     "TCGPlayer (Scryfall)": 1200,
 }
 
@@ -55,6 +58,7 @@ def build_scrapers(fx: float) -> list:
         ("Card Rush",            CardRushScrapper(fx=fx)),
         ("Cardshop Serra",       CardshopSerraScrapper(fx=fx)),
         ("BLACK FROG",           BlackFrogScrapper(fx=fx)),
+        ("MINT MALL",            MintMallScrapper(fx=fx)),
         # ENNDAL GAMES temporarily disabled — www.enndalgames.com has no A
         # record at the AWS auth NS as of 2026-05-04, so cluster DNS lookups
         # fail. The scraper + tests + canary remain in place; re-enable this

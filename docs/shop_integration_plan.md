@@ -12,13 +12,14 @@ The candidate list comes from the shops that **Wisdom Guild's WONDER** price agg
 - Cardshop Serra (`mtgcompare/scrappers/serra.py`) — first ec-cube shop, biggest indexed inventory (~1.19M)
 - ENNDAL GAMES (`mtgcompare/scrappers/enndalgames.py`) — second-biggest indexed inventory (~493k); custom platform. **Currently disabled in `build_scrapers`** — `www.enndalgames.com` has no A record at the AWS auth NS, so cluster lookups fail. Re-enable when their DNS is restored.
 - BLACK FROG (`mtgcompare/scrappers/blackfrog.py`) — first ColorMe-platform shop (~119k indexed); legacy `/shop/shopbrand.html?search=…` URL, EUC-JP encoded
+- MINT MALL (`mtgcompare/scrappers/mintmall.py`) — multi-tenant ec-cube marketplace (~90k indexed); per-spec stock + price come from a `specificationTreeSearchProductsTree` JS const, not the listing markup
 - TokyoMTG (`mtgcompare/scrappers/tokyomtg.py`) — *not on the WONDER list, separate integration*
 
 **Skipped (data quality):**
 
 - **MTG Guild** (~135k indexed). Listing search and product detail pages neither expose set codes nor have any structured data, breadcrumbs, or JSON-LD from which to extract them. Without set info, our records would pollute price comparisons. Defer until the shop's listing format changes or until we add a set-code inference layer.
 
-Of the 26 shops surfaced by WONDER, we already have 6 (Hareruya, SingleStar, Card Rush, Cardshop Serra, ENNDAL GAMES, BLACK FROG). The remaining 20 are the candidates below.
+Of the 26 shops surfaced by WONDER, we already have 7 (Hareruya, SingleStar, Card Rush, Cardshop Serra, ENNDAL GAMES, BLACK FROG, MINT MALL). The remaining 19 are the candidates below.
 
 ## Wisdom Guild itself — not a viable backend
 
@@ -53,6 +54,7 @@ The 24 unintegrated shops cluster onto 4 e-commerce platforms plus a few customs
 | MINT MALL | https://www.mint-mall.net/ |
 | カードショップ抜忍 | https://nukeninmtg.com/ |
 | ~~Cardshop Serra~~ | ~~https://cardshop-serra.com/mtg~~ — **integrated** |
+| ~~MINT MALL~~ | ~~https://www.mint-mall.net/~~ — **integrated** |
 
 **ocnk.net** platform — search at `/product-list?keyword=…`. UTF-8.
 

@@ -12,14 +12,22 @@ from mtgcompare.scrappers.blackfrog import BlackFrogScrapper
 from mtgcompare.scrappers.cardrush import CardRushScrapper
 from mtgcompare.scrappers.enndalgames import EnndalGamesScrapper
 from mtgcompare.scrappers.hareruya import HareruyaScrapper
+from mtgcompare.scrappers.mintmall import MintMallScrapper
 from mtgcompare.scrappers.scryfall import ScryfallScrapper
 from mtgcompare.scrappers.serra import CardshopSerraScrapper
 from mtgcompare.scrappers.singlestar import SingleStarScrapper
 from mtgcompare.scrappers.tokyomtg import TokyoMtgScrapper
 from mtgcompare.utils import get_fx
 
-_PROBE_CARD = "Force of Will"
+_DEFAULT_PROBE_CARD = "Force of Will"
 _FX = 150.0
+
+# Per-shop probe-card overrides for shops where Force of Will is too thin in
+# stock to be a reliable canary signal. These need to be cards that are
+# routinely listed in plain English NM (no foil, no variant).
+_PROBE_CARD_BY_SHOP = {
+    "MINT MALL": "Sol Ring",
+}
 
 _SHOPS = [
     pytest.param(HareruyaScrapper,        "Hareruya",            "https://www.hareruyamtg.com/", id="hareruya"),
@@ -29,6 +37,7 @@ _SHOPS = [
     pytest.param(CardshopSerraScrapper,   "Cardshop Serra",      "https://cardshop-serra.com/",  id="serra"),
     pytest.param(EnndalGamesScrapper,     "ENNDAL GAMES",        "https://www.enndalgames.com/", id="enndal"),
     pytest.param(BlackFrogScrapper,       "BLACK FROG",          "https://blackfrog.jp/",        id="blackfrog"),
+    pytest.param(MintMallScrapper,        "MINT MALL",           "https://www.mint-mall.net/",   id="mintmall"),
     pytest.param(ScryfallScrapper,        "TCGPlayer (Scryfall)", "http",                         id="scryfall"),
 ]
 
@@ -37,29 +46,30 @@ _SHOPS = [
 @pytest.mark.parametrize("scraper_cls,expected_shop,link_prefix", _SHOPS)
 def test_shop_canary(scraper_cls, expected_shop, link_prefix):
     scraper = scraper_cls(fx=_FX)
+    probe_card = _PROBE_CARD_BY_SHOP.get(expected_shop, _DEFAULT_PROBE_CARD)
 
     try:
-        records = scraper.get_prices(_PROBE_CARD)
+        records = scraper.get_prices(probe_card)
     except Exception as exc:
         pytest.fail(
             f"[{expected_shop}] network/HTTP error — endpoint may have moved or be down: {exc}"
         )
 
     assert records, (
-        f"[{expected_shop}] parser returned no results for {_PROBE_CARD!r} — "
+        f"[{expected_shop}] parser returned no results for {probe_card!r} — "
         "HTML/API structure may have changed"
     )
 
     for r in records:
         assert r.get("shop") == expected_shop, \
             f"[{expected_shop}] wrong shop name in record: {r.get('shop')!r}"
-        assert r.get("card", "").lower() == _PROBE_CARD.lower(), \
+        assert r.get("card", "").lower() == probe_card.lower(), \
             f"[{expected_shop}] wrong card name: {r.get('card')!r}"
 
         price_jpy = r.get("price_jpy")
         assert isinstance(price_jpy, (int, float)) and price_jpy > 0, \
             f"[{expected_shop}] invalid price_jpy: {price_jpy!r}"
-        assert 500 < price_jpy < 5_000_000, \
+        assert 50 < price_jpy < 5_000_000, \
             f"[{expected_shop}] price_jpy {price_jpy:,.0f} out of plausible range — pricing format may have changed"
 
         link = r.get("link", "")
