@@ -51,7 +51,11 @@ def build_scrapers(fx: float) -> list:
         ("TokyoMTG",             TokyoMtgScrapper(fx=fx)),
         ("Card Rush",            CardRushScrapper(fx=fx)),
         ("Cardshop Serra",       CardshopSerraScrapper(fx=fx)),
-        ("ENNDAL GAMES",         EnndalGamesScrapper(fx=fx)),
+        # ENNDAL GAMES temporarily disabled — www.enndalgames.com has no A
+        # record at the AWS auth NS as of 2026-05-04, so cluster DNS lookups
+        # fail. The scraper + tests + canary remain in place; re-enable this
+        # line once dig +short www.enndalgames.com @8.8.8.8 returns an IP.
+        # ("ENNDAL GAMES",         EnndalGamesScrapper(fx=fx)),
     ]
     if not CACHE_ENABLED:
         return [s for _, s in raw]
