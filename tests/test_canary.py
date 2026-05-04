@@ -8,6 +8,7 @@ Run:  uv run pytest -m canary
 import pytest
 import requests
 
+from mtgcompare.scrappers.blackfrog import BlackFrogScrapper
 from mtgcompare.scrappers.cardrush import CardRushScrapper
 from mtgcompare.scrappers.enndalgames import EnndalGamesScrapper
 from mtgcompare.scrappers.hareruya import HareruyaScrapper
@@ -27,6 +28,7 @@ _SHOPS = [
     pytest.param(CardRushScrapper,        "Card Rush",           "https://www.cardrush-mtg.jp/", id="cardrush"),
     pytest.param(CardshopSerraScrapper,   "Cardshop Serra",      "https://cardshop-serra.com/",  id="serra"),
     pytest.param(EnndalGamesScrapper,     "ENNDAL GAMES",        "https://www.enndalgames.com/", id="enndal"),
+    pytest.param(BlackFrogScrapper,       "BLACK FROG",          "https://blackfrog.jp/",        id="blackfrog"),
     pytest.param(ScryfallScrapper,        "TCGPlayer (Scryfall)", "http",                         id="scryfall"),
 ]
 

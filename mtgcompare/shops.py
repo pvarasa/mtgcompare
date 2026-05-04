@@ -3,6 +3,7 @@ import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .cache import DEFAULT_TTL, CachedScrapper
+from .scrappers.blackfrog import BlackFrogScrapper
 from .scrappers.cardrush import CardRushScrapper
 from .scrappers.enndalgames import EnndalGamesScrapper
 from .scrappers.hareruya import HareruyaScrapper
@@ -18,6 +19,7 @@ SHOP_FLAGS = {
     "Card Rush": "\U0001F1EF\U0001F1F5",
     "Cardshop Serra": "\U0001F1EF\U0001F1F5",
     "ENNDAL GAMES": "\U0001F1EF\U0001F1F5",
+    "BLACK FROG": "\U0001F1EF\U0001F1F5",
     "TCGPlayer (Scryfall)": "\U0001F1FA\U0001F1F8",
 }
 
@@ -31,6 +33,7 @@ SHIPPING_JPY: dict[str, int] = {
     "Card Rush":            385,
     "Cardshop Serra":       385,
     "ENNDAL GAMES":         385,
+    "BLACK FROG":           385,
     "TCGPlayer (Scryfall)": 1200,
 }
 
@@ -51,6 +54,7 @@ def build_scrapers(fx: float) -> list:
         ("TokyoMTG",             TokyoMtgScrapper(fx=fx)),
         ("Card Rush",            CardRushScrapper(fx=fx)),
         ("Cardshop Serra",       CardshopSerraScrapper(fx=fx)),
+        ("BLACK FROG",           BlackFrogScrapper(fx=fx)),
         # ENNDAL GAMES temporarily disabled — www.enndalgames.com has no A
         # record at the AWS auth NS as of 2026-05-04, so cluster DNS lookups
         # fail. The scraper + tests + canary remain in place; re-enable this

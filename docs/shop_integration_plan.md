@@ -10,10 +10,15 @@ The candidate list comes from the shops that **Wisdom Guild's WONDER** price agg
 - SingleStar — シングルスター (`mtgcompare/scrappers/singlestar.py`)
 - Card Rush — カードラッシュ (`mtgcompare/scrappers/cardrush.py`) — first ocnk.net shop
 - Cardshop Serra (`mtgcompare/scrappers/serra.py`) — first ec-cube shop, biggest indexed inventory (~1.19M)
-- ENNDAL GAMES (`mtgcompare/scrappers/enndalgames.py`) — second-biggest indexed inventory (~493k); custom platform
+- ENNDAL GAMES (`mtgcompare/scrappers/enndalgames.py`) — second-biggest indexed inventory (~493k); custom platform. **Currently disabled in `build_scrapers`** — `www.enndalgames.com` has no A record at the AWS auth NS, so cluster lookups fail. Re-enable when their DNS is restored.
+- BLACK FROG (`mtgcompare/scrappers/blackfrog.py`) — first ColorMe-platform shop (~119k indexed); legacy `/shop/shopbrand.html?search=…` URL, EUC-JP encoded
 - TokyoMTG (`mtgcompare/scrappers/tokyomtg.py`) — *not on the WONDER list, separate integration*
 
-Of the 26 shops surfaced by WONDER, we already have 5 (Hareruya, SingleStar, Card Rush, Cardshop Serra, ENNDAL GAMES). The remaining 21 are the candidates below.
+**Skipped (data quality):**
+
+- **MTG Guild** (~135k indexed). Listing search and product detail pages neither expose set codes nor have any structured data, breadcrumbs, or JSON-LD from which to extract them. Without set info, our records would pollute price comparisons. Defer until the shop's listing format changes or until we add a set-code inference layer.
+
+Of the 26 shops surfaced by WONDER, we already have 6 (Hareruya, SingleStar, Card Rush, Cardshop Serra, ENNDAL GAMES, BLACK FROG). The remaining 20 are the candidates below.
 
 ## Wisdom Guild itself — not a viable backend
 
@@ -34,10 +39,10 @@ The 24 unintegrated shops cluster onto 4 e-commerce platforms plus a few customs
 
 | Shop | URL |
 |---|---|
-| BLACK FROG | https://blackfrog.jp/ |
+| ~~BLACK FROG~~ | ~~https://blackfrog.jp/~~ — **integrated** |
 | CARDMAX | https://www.cardmax.jp/ |
 | Gemutlich | https://www.mtg-gemutlich.shop/ |
-| MTG Guild | https://mtg-guild.com/ |
+| ~~MTG Guild~~ | ~~https://mtg-guild.com/~~ — **deferred** (no set codes in listing or detail) |
 | TCG SHOP Suzunone | https://tcgshop-suzunone.com/ |
 
 **ec-cube** platform — search at `/products/list?name=…`. UTF-8.
