@@ -27,4 +27,8 @@ EXPOSE 5000
 
 USER mtgc
 
-CMD ["gunicorn", "--workers=1", "--threads=4", "--bind=0.0.0.0:5000", "--access-logfile=-", "--error-logfile=-", "mtgcompare.web:app"]
+# Two workers so a long decklist search saturating one worker leaves the
+# other free for /healthz and other UI traffic. --timeout=120 covers the
+# realistic worst-case decklist (76s measured for a 32-card cold search);
+# the gunicorn default of 30s would silently kill those requests.
+CMD ["gunicorn", "--workers=2", "--threads=4", "--timeout=120", "--bind=0.0.0.0:5000", "--access-logfile=-", "--error-logfile=-", "mtgcompare.web:app"]
