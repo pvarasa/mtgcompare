@@ -153,13 +153,16 @@ def replace_listings(
     shop: str,
     card_name: str,
     records: list[dict],
-    source: str = "search",
     now: Optional[datetime] = None,
 ) -> None:
     """Atomically replace every cached listing for (shop, card_name).
 
     Old rows that aren't in ``records`` disappear — that's how stock that's
     been sold out / delisted gets evicted from the cache.
+
+    The ``source`` column on ``shop_listings`` is left at its server default
+    of ``"search"`` for rows written here; a future bulk crawler can pass
+    its own value when that path is built.
     """
     timestamp = now or _now()
     conn.execute(
@@ -181,7 +184,6 @@ def replace_listings(
         "stock": r.get("stock"),
         "url": r.get("link"),
         "last_checked": timestamp,
-        "source": source,
     } for r in records]
     cols = list(rows[0].keys())
     placeholders = ", ".join(f":{c}" for c in cols)

@@ -239,8 +239,13 @@ def _stream_to_ndjson(
 # Step 2: DuckDB load NDJSON → price_rows
 # ---------------------------------------------------------------------------
 
-def _build_load_sql(ndjson_str: str, *, upsert: bool) -> str:
-    """Return DuckDB SQL that loads price_rows from the given NDJSON file.
+def _build_load_sql(*, upsert: bool) -> str:
+    """Return DuckDB SQL that loads price_rows from a parameterized NDJSON path.
+
+    The NDJSON file path is bound at execute time via a ``?`` placeholder so
+    callers must pass it as a positional parameter — keeps server-controlled
+    paths out of the SQL string and makes injection through path interpolation
+    impossible.
 
     upsert=False: plain INSERT INTO (table must be empty; no conflict check).
     upsert=True:  INSERT OR REPLACE INTO (upserts into existing table).
@@ -254,7 +259,7 @@ WITH src AS (
         json_transform("normal",  '"MAP(VARCHAR, DOUBLE)"') AS normal_map,
         json_transform("foil",    '"MAP(VARCHAR, DOUBLE)"') AS foil_map,
         json_transform("etched",  '"MAP(VARCHAR, DOUBLE)"') AS etched_map
-    FROM read_ndjson('{ndjson_str}',
+    FROM read_ndjson(?,
                      columns = {{uuid: 'VARCHAR', normal: 'JSON', foil: 'JSON', etched: 'JSON'}})
 )
 SELECT uuid, 'normal' AS finish,
@@ -305,11 +310,10 @@ def rebuild_history_db(
     if progress_cb:
         progress_cb(52, "Building DuckDB price DB", f"Streamed {uuid_count:,} cards. Loading into DuckDB...")
 
-    ndjson_str = str(ndjson_path).replace("\\", "/")
     conn = duckdb.connect(str(duckdb_tmp))
     try:
         conn.execute(_DUCKDB_SCHEMA)
-        conn.execute(_build_load_sql(ndjson_str, upsert=False))
+        conn.execute(_build_load_sql(upsert=False), [str(ndjson_path)])
         row_count: int = conn.execute("SELECT COUNT(*) FROM price_rows").fetchone()[0]
     finally:
         conn.close()
@@ -326,13 +330,6 @@ def rebuild_history_db(
         progress_cb(92, "Finishing import", f"Local MTGJSON history DB ready with {row_count:,} price points.")
 
     return row_count
-
-
-def _duckdb_to_csv(duck_conn: "duckdb.DuckDBPyConnection", csv_path: Path) -> int:
-    """Export DuckDB price_rows to CSV. Returns row count."""
-    csv_str = str(csv_path).replace("\\", "/")
-    duck_conn.execute(f"COPY price_rows TO '{csv_str}' WITH (FORMAT CSV, HEADER FALSE, NULL '')")
-    return duck_conn.execute("SELECT COUNT(*) FROM price_rows").fetchone()[0]
 
 
 def _ndjson_to_csv(ndjson_path: Path, csv_path: Path) -> int:
@@ -503,20 +500,18 @@ def merge_today_prices(
     if progress_cb:
         progress_cb(58, "Merging today's prices", f"Streamed {uuid_count:,} cards. Upserting into DuckDB...")
 
-    ndjson_str = str(ndjson_path).replace("\\", "/")
-
     # Count rows in today's file before touching the persistent DB.
     tmp = duckdb.connect(":memory:")
     try:
         tmp.execute(_DUCKDB_SCHEMA)
-        tmp.execute(_build_load_sql(ndjson_str, upsert=False))
+        tmp.execute(_build_load_sql(upsert=False), [str(ndjson_path)])
         row_count: int = tmp.execute("SELECT COUNT(*) FROM price_rows").fetchone()[0]
     finally:
         tmp.close()
 
     conn = duckdb.connect(str(duckdb_path))
     try:
-        conn.execute(_build_load_sql(ndjson_str, upsert=True))
+        conn.execute(_build_load_sql(upsert=True), [str(ndjson_path)])
     finally:
         conn.close()
 

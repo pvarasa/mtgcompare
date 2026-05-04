@@ -186,34 +186,6 @@ def test_deduct_inventory_multiple_lots_aggregated():
     assert needed["dark ritual"] == 1
 
 
-def test_fetch_card_prices_uses_shared_collector(monkeypatch):
-    expected = [{"shop": "Test Shop", "price_jpy": 100}]
-
-    def fake_collect_prices(card_name, fx, *, enabled=None, logger=None):
-        assert card_name == "Force of Will"
-        assert fx == 150.0
-        assert logger is web.app.logger
-        assert enabled is None
-        return expected
-
-    monkeypatch.setattr(web, "collect_prices", fake_collect_prices)
-
-    assert web._fetch_card_prices("Force of Will", 150.0) == expected
-
-
-def test_fetch_card_prices_passes_enabled_filter(monkeypatch):
-    """The decklist worker must propagate the shop filter to collect_prices."""
-    captured = {}
-
-    def fake_collect_prices(card_name, fx, *, enabled=None, logger=None):
-        captured["enabled"] = enabled
-        return []
-
-    monkeypatch.setattr(web, "collect_prices", fake_collect_prices)
-    web._fetch_card_prices("Force of Will", 150.0, {"Hareruya", "Card Rush"})
-    assert captured["enabled"] == {"Hareruya", "Card Rush"}
-
-
 def test_history_cutoff_for_known_period():
     now = datetime(2026, 4, 22, tzinfo=timezone.utc)
     assert web._history_cutoff("1m", now=now) == datetime(2026, 3, 23, tzinfo=timezone.utc)
@@ -265,10 +237,15 @@ def test_get_user_id_reads_header_in_postgres_mode(monkeypatch):
         assert web._get_user_id() == "alice"
 
 
-def test_get_user_id_defaults_to_anonymous_when_header_absent(monkeypatch):
+def test_get_user_id_aborts_when_header_absent(monkeypatch):
+    """A missing USER_ID_HEADER in Postgres-without-WorkOS mode must 403,
+    not fall back to a shared 'anonymous' bucket — a misconfigured proxy
+    that drops the header would otherwise cross-contaminate inventories."""
+    from werkzeug.exceptions import Forbidden
     monkeypatch.setattr(db_module, "IS_POSTGRES", True)
     with web.app.test_request_context("/"):
-        assert web._get_user_id() == "anonymous"
+        with pytest.raises(Forbidden):
+            web._get_user_id()
 
 
 def test_get_user_id_respects_custom_header_name(monkeypatch):

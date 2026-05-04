@@ -15,11 +15,22 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from threading import Lock, Thread
 from time import monotonic
+from typing import Callable
 from uuid import uuid4
 
 import duckdb
 import requests
-from flask import Flask, flash, g, jsonify, redirect, render_template, request, url_for
+from flask import (
+    Flask,
+    abort,
+    flash,
+    g,
+    jsonify,
+    redirect,
+    render_template,
+    request,
+    url_for,
+)
 from sqlalchemy import text
 
 from . import auth, db, history_import, run_log
@@ -118,14 +129,20 @@ def _get_user_id() -> str:
     - WorkOS active: the verified JWT subject (set on `g.user_id` by the
       auth middleware).
     - Postgres without WorkOS: legacy header-trust path so docker-compose
-      dev stacks keep working without WorkOS env vars.
+      dev stacks keep working without WorkOS env vars. The header is
+      required: a missing or empty value aborts the request rather than
+      falling back to a shared bucket, so a misconfigured proxy can't
+      cross-contaminate inventories.
     - SQLite: always 'local'.
     """
     if auth.WORKOS_ENABLED:
         return getattr(g, "user_id", "anonymous")
     if not db.IS_POSTGRES:
         return "local"
-    return request.headers.get(_USER_ID_HEADER, "anonymous").strip() or "anonymous"
+    header_value = request.headers.get(_USER_ID_HEADER, "").strip()
+    if not header_value:
+        abort(403)
+    return header_value
 
 
 def _get_display_name() -> str:
@@ -322,10 +339,6 @@ def _parse_decklist(text: str) -> list[tuple[int, str]]:
     return result
 
 
-def _fetch_card_prices(card_name: str, fx: float, enabled: set[str] | None = None) -> list[dict]:
-    return collect_prices(card_name, fx, enabled=enabled, logger=app.logger)
-
-
 def _deduct_inventory(
     name_qty: dict[str, int],
     inv_map: dict[str, int],
@@ -342,6 +355,151 @@ def _deduct_inventory(
         name_inv_qty[key] = have
         name_needed[key] = wanted - have
     return name_inv_qty, name_needed
+
+
+def _consolidate_decklist(
+    card_items: list[tuple[int, str]],
+) -> tuple[dict[str, int], dict[str, str]]:
+    """Sum duplicate lines and remember the first-seen casing of each name."""
+    name_qty: dict[str, int] = {}
+    name_canonical: dict[str, str] = {}
+    for qty, name in card_items:
+        key = name.lower()
+        name_qty[key] = name_qty.get(key, 0) + qty
+        if key not in name_canonical:
+            name_canonical[key] = name
+    return name_qty, name_canonical
+
+
+def _fetch_decklist_prices(
+    names_to_search: list[str],
+    name_canonical: dict[str, str],
+    fx: float,
+    enabled_shops: set[str] | None,
+) -> dict[str, list[dict]]:
+    """Fan out one shop search per distinct name and collect price rows.
+
+    Returns a mapping ``{lower_name: sorted_rows}``. Per-name failures are
+    logged and produce an empty list rather than aborting the whole batch.
+    """
+    prices_by_name: dict[str, list[dict]] = {n: [] for n in names_to_search}
+    if not names_to_search:
+        return prices_by_name
+    with ThreadPoolExecutor(max_workers=min(len(names_to_search), 6)) as executor:
+        future_to_name = {
+            executor.submit(
+                collect_prices, name_canonical[n], fx,
+                enabled=enabled_shops, logger=app.logger,
+            ): n
+            for n in names_to_search
+        }
+        for future in as_completed(future_to_name):
+            n = future_to_name[future]
+            try:
+                prices_by_name[n] = future.result()
+            except Exception as exc:
+                app.logger.error("Price fetch failed for %r: %s", name_canonical[n], exc)
+    for n in names_to_search:
+        prices_by_name[n].sort(key=lambda r: r["price_jpy"])
+    return prices_by_name
+
+
+def _build_card_rows(
+    name_qty: dict[str, int],
+    name_canonical: dict[str, str],
+    name_inv_qty: dict[str, int],
+    name_needed: dict[str, int],
+    prices_by_name: dict[str, list[dict]],
+) -> list[dict]:
+    """Project the per-name state into the row shape the template expects."""
+    rows = []
+    for n in sorted(name_qty, key=lambda x: name_canonical[x].lower()):
+        results = prices_by_name.get(n, [])
+        qty_needed = name_needed[n]
+        rows.append({
+            "name": name_canonical[n],
+            "qty": name_qty[n],
+            "qty_inventory": name_inv_qty[n],
+            "qty_needed": qty_needed,
+            "best": results[0] if (results and qty_needed > 0) else None,
+            "all": results,
+        })
+    return rows
+
+
+def _compute_shop_totals(
+    card_rows: list[dict],
+    shipping_overrides_jpy: dict[str, int],
+    fx: float | None,
+) -> tuple[list[dict], dict[str, float]]:
+    """Aggregate per-shop totals and grand totals from already-built card rows.
+
+    Returns ``(shop_list_sorted_by_total_desc, grand_totals)`` where
+    ``grand_totals`` carries USD/JPY raw + with-shipping figures plus
+    ``shipping_total_jpy`` for the template.
+    """
+    shop_totals: dict[str, dict] = {}
+    grand_total_usd = 0.0
+    grand_total_jpy = 0.0
+
+    for row in card_rows:
+        if row["best"] is None:
+            continue
+        shop = row["best"]["shop"]
+        qty = row["qty_needed"]
+        unit_usd = row["best"]["price_usd"]
+        unit_jpy = row["best"]["price_jpy"]
+        grand_total_usd += unit_usd * qty
+        grand_total_jpy += unit_jpy * qty
+        if shop not in shop_totals:
+            ship_jpy = shipping_overrides_jpy.get(shop, SHIPPING_JPY.get(shop, 0))
+            shop_totals[shop] = {
+                "shop": shop,
+                "unique_cards": 0,
+                "total_copies": 0,
+                "total_usd": 0.0,
+                "total_jpy": 0.0,
+                "shipping_jpy": ship_jpy,
+                "shipping_usd": round(ship_jpy / fx, 2) if fx else 0.0,
+            }
+        shop_totals[shop]["unique_cards"] += 1
+        shop_totals[shop]["total_copies"] += qty
+        shop_totals[shop]["total_usd"] += unit_usd * qty
+        shop_totals[shop]["total_jpy"] += unit_jpy * qty
+
+    for s in shop_totals.values():
+        s["total_usd_with_shipping"] = round(s["total_usd"] + s["shipping_usd"], 2)
+        s["total_jpy_with_shipping"] = round(s["total_jpy"] + s["shipping_jpy"], 0)
+
+    shop_list = sorted(shop_totals.values(), key=lambda s: -s["total_usd_with_shipping"])
+
+    shipping_total_jpy = sum(s["shipping_jpy"] for s in shop_totals.values())
+    shipping_total_usd = round(shipping_total_jpy / fx, 2) if fx else 0.0
+    grand_totals = {
+        "grand_total_usd": grand_total_usd,
+        "grand_total_jpy": grand_total_jpy,
+        "grand_total_usd_with_shipping": round(grand_total_usd + shipping_total_usd, 2),
+        "grand_total_jpy_with_shipping": round(grand_total_jpy + shipping_total_jpy, 0),
+        "shipping_total_jpy": shipping_total_jpy,
+    }
+    return shop_list, grand_totals
+
+
+def _load_inventory_qty_map(use_inventory: bool) -> dict[str, int]:
+    """Return ``{lower_card_name: total_quantity}`` for the current user.
+
+    Returns an empty dict when ``use_inventory`` is False so callers can
+    treat the "not deducting" case the same as "deducting from nothing".
+    """
+    if not use_inventory:
+        return {}
+    inv.init_schema()
+    user_id = _get_user_id()
+    inv_map: dict[str, int] = {}
+    for row in inv.list_all(user_id):
+        k = row["card_name"].lower()
+        inv_map[k] = inv_map.get(k, 0) + row["quantity"]
+    return inv_map
 
 
 @app.route("/decklist", methods=["POST"])
@@ -381,112 +539,31 @@ def decklist_search():
             "Trim it or split into multiple searches."
         )
 
-    # Consolidate duplicate names, preserve first-seen casing
-    name_qty: dict[str, int] = {}
-    name_canonical: dict[str, str] = {}
-    for qty, name in card_items:
-        key = name.lower()
-        name_qty[key] = name_qty.get(key, 0) + qty
-        if key not in name_canonical:
-            name_canonical[key] = name
-
-    # Build inventory map and compute how many we still need to buy
-    inv_map: dict[str, int] = {}
-    if use_inventory:
-        inv.init_schema()
-        user_id = _get_user_id()
-        for row in inv.list_all(user_id):
-            k = row["card_name"].lower()
-            inv_map[k] = inv_map.get(k, 0) + row["quantity"]
-
+    name_qty, name_canonical = _consolidate_decklist(card_items)
+    inv_map = _load_inventory_qty_map(use_inventory)
     name_inv_qty, name_needed = _deduct_inventory(name_qty, inv_map)
-
     names_to_search = [n for n in name_qty if name_needed[n] > 0]
-    prices_by_name: dict[str, list[dict]] = {n: [] for n in name_qty}
 
     fx = _get_fx()
     if fx is None and names_to_search:
         return _early_return("Could not fetch FX rate; try again later.")
 
-    if names_to_search and fx is not None:
-        with ThreadPoolExecutor(max_workers=min(len(names_to_search), 6)) as executor:
-            future_to_name = {
-                executor.submit(_fetch_card_prices, name_canonical[n], fx, enabled_shops): n
-                for n in names_to_search
-            }
-            for future in as_completed(future_to_name):
-                n = future_to_name[future]
-                try:
-                    prices_by_name[n] = future.result()
-                except Exception as exc:
-                    app.logger.error("Price fetch failed for %r: %s", name_canonical[n], exc)
+    prices_by_name = (
+        _fetch_decklist_prices(names_to_search, name_canonical, fx, enabled_shops)
+        if fx is not None else {n: [] for n in names_to_search}
+    )
+    # Names without unmet need still need an empty entry for the template.
+    for n in name_qty:
+        prices_by_name.setdefault(n, [])
 
-    for n in names_to_search:
-        prices_by_name[n].sort(key=lambda r: r["price_jpy"])
-
-    card_rows = []
-    for n in sorted(name_qty, key=lambda x: name_canonical[x].lower()):
-        results = prices_by_name[n]
-        qty_needed = name_needed[n]
-        card_rows.append({
-            "name": name_canonical[n],
-            "qty": name_qty[n],
-            "qty_inventory": name_inv_qty[n],
-            "qty_needed": qty_needed,
-            "best": results[0] if (results and qty_needed > 0) else None,
-            "all": results,
-        })
-
-    shop_totals: dict[str, dict] = {}
-    grand_total_usd = 0.0
-    grand_total_jpy = 0.0
-
-    for row in card_rows:
-        if row["best"] is None:
-            continue
-        shop = row["best"]["shop"]
-        qty = row["qty_needed"]
-        unit_usd = row["best"]["price_usd"]
-        unit_jpy = row["best"]["price_jpy"]
-        grand_total_usd += unit_usd * qty
-        grand_total_jpy += unit_jpy * qty
-        if shop not in shop_totals:
-            ship_jpy = shipping_overrides_jpy.get(shop, SHIPPING_JPY.get(shop, 0))
-            shop_totals[shop] = {
-                "shop": shop,
-                "unique_cards": 0,
-                "total_copies": 0,
-                "total_usd": 0.0,
-                "total_jpy": 0.0,
-                "shipping_jpy": ship_jpy,
-                "shipping_usd": round(ship_jpy / fx, 2) if fx else 0.0,
-            }
-        shop_totals[shop]["unique_cards"] += 1
-        shop_totals[shop]["total_copies"] += qty
-        shop_totals[shop]["total_usd"] += unit_usd * qty
-        shop_totals[shop]["total_jpy"] += unit_jpy * qty
-
-    for s in shop_totals.values():
-        s["total_usd_with_shipping"] = round(s["total_usd"] + s["shipping_usd"], 2)
-        s["total_jpy_with_shipping"] = round(s["total_jpy"] + s["shipping_jpy"], 0)
-
-    shop_list = sorted(shop_totals.values(), key=lambda s: -s["total_usd_with_shipping"])
-
-    shipping_total_jpy = sum(s["shipping_jpy"] for s in shop_totals.values())
-    shipping_total_usd = round(shipping_total_jpy / fx, 2) if fx else 0.0
-    grand_total_usd_with_shipping = round(grand_total_usd + shipping_total_usd, 2)
-    grand_total_jpy_with_shipping = round(grand_total_jpy + shipping_total_jpy, 0)
+    card_rows = _build_card_rows(name_qty, name_canonical, name_inv_qty, name_needed, prices_by_name)
+    shop_list, totals = _compute_shop_totals(card_rows, shipping_overrides_jpy, fx)
 
     return render_template(
         "decklist.html",
         decklist=text,
         card_rows=card_rows,
         shop_list=shop_list,
-        grand_total_usd=grand_total_usd,
-        grand_total_jpy=grand_total_jpy,
-        grand_total_usd_with_shipping=grand_total_usd_with_shipping,
-        grand_total_jpy_with_shipping=grand_total_jpy_with_shipping,
-        shipping_total_jpy=shipping_total_jpy,
         fx=fx,
         shop_flags=SHOP_FLAGS,
         shipping_config=ship_cfg,
@@ -495,6 +572,7 @@ def decklist_search():
         active="search",
         error=None,
         use_inventory=use_inventory,
+        **totals,
     )
 
 
@@ -510,10 +588,6 @@ def _format_ago(iso: str | None) -> str | None:
         return f"{sec // 86400} days ago"
     except Exception:
         return iso
-
-
-_SCRYFALL_COLLECTION = "https://api.scryfall.com/cards/collection"
-_SCRYFALL_HEADERS = {"User-Agent": "mtgcompare/0.1", "Accept": "application/json"}
 
 
 _MARKET_HISTORY_PERIODS = {
@@ -811,16 +885,20 @@ def _populate_market_prices_from_history(
     else:
         if not duckdb_path or not duckdb_path.exists():
             return
-        uuid_str = ", ".join(f"'{u}'" for u, _ in uuid_to_db_key)
+        uuid_list = list({u for (u, _) in uuid_to_db_key})
+        placeholders = ", ".join("?" for _ in uuid_list)
         with _history_duckdb_lock:
             conn_duck = duckdb.connect(str(duckdb_path), read_only=True)
             try:
-                rows = conn_duck.execute(f"""
+                rows = conn_duck.execute(
+                    f"""
                     SELECT uuid, finish, price_usd
                     FROM price_rows
-                    WHERE uuid IN ({uuid_str})
+                    WHERE uuid IN ({placeholders})
                     QUALIFY ROW_NUMBER() OVER (PARTITION BY uuid, finish ORDER BY market_date DESC) = 1
-                """).fetchall()
+                    """,
+                    uuid_list,
+                ).fetchall()
             finally:
                 conn_duck.close()
         latest = {(r[0], r[1]): r[2] for r in rows}
@@ -839,37 +917,50 @@ def _populate_market_prices_from_history(
         db.upsert(conn, "market_prices", ["card_name", "set_code", "is_foil"], inserts)
 
 
-def _import_mtgjson_history(rows: list[dict], *, progress_cb=None) -> tuple[int, int]:
-    def _progress(progress: int, phase: str, detail: str) -> None:
-        if progress_cb:
-            progress_cb(progress, phase, detail)
+def _row_key_for_mapping(row: dict) -> tuple[str, str, str, int]:
+    """Identity key for an inventory row in the MTGJSON map table."""
+    return (
+        row["card_name"].lower(),
+        _normalize_set_code(row["set_code"], upper=True),
+        (row.get("card_number") or "").strip(),
+        int(_is_foil(row.get("printing"))),
+    )
 
-    inventory_rows = [dict(row) for row in rows]
-    downloaded_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
-    def _row_key(row: dict) -> tuple[str, str, str, int]:
-        return (
-            row["card_name"].lower(),
-            _normalize_set_code(row["set_code"], upper=True),
-            (row.get("card_number") or "").strip(),
-            int(_is_foil(row.get("printing"))),
-        )
-
-    # Load existing mappings so we can skip sets that are already fully resolved.
+def _load_existing_card_map() -> dict[tuple[str, str, str, int], str]:
+    """Read mtgjson_card_map keyed by row identity for fast lookup."""
     with db.get_conn() as conn:
         existing_rows = conn.execute(
             text("SELECT card_name, set_code, card_number, is_foil, uuid FROM mtgjson_card_map")
         ).mappings().all()
-    existing_uuid: dict[tuple[str, str, str, int], str] = {
+    return {
         (r["card_name"].lower(), r["set_code"], r["card_number"], r["is_foil"]): r["uuid"]
         for r in existing_rows
     }
 
-    # Only load XZ files for sets that have at least one unmapped inventory row.
+
+def _resolve_inventory_uuids(
+    inventory_rows: list[dict],
+    downloaded_at: str,
+    progress: Callable[[int, str, str], None],
+) -> tuple[list[tuple[str, str, str, int, str, str]], set[str]]:
+    """Map every inventory lot to an MTGJSON UUID.
+
+    Downloads MTGJSON set files only for sets that have at least one
+    unmapped lot — already-resolved sets are taken from
+    ``mtgjson_card_map`` directly.
+
+    Returns ``(card_maps, sets_needing_load)`` where ``card_maps`` is the
+    full list of resolvable lots with their UUIDs, and ``sets_needing_load``
+    is the set of normalized set codes whose mapping rows should be
+    refreshed (used by the caller to evict stale rows before upsert).
+    """
+    existing_uuid = _load_existing_card_map()
+
     sets_needing_load: set[str] = {
         _normalize_set_code(row["set_code"], upper=True)
         for row in inventory_rows
-        if row.get("set_code") and _row_key(row) not in existing_uuid
+        if row.get("set_code") and _row_key_for_mapping(row) not in existing_uuid
     }
 
     candidates_by_set: dict[str, dict[tuple[str, str, str], dict[str, str]]] = {}
@@ -877,7 +968,7 @@ def _import_mtgjson_history(rows: list[dict], *, progress_cb=None) -> tuple[int,
     if sets_to_load:
         total_to_load = len(sets_to_load)
         for index, set_code in enumerate(sets_to_load, start=1):
-            _progress(
+            progress(
                 5 + round(index / total_to_load * 20),
                 "Downloading set data",
                 f"Downloading MTGJSON set file for {set_code} ({index}/{total_to_load})...",
@@ -890,12 +981,12 @@ def _import_mtgjson_history(rows: list[dict], *, progress_cb=None) -> tuple[int,
             resolved_set_code, set_path = resolved
             candidates_by_set[set_code] = _candidate_uuid_map(_load_set_cards(set_path), resolved_set_code)
     else:
-        _progress(25, "Set data", "All sets already mapped — skipping set file load.")
+        progress(25, "Set data", "All sets already mapped — skipping set file load.")
 
-    _progress(28, "Mapping inventory", "Resolving MTGJSON card UUIDs for inventory lots...")
+    progress(28, "Mapping inventory", "Resolving MTGJSON card UUIDs for inventory lots...")
     card_maps: list[tuple[str, str, str, int, str, str]] = []
     for row in inventory_rows:
-        key = _row_key(row)
+        key = _row_key_for_mapping(row)
         set_code = _normalize_set_code(row["set_code"], upper=True)
         if set_code in sets_needing_load:
             uuid = _resolve_candidate_uuid(row, candidates_by_set.get(set_code, {}))
@@ -907,38 +998,63 @@ def _import_mtgjson_history(rows: list[dict], *, progress_cb=None) -> tuple[int,
         card_number = (row.get("card_number") or "").strip()
         card_maps.append((row["card_name"], set_code, card_number, is_foil, uuid, downloaded_at))
 
-    history_duckdb_path = _mtgjson_history_duckdb_path()
-    history_row_count = 0
+    return card_maps, sets_needing_load
 
+
+def _ensure_history_loaded(
+    history_duckdb_path: Path,
+    progress: Callable[[int, str, str], None],
+) -> int:
+    """Ensure MTGJSON price history is loaded into the active backend.
+
+    Downloads AllPrices.json.xz and runs the rebuild pipeline (DuckDB or
+    PostgreSQL depending on ``db.IS_POSTGRES``) only when the local store
+    is empty. Returns the row count written, or 0 if the existing store
+    was reused (caller can fall back to the meta table for the count).
+    """
     needs_history = (
         (db.IS_POSTGRES and not _has_price_history())
         or (not db.IS_POSTGRES and not history_duckdb_path.exists())
     )
-    if needs_history:
-        history_path = _mtgjson_history_path()
-        _progress(32, "Downloading history", "Downloading MTGJSON AllPrices history...")
-        try:
-            _download_file(f"{_MTGJSON_BASE_URL}/AllPrices.json.xz", history_path)
-        except requests.HTTPError as exc:
-            if exc.response is not None and exc.response.status_code == 404:
-                raise RuntimeError(
-                    "MTGJSON price files are temporarily unavailable. Please try again later."
-                ) from exc
-            raise
-        if db.IS_POSTGRES:
-            history_row_count = history_import.rebuild_history_pg(
-                history_path, db.engine, progress_cb=_progress,
-            )
-        else:
-            with _history_duckdb_lock:
-                history_row_count = history_import.rebuild_history_db(
-                    history_path, history_duckdb_path, progress_cb=_progress,
-                )
-        history_path.unlink(missing_ok=True)
-    else:
-        _progress(40, "History ready", "Using existing price history.")
+    if not needs_history:
+        progress(40, "History ready", "Using existing price history.")
+        return 0
 
-    _progress(96, "Saving mappings", "Updating local card-to-MTGJSON mappings...")
+    history_path = _mtgjson_history_path()
+    progress(32, "Downloading history", "Downloading MTGJSON AllPrices history...")
+    try:
+        _download_file(f"{_MTGJSON_BASE_URL}/AllPrices.json.xz", history_path)
+    except requests.HTTPError as exc:
+        if exc.response is not None and exc.response.status_code == 404:
+            raise RuntimeError(
+                "MTGJSON price files are temporarily unavailable. Please try again later."
+            ) from exc
+        raise
+    try:
+        if db.IS_POSTGRES:
+            return history_import.rebuild_history_pg(
+                history_path, db.engine, progress_cb=progress,
+            )
+        with _history_duckdb_lock:
+            return history_import.rebuild_history_db(
+                history_path, history_duckdb_path, progress_cb=progress,
+            )
+    finally:
+        history_path.unlink(missing_ok=True)
+
+
+def _persist_card_map_and_meta(
+    card_maps: list[tuple[str, str, str, int, str, str]],
+    sets_needing_load: set[str],
+    downloaded_at: str,
+    history_row_count: int,
+) -> int:
+    """Write fresh mtgjson_card_map rows + history meta. Returns effective row count.
+
+    If ``history_row_count`` is 0 (existing history was reused), reads the
+    last persisted count from the meta table so callers can report a
+    consistent number.
+    """
     with db.get_conn() as conn:
         if sets_needing_load:
             params = {f"s{i}": s for i, s in enumerate(sets_needing_load)}
@@ -961,10 +1077,32 @@ def _import_mtgjson_history(rows: list[dict], *, progress_cb=None) -> tuple[int,
             _write_meta(conn, "mtgjson_history_db_built_at", downloaded_at)
             _write_meta(conn, "mtgjson_history_db_row_count", str(history_row_count))
 
-    if not history_row_count:
-        with db.get_conn() as conn:
-            row_count = _read_meta(conn, "mtgjson_history_db_row_count")
-            history_row_count = int(row_count) if row_count else 0
+    if history_row_count:
+        return history_row_count
+    with db.get_conn() as conn:
+        row_count = _read_meta(conn, "mtgjson_history_db_row_count")
+    return int(row_count) if row_count else 0
+
+
+def _import_mtgjson_history(rows: list[dict], *, progress_cb=None) -> tuple[int, int]:
+    def _progress(progress: int, phase: str, detail: str) -> None:
+        if progress_cb:
+            progress_cb(progress, phase, detail)
+
+    inventory_rows = [dict(row) for row in rows]
+    downloaded_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    card_maps, sets_needing_load = _resolve_inventory_uuids(
+        inventory_rows, downloaded_at, _progress,
+    )
+
+    history_duckdb_path = _mtgjson_history_duckdb_path()
+    history_row_count = _ensure_history_loaded(history_duckdb_path, _progress)
+
+    _progress(96, "Saving mappings", "Updating local card-to-MTGJSON mappings...")
+    history_row_count = _persist_card_map_and_meta(
+        card_maps, sets_needing_load, downloaded_at, history_row_count,
+    )
 
     _progress(98, "Updating prices", "Writing latest prices to market table...")
     _populate_market_prices_from_history(
