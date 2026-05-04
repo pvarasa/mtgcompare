@@ -60,3 +60,28 @@ def install_record_factory() -> None:
         return record
 
     logging.setLogRecordFactory(factory)
+
+
+class _HealthzAccessFilter(logging.Filter):
+    """Drop gunicorn access-log lines for ``GET /healthz``.
+
+    The k8s readiness/liveness probe hits ``/healthz`` every ~10s per pod,
+    which would otherwise flood the access log with thousands of lines/day
+    that carry no operational signal. Gunicorn's access log emits one
+    record per request with the URL path in ``record.args['U']``.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            path = record.args.get("U", "") if isinstance(record.args, dict) else ""
+        except (AttributeError, TypeError):
+            return True
+        return path != "/healthz"
+
+
+def install_healthz_access_filter() -> None:
+    """Suppress gunicorn access-log lines for the health endpoint.
+
+    No-op outside gunicorn (Flask's dev server doesn't use ``gunicorn.access``).
+    """
+    logging.getLogger("gunicorn.access").addFilter(_HealthzAccessFilter())

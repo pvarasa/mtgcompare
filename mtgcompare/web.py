@@ -35,7 +35,12 @@ from sqlalchemy import text
 
 from . import auth, db, history_import, run_log
 from . import inventory as inv
-from .log_context import REQUEST_ID_HEADER, bind_request_id, install_record_factory
+from .log_context import (
+    REQUEST_ID_HEADER,
+    bind_request_id,
+    install_healthz_access_filter,
+    install_record_factory,
+)
 from .shops import ACTIVE_SHOPS, SHIPPING_JPY, SHOP_FLAGS, collect_prices, shop_slug
 from .utils import get_fx
 
@@ -51,6 +56,10 @@ install_record_factory()
 # gunicorn (which imports `mtgcompare.web:app` and never calls main()).
 # disable_existing_loggers=False keeps gunicorn's own loggers intact.
 logging.config.fileConfig(LOGGING_CONF, disable_existing_loggers=False)
+
+# Drop kube-probe /healthz hits from the gunicorn access log; otherwise
+# every pod emits ~8.6k pointless lines/day from readiness+liveness probes.
+install_healthz_access_filter()
 
 app = Flask(__name__)
 
