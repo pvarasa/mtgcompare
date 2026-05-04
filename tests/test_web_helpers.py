@@ -11,6 +11,39 @@ import mtgcompare.db as db_module
 from mtgcompare import web
 
 
+def test_decklist_search_rejects_oversized_lists():
+    """Total card count above MAX_DECKLIST_CARDS should short-circuit
+    with a clear error rather than fanning out shop scrapes."""
+    web.app.config["WTF_CSRF_ENABLED"] = False
+    over = web.MAX_DECKLIST_CARDS + 1
+    body = f"{over} Sol Ring\n"  # one line, but qty exceeds the cap
+    with web.app.test_client() as client:
+        resp = client.post("/decklist", data={"decklist": body})
+    assert resp.status_code == 200
+    page = resp.data.decode()
+    assert f"{over} cards" in page
+    assert "limit is 100" in page
+
+
+def test_decklist_search_accepts_at_cap():
+    """Exactly MAX_DECKLIST_CARDS is allowed; the request reaches the FX
+    fetch path (which we stub to return None to skip the actual scrape)."""
+    web.app.config["WTF_CSRF_ENABLED"] = False
+    body = f"{web.MAX_DECKLIST_CARDS} Sol Ring\n"
+    # Stubbing FX out short-circuits with a different error; the point is
+    # that the size cap doesn't fire.
+    original = web._get_fx
+    web._get_fx = lambda: None
+    try:
+        with web.app.test_client() as client:
+            resp = client.post("/decklist", data={"decklist": body})
+        assert resp.status_code == 200
+        page = resp.data.decode()
+        assert "limit is 100" not in page
+    finally:
+        web._get_fx = original
+
+
 def test_parse_decklist_skips_headers_and_comments():
     text = """
     // comment

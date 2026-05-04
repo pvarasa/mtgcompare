@@ -264,6 +264,12 @@ _DECK_LINE_RE = re.compile(
     r'^(\d+)x?\s+(.+?)(?:\s+\([A-Za-z0-9]+\)(?:\s+\d+[a-z]?)?)?\s*$'
 )
 
+# Hard cap on the total card count of a single decklist search. Sized to
+# fit a full Commander deck (99 + commander = 100). Beyond this the
+# parallel fan-out across cards × shops gets large enough to look like
+# an attack to upstream sites and to lock up the worker pool.
+MAX_DECKLIST_CARDS = 100
+
 
 def _parse_decklist(text: str) -> list[tuple[int, str]]:
     result = []
@@ -328,6 +334,13 @@ def decklist_search():
     card_items = _parse_decklist(text)
     if not card_items:
         return _early_return("No cards parsed. Use format: '1 Card Name' or '4x Card Name (SET)'")
+
+    total_cards = sum(qty for qty, _ in card_items)
+    if total_cards > MAX_DECKLIST_CARDS:
+        return _early_return(
+            f"Decklist is {total_cards} cards — the limit is {MAX_DECKLIST_CARDS}. "
+            "Trim it or split into multiple searches."
+        )
 
     # Consolidate duplicate names, preserve first-seen casing
     name_qty: dict[str, int] = {}
