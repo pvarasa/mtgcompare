@@ -87,6 +87,26 @@
     font-family: inherit;
     box-sizing: border-box;
   }
+
+  /* Search progress indicator — visible only while the form is submitting. */
+  .search-loading {
+    display: none;
+    align-items: center;
+    gap: .5rem;
+    font-size: .9rem;
+    color: var(--gold);
+    margin-top: .5rem;
+  }
+  .search-loading.active { display: inline-flex; }
+  .search-loading .spinner {
+    width: 1rem;
+    height: 1rem;
+    border: 2px solid var(--gold-dim);
+    border-top-color: var(--gold);
+    border-radius: 50%;
+    animation: search-spin .8s linear infinite;
+  }
+  @keyframes search-spin { to { transform: rotate(360deg); } }
 {% endblock %}
 {% block content %}
   <div class="search-mode">
@@ -103,6 +123,10 @@
                autofocus autocomplete="off">
         <datalist id="search-name-suggest"></datalist>
         <button type="submit">Search</button>
+      </div>
+      <div class="search-loading" id="search-loading-single" aria-live="polite">
+        <span class="spinner" aria-hidden="true"></span>
+        <span>Searching shops…</span>
       </div>
 
       <input type="hidden" id="shipping-val" name="shipping" value="{{ '1' if include_shipping else '0' }}">
@@ -133,6 +157,10 @@
       <div class="dl-actions">
         <label><input type="checkbox" name="use_inventory" value="1"> Use inventory</label>
         <button type="submit">Search decklist</button>
+      </div>
+      <div class="search-loading" id="search-loading-decklist" aria-live="polite">
+        <span class="spinner" aria-hidden="true"></span>
+        <span>Pricing decklist across shops…</span>
       </div>
     </form>
   </div>
@@ -216,6 +244,39 @@
           cfgPanel.style.display = toggle.checked ? '' : 'none';
         });
       }
+
+      // --- loading indicator: cold scrapes can take ~5s; show progress ---
+      function wireLoadingIndicator(form, loadingEl) {
+        if (!form || !loadingEl) return;
+        form.addEventListener('submit', () => {
+          loadingEl.classList.add('active');
+          const btn = form.querySelector('button[type=submit]');
+          if (btn) {
+            btn.disabled = true;
+            btn.dataset.label = btn.textContent;
+            btn.textContent = 'Searching…';
+          }
+        });
+      }
+      wireLoadingIndicator(
+        panelSingle.querySelector('form'),
+        document.getElementById('search-loading-single'),
+      );
+      wireLoadingIndicator(
+        panelDecklist.querySelector('form'),
+        document.getElementById('search-loading-decklist'),
+      );
+
+      // BFCache: clicking back can restore a still-disabled button. Reset.
+      window.addEventListener('pageshow', (e) => {
+        if (!e.persisted) return;
+        document.querySelectorAll('.search-loading.active').forEach(el => el.classList.remove('active'));
+        document.querySelectorAll('button[data-label]').forEach(btn => {
+          btn.disabled = false;
+          btn.textContent = btn.dataset.label;
+          delete btn.dataset.label;
+        });
+      });
     })();
   </script>
 {% endblock %}
