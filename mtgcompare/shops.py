@@ -1,5 +1,6 @@
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .cache import DEFAULT_TTL, CachedScrapper
 from .scrappers.cardrush import CardRushScrapper
@@ -50,17 +51,26 @@ def build_scrapers(fx: float) -> list:
 
 
 def collect_prices(card_name: str, fx: float, logger=None) -> list[dict]:
-    """Fetch and concatenate all shop results for a single card."""
+    """Fetch and concatenate all shop results for a single card.
+
+    Fan-out is parallel: total wall-clock is bounded by the slowest shop,
+    not the sum. Per-scraper exceptions are isolated so one failing shop
+    doesn't drop results from the rest.
+    """
+    scrapers = build_scrapers(fx)
     results: list[dict] = []
-    for scraper in build_scrapers(fx):
-        try:
-            results.extend(scraper.get_prices(card_name))
-        except Exception as exc:
-            if logger is not None:
-                logger.error(
-                    "Scraper %s failed for %r: %s",
-                    scraper.__class__.__name__,
-                    card_name,
-                    exc,
-                )
+    with ThreadPoolExecutor(max_workers=len(scrapers)) as ex:
+        futures = {ex.submit(s.get_prices, card_name): s for s in scrapers}
+        for fut in as_completed(futures):
+            scraper = futures[fut]
+            try:
+                results.extend(fut.result())
+            except Exception as exc:
+                if logger is not None:
+                    logger.error(
+                        "Scraper %s failed for %r: %s",
+                        scraper.__class__.__name__,
+                        card_name,
+                        exc,
+                    )
     return results
