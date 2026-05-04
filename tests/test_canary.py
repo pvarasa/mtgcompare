@@ -11,6 +11,7 @@ import requests
 from mtgcompare.scrappers.cardrush import CardRushScrapper
 from mtgcompare.scrappers.hareruya import HareruyaScrapper
 from mtgcompare.scrappers.scryfall import ScryfallScrapper
+from mtgcompare.scrappers.serra import CardshopSerraScrapper
 from mtgcompare.scrappers.singlestar import SingleStarScrapper
 from mtgcompare.scrappers.tokyomtg import TokyoMtgScrapper
 from mtgcompare.utils import get_fx
@@ -19,11 +20,12 @@ _PROBE_CARD = "Force of Will"
 _FX = 150.0
 
 _SHOPS = [
-    pytest.param(HareruyaScrapper,  "Hareruya",            "https://www.hareruyamtg.com/", id="hareruya"),
-    pytest.param(SingleStarScrapper,"SingleStar",           "https://www.singlestar.jp/",   id="singlestar"),
-    pytest.param(TokyoMtgScrapper,  "TokyoMTG",            "https://tokyomtg.com/",        id="tokyomtg"),
-    pytest.param(CardRushScrapper,  "Card Rush",           "https://www.cardrush-mtg.jp/", id="cardrush"),
-    pytest.param(ScryfallScrapper,  "TCGPlayer (Scryfall)", "http",                         id="scryfall"),
+    pytest.param(HareruyaScrapper,        "Hareruya",            "https://www.hareruyamtg.com/", id="hareruya"),
+    pytest.param(SingleStarScrapper,      "SingleStar",           "https://www.singlestar.jp/",   id="singlestar"),
+    pytest.param(TokyoMtgScrapper,        "TokyoMTG",            "https://tokyomtg.com/",        id="tokyomtg"),
+    pytest.param(CardRushScrapper,        "Card Rush",           "https://www.cardrush-mtg.jp/", id="cardrush"),
+    pytest.param(CardshopSerraScrapper,   "Cardshop Serra",      "https://cardshop-serra.com/",  id="serra"),
+    pytest.param(ScryfallScrapper,        "TCGPlayer (Scryfall)", "http",                         id="scryfall"),
 ]
 
 

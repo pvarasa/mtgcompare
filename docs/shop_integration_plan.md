@@ -9,9 +9,10 @@ The candidate list comes from the shops that **Wisdom Guild's WONDER** price agg
 - Hareruya (`mtgcompare/scrappers/hareruya.py`)
 - SingleStar — シングルスター (`mtgcompare/scrappers/singlestar.py`)
 - Card Rush — カードラッシュ (`mtgcompare/scrappers/cardrush.py`) — first ocnk.net shop
+- Cardshop Serra (`mtgcompare/scrappers/serra.py`) — first ec-cube shop, biggest indexed inventory (~1.19M)
 - TokyoMTG (`mtgcompare/scrappers/tokyomtg.py`) — *not on the WONDER list, separate integration*
 
-Of the 26 shops surfaced by WONDER, we already have 3 (Hareruya, SingleStar, Card Rush). The remaining 23 are the candidates below.
+Of the 26 shops surfaced by WONDER, we already have 4 (Hareruya, SingleStar, Card Rush, Cardshop Serra). The remaining 22 are the candidates below.
 
 ## Wisdom Guild itself — not a viable backend
 
@@ -45,7 +46,7 @@ The 24 unintegrated shops cluster onto 4 e-commerce platforms plus a few customs
 | まんぞく屋 | https://shopmanzokuya.com/ |
 | MINT MALL | https://www.mint-mall.net/ |
 | カードショップ抜忍 | https://nukeninmtg.com/ |
-| Cardshop Serra | https://cardshop-serra.com/mtg |
+| ~~Cardshop Serra~~ | ~~https://cardshop-serra.com/mtg~~ — **integrated** |
 
 **ocnk.net** platform — search at `/product-list?keyword=…`. UTF-8.
 
