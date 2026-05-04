@@ -10,9 +10,10 @@ The candidate list comes from the shops that **Wisdom Guild's WONDER** price agg
 - SingleStar — シングルスター (`mtgcompare/scrappers/singlestar.py`)
 - Card Rush — カードラッシュ (`mtgcompare/scrappers/cardrush.py`) — first ocnk.net shop
 - Cardshop Serra (`mtgcompare/scrappers/serra.py`) — first ec-cube shop, biggest indexed inventory (~1.19M)
+- ENNDAL GAMES (`mtgcompare/scrappers/enndalgames.py`) — second-biggest indexed inventory (~493k); custom platform
 - TokyoMTG (`mtgcompare/scrappers/tokyomtg.py`) — *not on the WONDER list, separate integration*
 
-Of the 26 shops surfaced by WONDER, we already have 4 (Hareruya, SingleStar, Card Rush, Cardshop Serra). The remaining 22 are the candidates below.
+Of the 26 shops surfaced by WONDER, we already have 5 (Hareruya, SingleStar, Card Rush, Cardshop Serra, ENNDAL GAMES). The remaining 21 are the candidates below.
 
 ## Wisdom Guild itself — not a viable backend
 
@@ -62,7 +63,7 @@ The 24 unintegrated shops cluster onto 4 e-commerce platforms plus a few customs
 
 | Shop | URL | Search pattern |
 |---|---|---|
-| ENNDAL GAMES | https://www.enndalgames.com/ | `/?mode=srh&keyword=…` |
+| ~~ENNDAL GAMES~~ | ~~https://www.enndalgames.com/~~ — **integrated** | `/products/list.php?mode=search&name=…` |
 | カードショップはま屋 | https://www.cardshophamaya.com/ | `/?mode=srh&keyword=…` |
 | 高岡サブカルチャーズ | https://shop.takaoka-sc.com/ | BASE platform: `/items?q=…` |
 | GOODGAME | https://goodgame.co.jp/ | Shopify: `/search?q=…` |

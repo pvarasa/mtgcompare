@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .cache import DEFAULT_TTL, CachedScrapper
 from .scrappers.cardrush import CardRushScrapper
+from .scrappers.enndalgames import EnndalGamesScrapper
 from .scrappers.hareruya import HareruyaScrapper
 from .scrappers.scryfall import ScryfallScrapper
 from .scrappers.serra import CardshopSerraScrapper
@@ -16,6 +17,7 @@ SHOP_FLAGS = {
     "TokyoMTG": "\U0001F1EF\U0001F1F5",
     "Card Rush": "\U0001F1EF\U0001F1F5",
     "Cardshop Serra": "\U0001F1EF\U0001F1F5",
+    "ENNDAL GAMES": "\U0001F1EF\U0001F1F5",
     "TCGPlayer (Scryfall)": "\U0001F1FA\U0001F1F8",
 }
 
@@ -28,6 +30,7 @@ SHIPPING_JPY: dict[str, int] = {
     "TokyoMTG":             385,
     "Card Rush":            385,
     "Cardshop Serra":       385,
+    "ENNDAL GAMES":         385,
     "TCGPlayer (Scryfall)": 1200,
 }
 
@@ -48,6 +51,7 @@ def build_scrapers(fx: float) -> list:
         ("TokyoMTG",             TokyoMtgScrapper(fx=fx)),
         ("Card Rush",            CardRushScrapper(fx=fx)),
         ("Cardshop Serra",       CardshopSerraScrapper(fx=fx)),
+        ("ENNDAL GAMES",         EnndalGamesScrapper(fx=fx)),
     ]
     if not CACHE_ENABLED:
         return [s for _, s in raw]

@@ -9,6 +9,7 @@ import pytest
 import requests
 
 from mtgcompare.scrappers.cardrush import CardRushScrapper
+from mtgcompare.scrappers.enndalgames import EnndalGamesScrapper
 from mtgcompare.scrappers.hareruya import HareruyaScrapper
 from mtgcompare.scrappers.scryfall import ScryfallScrapper
 from mtgcompare.scrappers.serra import CardshopSerraScrapper
@@ -25,6 +26,7 @@ _SHOPS = [
     pytest.param(TokyoMtgScrapper,        "TokyoMTG",            "https://tokyomtg.com/",        id="tokyomtg"),
     pytest.param(CardRushScrapper,        "Card Rush",           "https://www.cardrush-mtg.jp/", id="cardrush"),
     pytest.param(CardshopSerraScrapper,   "Cardshop Serra",      "https://cardshop-serra.com/",  id="serra"),
+    pytest.param(EnndalGamesScrapper,     "ENNDAL GAMES",        "https://www.enndalgames.com/", id="enndal"),
     pytest.param(ScryfallScrapper,        "TCGPlayer (Scryfall)", "http",                         id="scryfall"),
 ]
 
