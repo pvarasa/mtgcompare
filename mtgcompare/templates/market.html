@@ -129,7 +129,8 @@
     max-width: 100%;
   }
 
-  #mkt-table { table-layout: fixed; width: 100%; }
+  .mkt-table-scroll { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  #mkt-table { table-layout: fixed; width: 100%; min-width: 50rem; }
   #mkt-table th[data-col="0"] { width: auto; }
   #mkt-table th[data-col="1"] { width: 3.8rem; }
   #mkt-table th[data-col="2"] { width: 2.5rem; }
@@ -140,6 +141,7 @@
   #mkt-table th[data-col="7"] { width: 7rem; }
   #mkt-table th[data-col="8"] { width: 6rem; }
   #mkt-table th[data-col="9"] { width: 5.5rem; }
+  #mkt-table th,
   #mkt-table td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #mkt-table td:first-child { white-space: normal; overflow: visible; text-overflow: unset; }
   #mkt-table thead th[data-col] { user-select: none; }
@@ -413,13 +415,14 @@
     <p class="mkt-note">
       Prices sourced from MTGJSON / TCGPlayer daily data.
       {% if fx %}FX JPY {{ '%.2f'|format(fx) }} per $1.{% endif %}
-      Charts show blank days when MTGJSON has no price for that date.
+      Charts show blank days when there's no price for that date.
     </p>
 
     <div id="mkt-filter">
       <input type="text" id="mkt-filter-input" placeholder="Filter by card name..." autocomplete="off">
     </div>
 
+    <div class="mkt-table-scroll">
     <table id="mkt-table" style="contain:layout style">
       <thead>
         <tr>
@@ -498,6 +501,7 @@
         {% endfor %}
       </tbody>
     </table>
+    </div>
 
     <div id="market-chart-modal" class="market-chart-modal">
       <div class="market-chart-panel" role="dialog" aria-modal="true" aria-labelledby="market-chart-title">

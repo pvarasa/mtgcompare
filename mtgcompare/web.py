@@ -861,19 +861,34 @@ def _candidate_uuid_map(cards: list[dict], set_code: str) -> dict[tuple[str, str
     return candidates
 
 
+def _collector_sort_key(num: str) -> tuple:
+    """Sort '1', '2', ..., '99', '100' numerically; suffixed numbers come after plain ones."""
+    match = re.match(r"^(\d+)(.*)$", num or "")
+    if match:
+        return (0, int(match.group(1)), match.group(2))
+    return (1, num or "")
+
+
 def _resolve_candidate_uuid(row: dict, candidates: dict[tuple[str, str, str], dict[str, str]]) -> str | None:
     name_key = row["card_name"].lower()
     set_key = _normalize_set_code(row["set_code"], upper=True)
     card_number = (row.get("card_number") or "").strip()
     finish_key = "foil" if _is_foil(row.get("printing")) else "normal"
-    search_keys = [(name_key, set_key, card_number)]
-    if card_number:
-        search_keys.append((name_key, set_key, ""))
-    for key in search_keys:
+    for key in [(name_key, set_key, card_number), (name_key, set_key, "")]:
         bucket = candidates.get(key)
         if bucket and bucket.get(finish_key):
             return bucket[finish_key]
-    return None
+    # Fallback: any printing of this name in this set with the right finish.
+    # Catches manual entries with mistyped or missing collector numbers.
+    matches = sorted(
+        (
+            (cnum, bucket[finish_key])
+            for (cname, cset, cnum), bucket in candidates.items()
+            if cname == name_key and cset == set_key and bucket.get(finish_key)
+        ),
+        key=lambda pair: _collector_sort_key(pair[0]),
+    )
+    return matches[0][1] if matches else None
 
 
 def _load_set_cards(path: Path) -> list[dict]:

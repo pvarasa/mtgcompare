@@ -222,6 +222,57 @@ def test_mtgjson_set_candidates_include_trimmed_variants():
 
 
 # ---------------------------------------------------------------------------
+# _resolve_candidate_uuid
+# ---------------------------------------------------------------------------
+
+def _candidates_for_dmr_force_of_will():
+    return {
+        ("force of will", "DMR", "50"):  {"normal": "uuid-50",  "foil": "uuid-50f"},
+        ("force of will", "DMR", "284"): {"normal": "uuid-284", "foil": "uuid-284f"},
+        ("force of will", "DMR", "418"): {"normal": "uuid-418"},
+    }
+
+
+def test_resolve_candidate_uuid_exact_match():
+    row = {"card_name": "Force of Will", "set_code": "DMR", "card_number": "50", "printing": "Normal"}
+    assert web._resolve_candidate_uuid(row, _candidates_for_dmr_force_of_will()) == "uuid-50"
+
+
+def test_resolve_candidate_uuid_falls_back_to_lowest_collector_when_number_mismatched():
+    """Manual entry with the wrong card_number should still map to the standard printing
+    of (name, set) rather than silently failing — that's how Force of Will entered as
+    DMR #1 used to drop off the market page entirely."""
+    row = {"card_name": "Force of Will", "set_code": "DMR", "card_number": "1", "printing": "Normal"}
+    assert web._resolve_candidate_uuid(row, _candidates_for_dmr_force_of_will()) == "uuid-50"
+
+
+def test_resolve_candidate_uuid_falls_back_when_card_number_empty():
+    row = {"card_name": "Force of Will", "set_code": "DMR", "card_number": "", "printing": "Normal"}
+    assert web._resolve_candidate_uuid(row, _candidates_for_dmr_force_of_will()) == "uuid-50"
+
+
+def test_resolve_candidate_uuid_respects_finish():
+    row = {"card_name": "Force of Will", "set_code": "DMR", "card_number": "999", "printing": "Foil"}
+    # Only #50 and #284 have foils; lowest collector wins.
+    assert web._resolve_candidate_uuid(row, _candidates_for_dmr_force_of_will()) == "uuid-50f"
+
+
+def test_resolve_candidate_uuid_returns_none_when_set_has_no_match():
+    row = {"card_name": "Black Lotus", "set_code": "DMR", "card_number": "1", "printing": "Normal"}
+    assert web._resolve_candidate_uuid(row, _candidates_for_dmr_force_of_will()) is None
+
+
+def test_collector_sort_key_orders_numerically():
+    nums = ["100", "20", "1", "284", "50"]
+    assert sorted(nums, key=web._collector_sort_key) == ["1", "20", "50", "100", "284"]
+
+
+def test_collector_sort_key_plain_before_suffixed():
+    nums = ["50a", "50", "50★"]
+    assert sorted(nums, key=web._collector_sort_key)[0] == "50"
+
+
+# ---------------------------------------------------------------------------
 # _get_user_id
 # ---------------------------------------------------------------------------
 
