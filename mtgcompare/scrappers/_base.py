@@ -41,6 +41,25 @@ USER_AGENT = (
 )
 
 
+class ScraperFetchError(Exception):
+    """Transport-layer failure: timeout, DNS error, 5xx, decode error.
+
+    Raised by scrapers' fetch helpers when the page itself can't be obtained.
+    Callers (CachedScrapper) treat this differently from "fetch succeeded
+    but parser found 0 records" — the former must NOT poison the cache,
+    the latter is a legitimate negative result.
+    """
+
+
+class RateLimitedError(ScraperFetchError):
+    """Specifically a 429 / explicit rate-limit response.
+
+    Subclass of ``ScraperFetchError`` so callers that just need to know
+    "the fetch failed, don't cache" can ignore the distinction, while
+    rate-limiter logic can pattern-match on the type.
+    """
+
+
 def make_session(extra_headers: Optional[dict] = None) -> requests.Session:
     s = requests.Session()
     s.headers.update({"User-Agent": USER_AGENT})
@@ -90,9 +109,10 @@ class HtmlSearchScrapper(MtgScrapper):
     # --- shared scaffolding ---
 
     def get_prices(self, card_name: str) -> list[dict]:
+        # _fetch_search_html raises on transport failure — that propagates
+        # so the cache layer can distinguish "shop has no listings"
+        # (cacheable) from "we couldn't reach the shop" (don't cache).
         html = self._fetch_search_html(card_name)
-        if not html:
-            return []
         records = self.parse_html(html, card_name)
         if not records:
             self.logger.info(f"No {self.SHOP_NAME} results for {card_name!r}")
@@ -107,11 +127,18 @@ class HtmlSearchScrapper(MtgScrapper):
                 params=self.search_params(card_name),
                 timeout=self.REQUEST_TIMEOUT_S,
             )
-            resp.raise_for_status()
-            return self.decode_response(resp)
         except requests.RequestException as e:
-            self.logger.error(f"{self.SHOP_NAME} search failed: {e}")
-            return ""
+            raise ScraperFetchError(f"{self.SHOP_NAME} fetch failed: {e}") from e
+
+        if resp.status_code == 429:
+            raise RateLimitedError(
+                f"{self.SHOP_NAME} returned 429 — being rate-limited"
+            )
+        if resp.status_code >= 400:
+            raise ScraperFetchError(
+                f"{self.SHOP_NAME} HTTP {resp.status_code}"
+            )
+        return self.decode_response(resp)
 
     def _log_record(self, r: dict) -> None:
         extras = []

@@ -24,6 +24,7 @@ from sqlalchemy import text
 
 from . import db
 from .scrapper import MtgScrapper
+from .scrappers._base import RateLimitedError, ScraperFetchError
 
 
 def _ttl_from_env() -> timedelta:
@@ -266,9 +267,27 @@ class CachedScrapper(MtgScrapper):
                 )
                 return read_listings(conn, self.shop_name, norm)
 
-        # Miss — go to the network. Re-raise on failure; don't poison the cache
-        # with a stale negative entry just because a shop was briefly down.
-        records = self.scrapper.get_prices(card_name)
+        # Miss — go to the network. Transport failures (ScraperFetchError)
+        # propagate without writing to cache so the next request retries
+        # rather than serving a 24h-stale "0 results, ok" entry. Other
+        # exceptions (e.g. parser bugs) are also not cached.
+        # logfmt-style key=value pairs so dashboards can extract `event` and
+        # `shop` as labels without having to parse the prose. The card name
+        # is included to help track which queries trip per-shop limits.
+        try:
+            records = self.scrapper.get_prices(card_name)
+        except RateLimitedError as exc:
+            self.logger.warning(
+                "event=rate_limited shop=%s card=%r detail=%s",
+                self.shop_name, card_name, exc,
+            )
+            raise
+        except ScraperFetchError as exc:
+            self.logger.warning(
+                "event=fetch_failed shop=%s card=%r detail=%s",
+                self.shop_name, card_name, exc,
+            )
+            raise
 
         with db.get_conn() as conn:
             replace_listings(conn, self.shop_name, norm, records)

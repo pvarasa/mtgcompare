@@ -235,6 +235,55 @@ class TestCachedScrapper:
             cached.get_prices("Lightning Bolt")
         assert inner.calls == 2
 
+    def test_rate_limit_does_not_poison_cache(self, test_db):
+        """The TokyoMTG-from-prod scenario: 429 must not be memoized as
+        'result_count=0, status=ok'. Otherwise every search for the next
+        24h returns nothing."""
+        from sqlalchemy import text
+
+        from mtgcompare.scrappers._base import RateLimitedError
+        inner = FakeScrapper(raises=RateLimitedError("simulated 429"))
+        cached = CachedScrapper(inner, shop_name="FakeShop", ttl=timedelta(hours=24))
+        with pytest.raises(RateLimitedError):
+            cached.get_prices("Mountain")
+        # Nothing in shop_query_log
+        with test_db.get_conn() as conn:
+            n = conn.execute(text(
+                "SELECT COUNT(*) FROM shop_query_log WHERE shop = 'FakeShop'"
+            )).scalar()
+        assert n == 0, "rate-limit failure must not produce a cache entry"
+
+    def test_fetch_error_does_not_poison_cache(self, test_db):
+        """Same check for the generic ScraperFetchError path."""
+        from sqlalchemy import text
+
+        from mtgcompare.scrappers._base import ScraperFetchError
+        inner = FakeScrapper(raises=ScraperFetchError("DNS resolution failed"))
+        cached = CachedScrapper(inner, shop_name="FakeShop", ttl=timedelta(hours=24))
+        with pytest.raises(ScraperFetchError):
+            cached.get_prices("Mountain")
+        with test_db.get_conn() as conn:
+            n = conn.execute(text(
+                "SELECT COUNT(*) FROM shop_query_log WHERE shop = 'FakeShop'"
+            )).scalar()
+        assert n == 0
+
+    def test_legitimate_empty_result_is_still_cached(self, test_db):
+        """Don't break the negative-result memoization: a successful fetch
+        that returns 0 rows IS a cacheable signal ("this shop doesn't
+        carry this card") and shouldn't be re-scraped for 24h."""
+        from sqlalchemy import text
+        inner = FakeScrapper([])  # no exception, just empty list
+        cached = CachedScrapper(inner, shop_name="FakeShop", ttl=timedelta(hours=24))
+        assert cached.get_prices("Obscure") == []
+        with test_db.get_conn() as conn:
+            row = conn.execute(text(
+                "SELECT result_count, status FROM shop_query_log WHERE shop = 'FakeShop'"
+            )).fetchone()
+        assert row is not None
+        assert row[0] == 0
+        assert row[1] == "ok"
+
     def test_cached_listings_have_correct_shop_and_shape(self, test_db):
         inner = FakeScrapper([_record()])
         cached = CachedScrapper(inner, shop_name="FakeShop", ttl=timedelta(hours=24))

@@ -171,6 +171,33 @@ The `users` table is keyed on `workos_user_id`; inventory rows continue to key o
 
 - Always ask for confirmation before running `git commit` or `git push`.
 
+## What "ship" means
+
+When the user says "ship" (or equivalent: "ship it", "ship this", "let's ship"),
+they mean run the **full release pipeline end-to-end**, in this order:
+
+1. **Confirm tests pass** — `uv run pytest` clean.
+2. **Confirm lint passes** — `uv run ruff check mtgcompare/ tests/` clean.
+3. **Commit** with a message that explains the *why*.
+4. **Push** to `origin/master`.
+5. **Tag** the next semver version (`vX.Y.Z`) and push the tag — this
+   triggers the GitHub Release workflow, which builds the Windows zip,
+   the macOS zip, and the GHCR Docker image.
+6. **Babysit the build**: watch the CI run AND the Release workflow run
+   to completion. If either fails, diagnose and fix the underlying issue
+   (don't bypass) and re-tag if necessary.
+7. **Update the deployment manifest in `../server_admin`** to point at
+   the new image tag (`k8s/apps/mtgcompare/02-deployment.yml`),
+   commit + push there.
+8. **Apply the manifest** with `kubectl apply -f ...` and watch the
+   rollout (`kubectl -n apps rollout status deploy/mtgcompare`).
+9. **Verify in prod**: confirm the new image is live and a smoke test
+   (a sample search, a healthz check, or whatever fits the change)
+   succeeds.
+
+If any step fails, fix it before moving on. Don't leave the system in
+a half-deployed state.
+
 ## Generated files
 
 These should stay ignored:

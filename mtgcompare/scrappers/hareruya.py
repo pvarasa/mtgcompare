@@ -17,6 +17,7 @@ from bs4 import BeautifulSoup
 
 from ..scrapper import MtgScrapper
 from ..utils import get_fx
+from ._base import RateLimitedError, ScraperFetchError
 from ._base import make_session as _make_session
 
 BASE_URL = "https://www.hareruyamtg.com"
@@ -94,13 +95,13 @@ class HareruyaScrapper(MtgScrapper):
         self.logger = logging.getLogger("hareruya")
 
     def get_prices(self, card_name: str) -> list[dict]:
+        # Both fetch helpers raise ScraperFetchError on transport failure.
+        # We let it propagate so the cache layer doesn't poison the entry.
         docs = self._fetch_docs(card_name)
         if not docs:
             self.logger.info(f"No Hareruya results for {card_name!r}")
             return []
         html = self._fetch_lazy_html(docs)
-        if not html:
-            return []
 
         records = parse_lazy_html(html, card_name, self.fx)
         for r in records:
@@ -122,11 +123,16 @@ class HareruyaScrapper(MtgScrapper):
         }
         try:
             resp = self.session.get(UNISEARCH_API, params=params, timeout=20)
-            resp.raise_for_status()
+        except requests.RequestException as e:
+            raise ScraperFetchError(f"Hareruya unisearch_api fetch failed: {e}") from e
+        if resp.status_code == 429:
+            raise RateLimitedError("Hareruya unisearch_api returned 429")
+        if resp.status_code >= 400:
+            raise ScraperFetchError(f"Hareruya unisearch_api HTTP {resp.status_code}")
+        try:
             return resp.json().get("response", {}).get("docs", []) or []
-        except (requests.RequestException, ValueError) as e:
-            self.logger.error(f"unisearch_api failed: {e}")
-            return []
+        except ValueError as e:
+            raise ScraperFetchError(f"Hareruya unisearch_api JSON decode failed: {e}") from e
 
     def _fetch_lazy_html(self, docs: list[dict]) -> str:
         payload: list[tuple[str, str]] = [("css", "itemList")]
@@ -135,8 +141,10 @@ class HareruyaScrapper(MtgScrapper):
                 payload.append((f"docs[{i}][{key}]", str(val)))
         try:
             resp = self.session.post(UNISEARCH_LAZY, data=payload, timeout=20)
-            resp.raise_for_status()
-            return resp.text
         except requests.RequestException as e:
-            self.logger.error(f"unisearch/lazy failed: {e}")
-            return ""
+            raise ScraperFetchError(f"Hareruya unisearch/lazy fetch failed: {e}") from e
+        if resp.status_code == 429:
+            raise RateLimitedError("Hareruya unisearch/lazy returned 429")
+        if resp.status_code >= 400:
+            raise ScraperFetchError(f"Hareruya unisearch/lazy HTTP {resp.status_code}")
+        return resp.text

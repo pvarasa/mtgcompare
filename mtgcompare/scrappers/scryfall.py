@@ -16,6 +16,7 @@ import requests
 
 from ..scrapper import MtgScrapper
 from ..utils import get_fx
+from ._base import RateLimitedError, ScraperFetchError
 
 SEARCH_URL = "https://api.scryfall.com/cards/search"
 
@@ -110,18 +111,21 @@ class ScryfallScrapper(MtgScrapper):
             try:
                 resp = self.session.get(url, params=params, timeout=20)
             except requests.RequestException as e:
-                self.logger.error(f"Scryfall search failed: {e}")
-                return pages
+                raise ScraperFetchError(f"Scryfall fetch failed: {e}") from e
 
             if resp.status_code == 404:
                 # No cards match — Scryfall returns 404, not empty data.
+                # This is the legitimate "no such card" path; don't raise.
                 return pages
+            if resp.status_code == 429:
+                raise RateLimitedError("Scryfall returned 429")
+            if resp.status_code >= 400:
+                raise ScraperFetchError(f"Scryfall HTTP {resp.status_code}")
+
             try:
-                resp.raise_for_status()
                 data = resp.json()
-            except (requests.HTTPError, ValueError) as e:
-                self.logger.error(f"Scryfall search error: {e}")
-                return pages
+            except ValueError as e:
+                raise ScraperFetchError(f"Scryfall JSON decode failed: {e}") from e
 
             pages.append(data)
             if not data.get("has_more"):
