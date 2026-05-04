@@ -1,23 +1,22 @@
 """Tests for the lazy/on-demand caching layer."""
+import threading
 from datetime import datetime, timedelta, timezone
 
 import pytest
-import threading
 from sqlalchemy import create_engine, text
 
 import mtgcompare.db as db_module
 from mtgcompare import cache as cache_module
 from mtgcompare.cache import (
     CachedScrapper,
-    _Singleflight,
     _normalize,
+    _Singleflight,
     read_listings,
     read_log,
     replace_listings,
     upsert_log,
 )
 from mtgcompare.scrapper import MtgScrapper
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

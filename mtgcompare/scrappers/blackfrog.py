@@ -23,24 +23,15 @@ Examples we filter out:
 
 The ``parse_search_html`` function is pure and is what tests exercise.
 """
-import logging
 import re
-from typing import Optional
 
 import requests
 from bs4 import BeautifulSoup
 
-from ..scrapper import MtgScrapper
-from ..utils import get_fx
+from ._base import HtmlSearchScrapper
 
 BASE_URL = "https://blackfrog.jp"
 SEARCH_URL = f"{BASE_URL}/shop/shopbrand.html"
-
-USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/125.0.0.0 Safari/537.36"
-)
 
 _PRICE_RE = re.compile(r"([\d,]+)\s*円")
 # The set bracket is the 【XYZ】 right after the rarity bracket; pin to the
@@ -55,12 +46,6 @@ _NAME_RE = re.compile(
     r"\s*【(?P<set>[A-Z0-9]+)】"
 )
 _VARIANT_BRACKETS = ("[ボーダーレス]", "[旧枠]", "[日本画]", "[拡張枠]", "[フレームレス]")
-
-
-def make_session() -> requests.Session:
-    s = requests.Session()
-    s.headers.update({"User-Agent": USER_AGENT})
-    return s
 
 
 def parse_search_html(html: str, card_name: str, fx_jpy_per_usd: float) -> list[dict]:
@@ -131,45 +116,16 @@ def parse_search_html(html: str, card_name: str, fx_jpy_per_usd: float) -> list[
     return records
 
 
-class BlackFrogScrapper(MtgScrapper):
-    def __init__(
-        self,
-        fx: Optional[float] = None,
-        session: Optional[requests.Session] = None,
-    ):
-        super().__init__()
-        self.fx = fx if fx is not None else get_fx("jpy")
-        self.session = session or make_session()
-        self.logger = logging.getLogger("blackfrog")
+class BlackFrogScrapper(HtmlSearchScrapper):
+    SHOP_NAME = "BLACK FROG"
+    SEARCH_URL = SEARCH_URL
+    LOGGER_NAME = "blackfrog"
+    SEARCH_PARAM_NAME = "search"
 
-    def get_prices(self, card_name: str) -> list[dict]:
-        html = self._fetch_search_html(card_name)
-        if not html:
-            return []
-        records = parse_search_html(html, card_name, self.fx)
-        if not records:
-            self.logger.info(f"No BLACK FROG results for {card_name!r}")
-        for r in records:
-            self.logger.info(
-                f"Found {r['card']} [{r['set']}] ¥{r['price_jpy']:.0f} "
-                f"(${r['price_usd']:.2f})"
-            )
-        return records
+    def parse_html(self, html: str, card_name: str) -> list[dict]:
+        return parse_search_html(html, card_name, self.fx)
 
-    def _fetch_search_html(self, card_name: str) -> str:
-        try:
-            resp = self.session.get(
-                SEARCH_URL,
-                params={"search": card_name},
-                timeout=20,
-            )
-            resp.raise_for_status()
-            # The page is EUC-JP; let requests autodetect from the response,
-            # but coerce explicitly because a few servers misreport it.
-            resp.encoding = resp.encoding or "EUC-JP"
-            if (resp.encoding or "").lower().replace("-", "") in ("euc_jp", "eucjp", "iso88591"):
-                return resp.content.decode("euc-jp", errors="replace")
-            return resp.text
-        except requests.RequestException as e:
-            self.logger.error(f"BLACK FROG search failed: {e}")
-            return ""
+    def decode_response(self, resp: requests.Response) -> str:
+        # The page is EUC-JP; the HTTP Content-Type often omits the charset
+        # so requests would otherwise default to ISO-8859-1.
+        return resp.content.decode("euc-jp", errors="replace")

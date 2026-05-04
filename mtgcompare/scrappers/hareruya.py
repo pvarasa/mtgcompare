@@ -1,7 +1,10 @@
 """Hareruya scraper.
 
 Uses Hareruya's internal JSON search API + lazy render endpoint directly —
-no browser, no Selenium. Two HTTP calls per search.
+no browser, no Selenium. Two HTTP calls per search, so this scraper uses
+its own class structure rather than the shared ``HtmlSearchScrapper``
+base, but it still pulls ``USER_AGENT`` and ``make_session`` from
+``_base`` for consistency.
 
 The `parse_lazy_html` function is pure and is what the tests exercise.
 """
@@ -14,16 +17,11 @@ from bs4 import BeautifulSoup
 
 from ..scrapper import MtgScrapper
 from ..utils import get_fx
+from ._base import make_session as _make_session
 
 BASE_URL = "https://www.hareruyamtg.com"
 UNISEARCH_API = f"{BASE_URL}/en/products/search/unisearch_api"
 UNISEARCH_LAZY = f"{BASE_URL}/en/products/search/unisearch/lazy"
-
-USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/125.0.0.0 Safari/537.36"
-)
 
 _NAME_SET_RE = re.compile(r"《(.+?)》.*?\[(.+?)]")
 _STOCK_RE = re.compile(r"【(.+?) Stock:(\d+)】")
@@ -31,12 +29,7 @@ _PRICE_RE = re.compile(r"(\d[\d,]*)")
 
 
 def make_session() -> requests.Session:
-    s = requests.Session()
-    s.headers.update({
-        "User-Agent": USER_AGENT,
-        "X-Requested-With": "XMLHttpRequest",
-    })
-    return s
+    return _make_session({"X-Requested-With": "XMLHttpRequest"})
 
 
 def parse_lazy_html(html: str, card_name: str, fx_jpy_per_usd: float) -> list[dict]:

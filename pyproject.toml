@@ -41,6 +41,12 @@ line-length = 120
 select = ["E", "F", "W", "I"]
 ignore = ["E701"]  # allow compact single-line if/return style
 
+[tool.ruff.lint.per-file-ignores]
+# Test files frequently embed inline HTML fixtures whose lines naturally
+# overflow once they include Japanese text and verbose CSS class names.
+# Forcing line breaks there hurts readability without catching real bugs.
+"tests/*" = ["E501"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-m 'not live and not canary'"

@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from .cache import DEFAULT_TTL, CachedScrapper
 from .scrappers.blackfrog import BlackFrogScrapper
 from .scrappers.cardrush import CardRushScrapper
-from .scrappers.enndalgames import EnndalGamesScrapper
+from .scrappers.enndalgames import EnndalGamesScrapper  # noqa: F401  re-enabled in build_scrapers when DNS comes back
 from .scrappers.hareruya import HareruyaScrapper
 from .scrappers.mintmall import MintMallScrapper
 from .scrappers.scryfall import ScryfallScrapper

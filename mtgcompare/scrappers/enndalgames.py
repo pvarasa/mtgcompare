@@ -15,24 +15,14 @@ We accept only the plain English-NM rows (no leading ``【...】`` prefix,
 no multi-segment set codes like ``2XM-Box_Topper-MU``) so the records
 match the unembellished printings from other shops.
 """
-import logging
 import re
-from typing import Optional
 
-import requests
 from bs4 import BeautifulSoup
 
-from ..scrapper import MtgScrapper
-from ..utils import get_fx
+from ._base import HtmlSearchScrapper
 
 BASE_URL = "https://www.enndalgames.com"
 SEARCH_URL = f"{BASE_URL}/products/list.php"
-
-USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/125.0.0.0 Safari/537.36"
-)
 
 # Title pattern. Set is the chunk before the rarity suffix; we deliberately
 # *don't* match titles whose set code has additional dashes (those are box
@@ -47,12 +37,6 @@ _TITLE_RE = re.compile(
 )
 _PRICE_RE = re.compile(r"([\d,]+)\s*yen")
 _QTY_RE = re.compile(r"\((\d+)\)")
-
-
-def make_session() -> requests.Session:
-    s = requests.Session()
-    s.headers.update({"User-Agent": USER_AGENT})
-    return s
 
 
 def parse_search_html(html: str, card_name: str, fx_jpy_per_usd: float) -> list[dict]:
@@ -128,40 +112,13 @@ def parse_search_html(html: str, card_name: str, fx_jpy_per_usd: float) -> list[
     return records
 
 
-class EnndalGamesScrapper(MtgScrapper):
-    def __init__(
-        self,
-        fx: Optional[float] = None,
-        session: Optional[requests.Session] = None,
-    ):
-        super().__init__()
-        self.fx = fx if fx is not None else get_fx("jpy")
-        self.session = session or make_session()
-        self.logger = logging.getLogger("enndalgames")
+class EnndalGamesScrapper(HtmlSearchScrapper):
+    SHOP_NAME = "ENNDAL GAMES"
+    SEARCH_URL = SEARCH_URL
+    LOGGER_NAME = "enndalgames"
 
-    def get_prices(self, card_name: str) -> list[dict]:
-        html = self._fetch_search_html(card_name)
-        if not html:
-            return []
-        records = parse_search_html(html, card_name, self.fx)
-        if not records:
-            self.logger.info(f"No ENNDAL GAMES results for {card_name!r}")
-        for r in records:
-            self.logger.info(
-                f"Found {r['card']} [{r['set']}] ¥{r['price_jpy']:.0f} "
-                f"(${r['price_usd']:.2f}) stock={r['stock']}"
-            )
-        return records
+    def parse_html(self, html: str, card_name: str) -> list[dict]:
+        return parse_search_html(html, card_name, self.fx)
 
-    def _fetch_search_html(self, card_name: str) -> str:
-        try:
-            resp = self.session.get(
-                SEARCH_URL,
-                params={"mode": "search", "name": card_name},
-                timeout=20,
-            )
-            resp.raise_for_status()
-            return resp.text
-        except requests.RequestException as e:
-            self.logger.error(f"ENNDAL GAMES search failed: {e}")
-            return ""
+    def search_params(self, card_name: str) -> dict:
+        return {"mode": "search", "name": card_name}

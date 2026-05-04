@@ -16,24 +16,14 @@ goods_name span. The parser strips those before matching.
 
 The ``parse_search_html`` function is pure and is what tests exercise.
 """
-import logging
 import re
-from typing import Optional
 
-import requests
 from bs4 import BeautifulSoup
 
-from ..scrapper import MtgScrapper
-from ..utils import get_fx
+from ._base import HtmlSearchScrapper
 
 BASE_URL = "https://www.cardrush-mtg.jp"
 SEARCH_URL = f"{BASE_URL}/product-list"
-
-USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/125.0.0.0 Safari/537.36"
-)
 
 # Card Rush only exposes prices tax-included ((税込) badge alongside the figure).
 _PRICE_RE = re.compile(r"([\d,]+)\s*円")
@@ -62,12 +52,6 @@ _LISTING_RE = re.compile(
 # [NM] is explicit NM, [NM-] is "near-mint with light handling" — the shop
 # itself groups it with NM in their grading guide.
 _NM_CONDITIONS = {None, "NM", "NM-"}
-
-
-def make_session() -> requests.Session:
-    s = requests.Session()
-    s.headers.update({"User-Agent": USER_AGENT})
-    return s
 
 
 def _goods_name_text(goods_name_el) -> str:
@@ -140,40 +124,10 @@ def parse_search_html(html: str, card_name: str, fx_jpy_per_usd: float) -> list[
     return records
 
 
-class CardRushScrapper(MtgScrapper):
-    def __init__(
-        self,
-        fx: Optional[float] = None,
-        session: Optional[requests.Session] = None,
-    ):
-        super().__init__()
-        self.fx = fx if fx is not None else get_fx("jpy")
-        self.session = session or make_session()
-        self.logger = logging.getLogger("cardrush")
+class CardRushScrapper(HtmlSearchScrapper):
+    SHOP_NAME = "Card Rush"
+    SEARCH_URL = SEARCH_URL
+    LOGGER_NAME = "cardrush"
 
-    def get_prices(self, card_name: str) -> list[dict]:
-        html = self._fetch_search_html(card_name)
-        if not html:
-            return []
-        records = parse_search_html(html, card_name, self.fx)
-        if not records:
-            self.logger.info(f"No Card Rush results for {card_name!r}")
-        for r in records:
-            self.logger.info(
-                f"Found {r['card']} [{r['set']}] ¥{r['price_jpy']:.0f} "
-                f"(${r['price_usd']:.2f}) stock={r['stock']}"
-            )
-        return records
-
-    def _fetch_search_html(self, card_name: str) -> str:
-        try:
-            resp = self.session.get(
-                SEARCH_URL,
-                params={"keyword": card_name},
-                timeout=20,
-            )
-            resp.raise_for_status()
-            return resp.text
-        except requests.RequestException as e:
-            self.logger.error(f"Card Rush search failed: {e}")
-            return ""
+    def parse_html(self, html: str, card_name: str) -> list[dict]:
+        return parse_search_html(html, card_name, self.fx)
