@@ -1,6 +1,6 @@
 """Tests for the lazy/on-demand caching layer."""
 import threading
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import create_engine, text
@@ -196,7 +196,7 @@ class TestCachedScrapper:
         cached.get_prices("Lightning Bolt")
 
         # Backdate the log entry to make it stale
-        old = datetime.now(timezone.utc) - timedelta(hours=2)
+        old = datetime.now(UTC) - timedelta(hours=2)
         with test_db.get_conn() as conn:
             conn.execute(
                 text("UPDATE shop_query_log SET queried_at = :t"
@@ -212,7 +212,7 @@ class TestCachedScrapper:
         cached.get_prices("Lightning Bolt")
 
         # Backdate, then change the inner scraper's response so MMQ is gone
-        old = datetime.now(timezone.utc) - timedelta(hours=2)
+        old = datetime.now(UTC) - timedelta(hours=2)
         with test_db.get_conn() as conn:
             conn.execute(
                 text("UPDATE shop_query_log SET queried_at = :t"

@@ -1,7 +1,7 @@
 import os
 import re
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Callable, Optional
 
 from .cache import DEFAULT_TTL, CachedScrapper
 from .scrapper import MtgScrapper
@@ -64,7 +64,7 @@ def shop_slug(name: str) -> str:
 CACHE_ENABLED = os.environ.get("MTGCOMPARE_CACHE_ENABLED", "1") not in ("0", "false", "False")
 
 
-def build_scrapers(fx: float, enabled: Optional[set[str]] = None) -> list:
+def build_scrapers(fx: float, enabled: set[str] | None = None) -> list:
     """Construct the configured scrapers, optionally filtered to ``enabled``.
 
     ``enabled`` is a set of *display names* (e.g. ``{"Hareruya", "Card Rush"}``).
@@ -85,7 +85,7 @@ def collect_prices(
     card_name: str,
     fx: float,
     *,
-    enabled: Optional[set[str]] = None,
+    enabled: set[str] | None = None,
     logger=None,
 ) -> list[dict]:
     """Fetch and concatenate all shop results for a single card.

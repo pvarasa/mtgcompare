@@ -11,7 +11,6 @@ The `parse_search_response` function is pure and is what tests exercise.
 import logging
 import time
 from time import monotonic
-from typing import Optional
 
 import requests
 
@@ -80,8 +79,8 @@ def parse_search_response(
 class ScryfallScrapper(MtgScrapper):
     def __init__(
         self,
-        fx: Optional[float] = None,
-        session: Optional[requests.Session] = None,
+        fx: float | None = None,
+        session: requests.Session | None = None,
     ):
         super().__init__()
         self.fx = fx if fx is not None else get_fx("jpy")
@@ -107,7 +106,7 @@ class ScryfallScrapper(MtgScrapper):
     def _fetch_all_pages(self, card_name: str) -> list[dict]:
         pages: list[dict] = []
         url = SEARCH_URL
-        params: Optional[dict] = {
+        params: dict | None = {
             "q": f'!"{card_name}"',
             "unique": "prints",
         }

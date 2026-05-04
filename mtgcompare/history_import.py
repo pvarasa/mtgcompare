@@ -14,10 +14,10 @@ import csv
 import json
 import logging
 import lzma
+from collections.abc import Callable
 from datetime import date
 from pathlib import Path
 from time import monotonic
-from typing import Callable
 
 import duckdb
 
@@ -262,6 +262,7 @@ def _build_load_sql(*, upsert: bool) -> str:
     upsert=True:  INSERT OR REPLACE INTO (upserts into existing table).
     """
     verb = "INSERT OR REPLACE INTO" if upsert else "INSERT INTO"
+    # `verb` is a literal chosen above; ndjson path is bound via `?` placeholder.
     return f"""
 {verb} price_rows
 WITH src AS (
@@ -287,7 +288,7 @@ SELECT uuid, 'etched',
        unnest(map_keys(etched_map)),
        unnest(map_values(etched_map))
 FROM src WHERE etched_map IS NOT NULL AND cardinality(etched_map) > 0
-"""
+"""  # noqa: S608
 
 
 # ---------------------------------------------------------------------------

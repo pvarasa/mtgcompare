@@ -1,5 +1,5 @@
 """Tests for run_log.py — recording start/finish of daily price-update runs."""
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 import pytest
 from sqlalchemy import create_engine, text
@@ -32,7 +32,7 @@ def _row(engine, run_id):
 
 
 def test_record_start_inserts_running_row(test_db):
-    triggered = datetime(2026, 5, 2, 22, 0, 0, tzinfo=timezone.utc)
+    triggered = datetime(2026, 5, 2, 22, 0, 0, tzinfo=UTC)
 
     run_id = run_log_module.record_start(triggered, "cron", "abc123")
 
@@ -46,7 +46,7 @@ def test_record_start_inserts_running_row(test_db):
 
 
 def test_record_finish_success_updates_all_fields(test_db):
-    triggered = datetime(2026, 5, 2, 22, 0, 0, tzinfo=timezone.utc)
+    triggered = datetime(2026, 5, 2, 22, 0, 0, tzinfo=UTC)
     run_id = run_log_module.record_start(triggered, "cron", "abc123")
 
     run_log_module.record_finish(
@@ -69,7 +69,7 @@ def test_record_finish_success_updates_all_fields(test_db):
 
 
 def test_record_finish_failed_records_error_message(test_db):
-    triggered = datetime(2026, 5, 2, 22, 0, 0, tzinfo=timezone.utc)
+    triggered = datetime(2026, 5, 2, 22, 0, 0, tzinfo=UTC)
     run_id = run_log_module.record_start(triggered, "cron", "abc123")
 
     run_log_module.record_finish(
@@ -86,7 +86,7 @@ def test_record_finish_failed_records_error_message(test_db):
 
 
 def test_record_finish_truncates_long_error(test_db):
-    triggered = datetime(2026, 5, 2, 22, 0, 0, tzinfo=timezone.utc)
+    triggered = datetime(2026, 5, 2, 22, 0, 0, tzinfo=UTC)
     run_id = run_log_module.record_start(triggered, "cron", "abc123")
     huge = "x" * 5000
 
@@ -110,7 +110,7 @@ def test_record_start_swallows_db_errors(monkeypatch, caplog):
             raise RuntimeError("DB exploded")
     monkeypatch.setattr(run_log_module, "engine", BoomEngine())
 
-    triggered = datetime(2026, 5, 2, 22, 0, 0, tzinfo=timezone.utc)
+    triggered = datetime(2026, 5, 2, 22, 0, 0, tzinfo=UTC)
     with caplog.at_level("ERROR", logger="mtgcompare.run_log"):
         run_id = run_log_module.record_start(triggered, "cron", "xyz")
 

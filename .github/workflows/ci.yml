@@ -43,3 +43,25 @@ jobs:
 
       - name: Run offline tests
         run: uv run pytest
+
+  audit:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install dependencies
+        run: uv sync --group dev
+
+      # pip-audit scans the active venv against the PyPA advisory database
+      # (OSV + GitHub) for known CVEs. Fails the job on any finding so we
+      # can't ship a release built on a known-vulnerable dep.
+      - name: Audit dependencies
+        run: uv run --with pip-audit pip-audit --strict

@@ -59,7 +59,7 @@ def test_auth_gate_refreshes_when_access_token_expired(monkeypatch):
 
     def fake_verify(token: str) -> dict:
         calls["verify_count"] += 1
-        if token == "expired-jwt":
+        if token == "expired-jwt":  # noqa: S105 — test sentinel, not a credential
             raise pyjwt.InvalidTokenError("expired")
         return {"sub": "user_REFRESH", "sid": "sess_new"}
 

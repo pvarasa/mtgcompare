@@ -1,6 +1,6 @@
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
@@ -187,13 +187,13 @@ def test_deduct_inventory_multiple_lots_aggregated():
 
 
 def test_history_cutoff_for_known_period():
-    now = datetime(2026, 4, 22, tzinfo=timezone.utc)
-    assert web._history_cutoff("1m", now=now) == datetime(2026, 3, 23, tzinfo=timezone.utc)
+    now = datetime(2026, 4, 22, tzinfo=UTC)
+    assert web._history_cutoff("1m", now=now) == datetime(2026, 3, 23, tzinfo=UTC)
     assert web._history_cutoff("all", now=now) is None
 
 
 def test_slice_history_filters_by_period():
-    now = datetime(2026, 4, 22, tzinfo=timezone.utc)
+    now = datetime(2026, 4, 22, tzinfo=UTC)
     points = [
         {"price_usd": 2.0, "fetched_at": "2026-03-01T00:00:00+00:00"},
         {"price_usd": 3.0, "fetched_at": "2026-03-25T00:00:00+00:00"},
@@ -243,9 +243,8 @@ def test_get_user_id_aborts_when_header_absent(monkeypatch):
     that drops the header would otherwise cross-contaminate inventories."""
     from werkzeug.exceptions import Forbidden
     monkeypatch.setattr(db_module, "IS_POSTGRES", True)
-    with web.app.test_request_context("/"):
-        with pytest.raises(Forbidden):
-            web._get_user_id()
+    with web.app.test_request_context("/"), pytest.raises(Forbidden):
+        web._get_user_id()
 
 
 def test_get_user_id_respects_custom_header_name(monkeypatch):

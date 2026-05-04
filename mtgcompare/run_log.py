@@ -4,7 +4,7 @@ Writes to the `price_update_runs` table. Failures here are logged and
 swallowed — bookkeeping must never block the price-update path itself.
 """
 import logging
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 from sqlalchemy import text
 
@@ -66,7 +66,7 @@ def record_finish(
             conn.execute(_FINISH, {
                 "id": run_id,
                 "status": status,
-                "finished_at": datetime.now(timezone.utc),
+                "finished_at": datetime.now(UTC),
                 "duration_ms": duration_ms,
                 "uuids_streamed": uuids_streamed,
                 "rows_inserted": rows_inserted,

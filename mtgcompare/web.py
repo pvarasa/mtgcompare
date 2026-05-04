@@ -10,12 +10,12 @@ import lzma
 import os
 import re
 import tempfile
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from threading import Lock, Thread
 from time import monotonic
-from typing import Callable
 from uuid import uuid4
 
 import duckdb
@@ -642,7 +642,7 @@ def _format_ago(iso: str | None) -> str | None:
         return None
     try:
         dt  = datetime.fromisoformat(iso.replace("Z", "+00:00"))
-        sec = int((datetime.now(timezone.utc) - dt).total_seconds())
+        sec = int((datetime.now(UTC) - dt).total_seconds())
         if sec <    60: return "just now"
         if sec <  3600: return f"{sec // 60} min ago"
         if sec < 86400: return f"{sec // 3600} hr ago"
@@ -665,7 +665,7 @@ def _history_cutoff(period: str, *, now: datetime | None = None) -> datetime | N
     days = _MARKET_HISTORY_PERIODS.get(period)
     if days is None:
         return None
-    anchor = now or datetime.now(timezone.utc)
+    anchor = now or datetime.now(UTC)
     return anchor - timedelta(days=days)
 
 
@@ -681,7 +681,8 @@ def _slice_history(points: list[dict], period: str, *, now: datetime | None = No
 
 def _mtgjson_cache_dir() -> Path:
     if db.IS_POSTGRES:
-        cache_dir = Path(os.environ.get("MTGJSON_CACHE_DIR", "/tmp/mtgjson"))
+        # Linux containers only; overridable via env var. CLAUDE.md documents the default.
+        cache_dir = Path(os.environ.get("MTGJSON_CACHE_DIR", "/tmp/mtgjson"))  # noqa: S108
     else:
         cache_dir = db.DB_PATH.parent / "mtgjson"
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -767,7 +768,7 @@ def _init_download_job(job_id: str) -> None:
             "phase": "Queued",
             "detail": "Waiting to start...",
             "progress": 0,
-            "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "updated_at": datetime.now(UTC).isoformat(timespec="seconds"),
             "error": None,
         }
 
@@ -778,7 +779,7 @@ def _set_download_job(job_id: str, **updates) -> None:
         if not job:
             return
         job.update(updates)
-        job["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        job["updated_at"] = datetime.now(UTC).isoformat(timespec="seconds")
 
 
 def _get_download_job(job_id: str) -> dict | None:
@@ -931,12 +932,13 @@ def _populate_market_prices_from_history(
         placeholders = ", ".join(f":u{i}" for i in range(len(uuid_list)))
         with db.get_conn() as conn:
             rows = conn.execute(
+                # placeholders are :u0, :u1, …; user values bound via `params`.
                 text(f"""
                     SELECT DISTINCT ON (uuid, finish) uuid, finish, price_usd
                     FROM price_rows
                     WHERE uuid IN ({placeholders})
                     ORDER BY uuid, finish, market_date DESC
-                """),
+                """),  # noqa: S608
                 params,
             ).fetchall()
         latest: dict[tuple[str, str], float | None] = {
@@ -952,12 +954,13 @@ def _populate_market_prices_from_history(
             conn_duck = duckdb.connect(str(duckdb_path), read_only=True)
             try:
                 rows = conn_duck.execute(
+                    # placeholders are positional `?`; user values bound via `uuid_list`.
                     f"""
                     SELECT uuid, finish, price_usd
                     FROM price_rows
                     WHERE uuid IN ({placeholders})
                     QUALIFY ROW_NUMBER() OVER (PARTITION BY uuid, finish ORDER BY market_date DESC) = 1
-                    """,
+                    """,  # noqa: S608
                     uuid_list,
                 ).fetchall()
             finally:
@@ -1121,7 +1124,8 @@ def _persist_card_map_and_meta(
             params = {f"s{i}": s for i, s in enumerate(sets_needing_load)}
             placeholders = ", ".join(f":s{i}" for i in range(len(sets_needing_load)))
             conn.execute(
-                text(f"DELETE FROM mtgjson_card_map WHERE set_code IN ({placeholders})"),
+                # placeholders are :s0, :s1, …; user values bound via `params`.
+                text(f"DELETE FROM mtgjson_card_map WHERE set_code IN ({placeholders})"),  # noqa: S608
                 params,
             )
         if card_maps:
@@ -1151,7 +1155,7 @@ def _import_mtgjson_history(rows: list[dict], *, progress_cb=None) -> tuple[int,
             progress_cb(progress, phase, detail)
 
     inventory_rows = [dict(row) for row in rows]
-    downloaded_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    downloaded_at = datetime.now(UTC).isoformat(timespec="seconds")
 
     card_maps, sets_needing_load = _resolve_inventory_uuids(
         inventory_rows, downloaded_at, _progress,
@@ -1372,7 +1376,7 @@ def market_history():
     history = _query_history(mapped["uuid"], finish) if mapped else {}
     dense_points = _densify_daily_points(
         history,
-        end_day=datetime.now(timezone.utc).date(),
+        end_day=datetime.now(UTC).date(),
     ) if history else []
     if period != "all" and dense_points:
         cutoff = _history_cutoff(period)
@@ -1380,7 +1384,7 @@ def market_history():
             raise ValueError(f"Unknown history period: {period!r}")
         dense_points = [
             point for point in dense_points
-            if datetime.fromisoformat(point["market_date"]).replace(tzinfo=timezone.utc) >= cutoff
+            if datetime.fromisoformat(point["market_date"]).replace(tzinfo=UTC) >= cutoff
         ]
     available_since = next((point["market_date"] for point in dense_points if point["price_usd"] is not None), None)
 
@@ -1576,7 +1580,7 @@ def cron_update_prices():
     Requires Authorization: Bearer <CRON_SECRET> header.
     Pass `X-Trigger-Source: manual` to mark a hand-fired run.
     """
-    triggered_at = datetime.now(timezone.utc)
+    triggered_at = datetime.now(UTC)
     trigger_source = request.headers.get("X-Trigger-Source", "cron")
 
     if _CRON_SECRET:
@@ -1645,7 +1649,8 @@ def main() -> None:
     port = int(os.environ.get("FLASK_RUN_PORT", "5000"))
     # use_reloader=False so start/stop scripts have a single PID to manage;
     # debug features (interactive tracebacks) are still active.
-    app.run(host=host, port=port, debug=True, use_reloader=False)
+    # Local dev only — production serves via gunicorn (see Dockerfile).
+    app.run(host=host, port=port, debug=True, use_reloader=False)  # noqa: S201
 
 
 if __name__ == "__main__":

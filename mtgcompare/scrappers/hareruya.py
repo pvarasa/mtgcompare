@@ -11,7 +11,6 @@ The `parse_lazy_html` function is pure and is what the tests exercise.
 import logging
 import re
 from time import monotonic
-from typing import Optional
 
 import requests
 from bs4 import BeautifulSoup
@@ -87,8 +86,8 @@ def parse_lazy_html(html: str, card_name: str, fx_jpy_per_usd: float) -> list[di
 class HareruyaScrapper(MtgScrapper):
     def __init__(
         self,
-        fx: Optional[float] = None,
-        session: Optional[requests.Session] = None,
+        fx: float | None = None,
+        session: requests.Session | None = None,
     ):
         super().__init__()
         self.fx = fx if fx is not None else get_fx("jpy")

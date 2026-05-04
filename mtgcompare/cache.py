@@ -17,8 +17,7 @@ import logging
 import os
 import threading
 from concurrent.futures import Future
-from datetime import datetime, timedelta, timezone
-from typing import Optional
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import text
 
@@ -61,25 +60,25 @@ def _ensure_schema() -> None:
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _normalize(card_name: str) -> str:
     return " ".join(card_name.strip().lower().split())
 
 
-def _coerce_aware(value) -> Optional[datetime]:
+def _coerce_aware(value) -> datetime | None:
     """SQLite returns naive datetimes (UTC by convention); Postgres returns aware."""
     if value is None:
         return None
     if isinstance(value, str):
         value = datetime.fromisoformat(value)
     if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
+        value = value.replace(tzinfo=UTC)
     return value
 
 
-def read_log(conn, shop: str, card_name: str) -> Optional[dict]:
+def read_log(conn, shop: str, card_name: str) -> dict | None:
     row = conn.execute(
         text(
             "SELECT queried_at, result_count, status"
@@ -103,7 +102,7 @@ def upsert_log(
     card_name: str,
     result_count: int,
     status: str = "ok",
-    now: Optional[datetime] = None,
+    now: datetime | None = None,
 ) -> None:
     db.upsert(
         conn,
@@ -153,7 +152,7 @@ def replace_listings(
     shop: str,
     card_name: str,
     records: list[dict],
-    now: Optional[datetime] = None,
+    now: datetime | None = None,
 ) -> None:
     """Atomically replace every cached listing for (shop, card_name).
 
@@ -188,7 +187,8 @@ def replace_listings(
     cols = list(rows[0].keys())
     placeholders = ", ".join(f":{c}" for c in cols)
     conn.execute(
-        text(f"INSERT INTO shop_listings ({', '.join(cols)}) VALUES ({placeholders})"),
+        # cols come from the literal dict above; values are bound via `rows`.
+        text(f"INSERT INTO shop_listings ({', '.join(cols)}) VALUES ({placeholders})"),  # noqa: S608
         rows,
     )
 
@@ -299,7 +299,7 @@ class CachedScrapper(MtgScrapper):
         )
         return records
 
-    def _is_fresh(self, queried_at: Optional[datetime]) -> bool:
+    def _is_fresh(self, queried_at: datetime | None) -> bool:
         if queried_at is None:
             return False
         return (_now() - queried_at) < self.ttl

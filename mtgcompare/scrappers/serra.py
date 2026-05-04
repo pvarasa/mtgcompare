@@ -19,7 +19,6 @@ We filter to ``(英)`` (English), NM-condition, in-stock rows.
 The ``parse_search_html`` function is pure and is what tests exercise.
 """
 import re
-from typing import Optional
 
 from bs4 import BeautifulSoup
 
@@ -46,7 +45,7 @@ _TITLE_RE = re.compile(
 _FLAVOR_RE = re.compile(r"\s*[★●■▼◆☆][^★●■▼◆☆]*[★●■▼◆☆]\s*$")
 
 
-def _row_price_jpy(price_td) -> Optional[float]:
+def _row_price_jpy(price_td) -> float | None:
     """Strip the (often-present) strike-through retail span before parsing."""
     strike = price_td.select_one(".product-list__item__table--price-original")
     if strike is not None:

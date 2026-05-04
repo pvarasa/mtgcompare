@@ -7,7 +7,6 @@ single page (no pagination for typical card queries).
 The `parse_search_html` function is pure and is what tests exercise.
 """
 import re
-from typing import Optional
 
 from bs4 import BeautifulSoup
 
@@ -28,7 +27,7 @@ _STRIP_BRACKETS_RE = re.compile(r"【[^】]*】|\([^)]*\)|\[[^\]]*\]|●")
 ENGLISH_TAG = "【英語版】"
 
 
-def _clean_english_name(goods_text: str) -> Optional[str]:
+def _clean_english_name(goods_text: str) -> str | None:
     """Extract the bare English card name from a goods_name text.
 
     Returns None if the listing is a non-MTG product (no set bracket),

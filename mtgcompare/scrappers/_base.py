@@ -28,7 +28,7 @@ and ``make_session`` but skip the base class.
 """
 import logging
 from time import monotonic
-from typing import ClassVar, Optional
+from typing import ClassVar
 
 import requests
 
@@ -61,7 +61,7 @@ class RateLimitedError(ScraperFetchError):
     """
 
 
-def make_session(extra_headers: Optional[dict] = None) -> requests.Session:
+def make_session(extra_headers: dict | None = None) -> requests.Session:
     s = requests.Session()
     s.headers.update({"User-Agent": USER_AGENT})
     if extra_headers:
@@ -86,8 +86,8 @@ class HtmlSearchScrapper(MtgScrapper):
 
     def __init__(
         self,
-        fx: Optional[float] = None,
-        session: Optional[requests.Session] = None,
+        fx: float | None = None,
+        session: requests.Session | None = None,
     ):
         super().__init__()
         self.fx = fx if fx is not None else get_fx("jpy")

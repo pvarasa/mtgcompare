@@ -14,8 +14,7 @@ from __future__ import annotations
 
 import os
 import secrets
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 import jwt
 from flask import (
@@ -43,8 +42,8 @@ WORKOS_WEBHOOK_SECRET = os.environ.get("WORKOS_WEBHOOK_SECRET", "")
 
 WORKOS_ENABLED = bool(WORKOS_API_KEY and WORKOS_CLIENT_ID and WORKOS_REDIRECT_URI)
 
-ACCESS_TOKEN_COOKIE  = "mtgc_at"
-REFRESH_TOKEN_COOKIE = "mtgc_rt"
+ACCESS_TOKEN_COOKIE  = "mtgc_at"  # noqa: S105 — cookie name, not a secret
+REFRESH_TOKEN_COOKIE = "mtgc_rt"  # noqa: S105 — cookie name, not a secret
 RETURN_TO_COOKIE     = "mtgc_return_to"
 STATE_COOKIE         = "mtgc_oauth_state"
 
@@ -68,7 +67,7 @@ _PUBLIC_EXACT_PATHS = frozenset({"/healthz"})
 # ---------------------------------------------------------------------------
 
 _workos_client = None
-_jwks_client: Optional[PyJWKClient] = None
+_jwks_client: PyJWKClient | None = None
 
 
 def _get_client():
@@ -210,7 +209,7 @@ def _upsert_user(user: dict) -> None:
             "email": user.get("email") or "",
             "first_name": user.get("first_name"),
             "last_name": user.get("last_name"),
-            "updated_at": datetime.now(timezone.utc),
+            "updated_at": datetime.now(UTC),
         }])
 
 
@@ -227,9 +226,7 @@ def _is_safe_return_to(value: str) -> bool:
     """
     if not value or not value.startswith("/"):
         return False
-    if value.startswith(("//", "/\\")):
-        return False
-    return True
+    return not value.startswith(("//", "/\\"))
 
 
 def _load_user_record(workos_user_id: str) -> dict | None:

@@ -207,15 +207,17 @@ def upsert(conn, table_name: str, conflict_cols: list[str], rows: list[dict]) ->
     non_conflict = [c for c in cols if c not in conflict_cols]
     col_list = ", ".join(cols)
     placeholders = ", ".join(f":{c}" for c in cols)
+    # table/column identifiers come from internal callers (table defs in this
+    # module, dict keys from typed row builders); values are bound via `rows`.
     if IS_POSTGRES:
         conflict = ", ".join(conflict_cols)
         set_clause = ", ".join(f"{c} = EXCLUDED.{c}" for c in non_conflict)
         sql = text(
-            f"INSERT INTO {table_name} ({col_list}) VALUES ({placeholders})"
+            f"INSERT INTO {table_name} ({col_list}) VALUES ({placeholders})"  # noqa: S608
             f" ON CONFLICT ({conflict}) DO UPDATE SET {set_clause}"
         )
     else:
-        sql = text(f"INSERT OR REPLACE INTO {table_name} ({col_list}) VALUES ({placeholders})")
+        sql = text(f"INSERT OR REPLACE INTO {table_name} ({col_list}) VALUES ({placeholders})")  # noqa: S608
     conn.execute(sql, rows)
 
 

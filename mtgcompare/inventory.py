@@ -14,7 +14,8 @@ Usage:
 import argparse
 import csv
 import sys
-from typing import IO, Iterator
+from collections.abc import Iterator
+from typing import IO
 
 from sqlalchemy import text
 
