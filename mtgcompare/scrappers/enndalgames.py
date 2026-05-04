@@ -115,7 +115,7 @@ def parse_search_html(html: str, card_name: str, fx_jpy_per_usd: float) -> list[
 class EnndalGamesScrapper(HtmlSearchScrapper):
     SHOP_NAME = "ENNDAL GAMES"
     SEARCH_URL = SEARCH_URL
-    LOGGER_NAME = "enndalgames"
+    LOGGER_NAME = "mtgcompare.scrappers.enndalgames"
 
     def parse_html(self, html: str, card_name: str) -> list[dict]:
         return parse_search_html(html, card_name, self.fx)

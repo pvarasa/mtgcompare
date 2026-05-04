@@ -277,13 +277,26 @@ def _auth_gate():
             claims = None
 
     if claims is None and refresh_token:
+        # Split the two failure modes so logs can distinguish "WorkOS API
+        # rejected the refresh" from "the new access token didn't verify".
         try:
             refreshed = refresh(refresh_token)
-            claims = verify_access_token(refreshed["access_token"])
         except Exception as exc:
-            current_app.logger.info("WorkOS refresh failed: %s", exc)
+            current_app.logger.info(
+                "event=auth_refresh_fail reason=workos_error class=%s detail=%s",
+                type(exc).__name__, exc,
+            )
             refreshed = None
-            claims = None
+        if refreshed is not None:
+            try:
+                claims = verify_access_token(refreshed["access_token"])
+                current_app.logger.info("event=auth_refresh_ok")
+            except jwt.InvalidTokenError as exc:
+                current_app.logger.info(
+                    "event=auth_refresh_fail reason=invalid_token detail=%s", exc,
+                )
+                refreshed = None
+                claims = None
 
     if claims is None:
         # Kick the user to AuthKit. Stash where they were heading so the
@@ -293,6 +306,7 @@ def _auth_gate():
         _set_transient_cookie(resp, STATE_COOKIE, state)
         if request.method == "GET" and _is_safe_return_to(request.full_path):
             _set_transient_cookie(resp, RETURN_TO_COOKIE, request.full_path)
+        current_app.logger.info("event=auth_login_start source=gated path=%r", request.path)
         return resp
 
     g.user_id = claims["sub"]
@@ -330,6 +344,7 @@ def login():
     return_to = request.args.get("return_to", "").strip()
     if _is_safe_return_to(return_to):
         _set_transient_cookie(resp, RETURN_TO_COOKIE, return_to)
+    current_app.logger.info("event=auth_login_start source=explicit")
     return resp
 
 
@@ -341,18 +356,24 @@ def callback():
     state = request.args.get("state", "")
     expected_state = request.cookies.get(STATE_COOKIE, "")
     if not code or not state or state != expected_state:
+        current_app.logger.info("event=auth_callback_fail reason=invalid_state")
         flash("Login failed — invalid state. Please try again.")
         return redirect(url_for("auth.login"))
 
     try:
         session = exchange_code(code)
     except Exception as exc:
-        current_app.logger.exception("WorkOS code exchange failed")
+        current_app.logger.exception(
+            "event=auth_callback_fail reason=code_exchange class=%s",
+            type(exc).__name__,
+        )
         flash(f"Login failed: {exc}")
         return redirect(url_for("auth.login"))
 
     inv.init_schema()
     _upsert_user(session["user"])
+    g.user_id = session["user"]["id"]
+    current_app.logger.info("event=auth_callback_ok")
 
     return_to = request.cookies.get(RETURN_TO_COOKIE, "")
     if not _is_safe_return_to(return_to):
@@ -376,9 +397,12 @@ def logout():
     access_token = request.cookies.get(ACCESS_TOKEN_COOKIE)
     if access_token:
         try:
-            session_id = verify_access_token(access_token).get("sid")
+            claims = verify_access_token(access_token)
+            session_id = claims.get("sid")
+            g.user_id = claims.get("sub")
         except jwt.InvalidTokenError:
             session_id = None
+    current_app.logger.info("event=auth_logout")
     resp = make_response(redirect(logout_url(session_id=session_id)))
     _clear_session_cookies(resp)
     return resp
@@ -404,7 +428,10 @@ def webhook():
     try:
         event = verify_webhook(request.get_data(cache=True), sig)
     except Exception as exc:
-        current_app.logger.warning("Webhook verification failed: %s", exc)
+        current_app.logger.warning(
+            "event=webhook_verify_failed class=%s detail=%s",
+            type(exc).__name__, exc,
+        )
         return jsonify({"ok": False, "error": "signature verification failed"}), 401
 
     inv.init_schema()

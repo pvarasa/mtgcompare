@@ -27,6 +27,7 @@ JSON-only) so they keep their own classes; they share ``USER_AGENT``
 and ``make_session`` but skip the base class.
 """
 import logging
+from time import monotonic
 from typing import ClassVar, Optional
 
 import requests
@@ -112,12 +113,14 @@ class HtmlSearchScrapper(MtgScrapper):
         # _fetch_search_html raises on transport failure — that propagates
         # so the cache layer can distinguish "shop has no listings"
         # (cacheable) from "we couldn't reach the shop" (don't cache).
+        t0 = monotonic()
         html = self._fetch_search_html(card_name)
         records = self.parse_html(html, card_name)
-        if not records:
-            self.logger.info(f"No {self.SHOP_NAME} results for {card_name!r}")
-        for r in records:
-            self._log_record(r)
+        self.logger.info(
+            "event=shop_query shop=%r card=%r rows=%d duration_ms=%d",
+            self.SHOP_NAME, card_name, len(records),
+            int((monotonic() - t0) * 1000),
+        )
         return records
 
     def _fetch_search_html(self, card_name: str) -> str:
@@ -139,17 +142,3 @@ class HtmlSearchScrapper(MtgScrapper):
                 f"{self.SHOP_NAME} HTTP {resp.status_code}"
             )
         return self.decode_response(resp)
-
-    def _log_record(self, r: dict) -> None:
-        extras = []
-        cond = r.get("condition")
-        if cond and cond != "NM":
-            extras.append(f"cond={cond}")
-        stock = r.get("stock")
-        if stock is not None:
-            extras.append(f"stock={stock}")
-        suffix = (" " + " ".join(extras)) if extras else ""
-        self.logger.info(
-            f"Found {r['card']} [{r['set']}] ¥{r['price_jpy']:.0f} "
-            f"(${r['price_usd']:.2f}){suffix}"
-        )

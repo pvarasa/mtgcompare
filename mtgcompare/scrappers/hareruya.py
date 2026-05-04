@@ -10,6 +10,7 @@ The `parse_lazy_html` function is pure and is what the tests exercise.
 """
 import logging
 import re
+from time import monotonic
 from typing import Optional
 
 import requests
@@ -92,23 +93,25 @@ class HareruyaScrapper(MtgScrapper):
         super().__init__()
         self.fx = fx if fx is not None else get_fx("jpy")
         self.session = session or make_session()
-        self.logger = logging.getLogger("hareruya")
+        self.logger = logging.getLogger("mtgcompare.scrappers.hareruya")
 
     def get_prices(self, card_name: str) -> list[dict]:
         # Both fetch helpers raise ScraperFetchError on transport failure.
         # We let it propagate so the cache layer doesn't poison the entry.
+        t0 = monotonic()
         docs = self._fetch_docs(card_name)
         if not docs:
-            self.logger.info(f"No Hareruya results for {card_name!r}")
+            self.logger.info(
+                "event=shop_query shop='Hareruya' card=%r rows=0 duration_ms=%d",
+                card_name, int((monotonic() - t0) * 1000),
+            )
             return []
         html = self._fetch_lazy_html(docs)
-
         records = parse_lazy_html(html, card_name, self.fx)
-        for r in records:
-            self.logger.info(
-                f"Found {r['card']} [{r['set']}] ¥{r['price_jpy']:.0f} "
-                f"(${r['price_usd']:.2f}) cond={r['condition']} stock={r['stock']}"
-            )
+        self.logger.info(
+            "event=shop_query shop='Hareruya' card=%r rows=%d duration_ms=%d",
+            card_name, len(records), int((monotonic() - t0) * 1000),
+        )
         return records
 
     def _fetch_docs(self, card_name: str) -> list[dict]:

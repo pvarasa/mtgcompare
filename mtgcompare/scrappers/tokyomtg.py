@@ -93,7 +93,7 @@ def parse_search_html(html: str, card_name: str, fx_jpy_per_usd: float) -> list[
 class TokyoMtgScrapper(HtmlSearchScrapper):
     SHOP_NAME = "TokyoMTG"
     SEARCH_URL = SEARCH_URL
-    LOGGER_NAME = "tokyomtg"
+    LOGGER_NAME = "mtgcompare.scrappers.tokyomtg"
     SESSION_HEADERS = {
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",

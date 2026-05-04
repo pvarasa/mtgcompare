@@ -12,12 +12,16 @@ Public API (PostgreSQL):     rebuild_history_pg(), merge_today_prices_pg()
 """
 import csv
 import json
+import logging
 import lzma
 from datetime import date
 from pathlib import Path
+from time import monotonic
 from typing import Callable
 
 import duckdb
+
+logger = logging.getLogger(__name__)
 
 
 def read_meta_date(xz_path: Path) -> date | None:
@@ -215,6 +219,7 @@ def _stream_to_ndjson(
     progress_cb: Callable[[int, str, str], None] | None = None,
 ) -> int:
     """Write per-UUID retail maps as NDJSON. Returns UUID count."""
+    t0 = monotonic()
     count = 0
     with ndjson_path.open("w", encoding="utf-8") as out:
         for uuid, retail in _iter_price_entries(xz_path):
@@ -232,6 +237,12 @@ def _stream_to_ndjson(
                     "Decompressing history",
                     f"Streamed {count:,} cards to NDJSON...",
                 )
+    logger.info(
+        "event=phase_done phase=ndjson_stream uuid_count=%d duration_ms=%d "
+        "xz_bytes=%d ndjson_bytes=%d",
+        count, int((monotonic() - t0) * 1000),
+        xz_path.stat().st_size, ndjson_path.stat().st_size,
+    )
     return count
 
 
@@ -294,6 +305,9 @@ def rebuild_history_db(
     Builds to a .tmp file and renames atomically on success.
     Returns the number of price rows written to DuckDB.
     """
+    t0 = monotonic()
+    logger.info("event=history_import_start mode=rebuild_local xz_bytes=%d", xz_path.stat().st_size)
+
     cache_dir = xz_path.parent
     ndjson_path = cache_dir / "AllPrices.ndjson"
     duckdb_tmp = Path(str(duckdb_path) + ".tmp")
@@ -329,11 +343,16 @@ def rebuild_history_db(
     if progress_cb:
         progress_cb(92, "Finishing import", f"Local MTGJSON history DB ready with {row_count:,} price points.")
 
+    logger.info(
+        "event=history_import_done mode=rebuild_local uuid_count=%d row_count=%d duration_ms=%d",
+        uuid_count, row_count, int((monotonic() - t0) * 1000),
+    )
     return row_count
 
 
 def _ndjson_to_csv(ndjson_path: Path, csv_path: Path) -> int:
     """Flatten NDJSON price rows to CSV with O(1) memory. Returns row count."""
+    t0 = monotonic()
     count = 0
     with ndjson_path.open("r", encoding="utf-8") as ndjson_fh, \
          csv_path.open("w", encoding="utf-8", newline="") as csv_fh:
@@ -346,6 +365,10 @@ def _ndjson_to_csv(ndjson_path: Path, csv_path: Path) -> int:
                     if price is not None:
                         writer.writerow([uuid, finish, date, price])
                         count += 1
+    logger.info(
+        "event=phase_done phase=ndjson_to_csv rows=%d duration_ms=%d csv_bytes=%d",
+        count, int((monotonic() - t0) * 1000), csv_path.stat().st_size,
+    )
     return count
 
 
@@ -355,6 +378,7 @@ def _csv_to_postgres(csv_path: Path, engine, *, initial: bool) -> None:
     initial=True: direct COPY into the (empty) table — fastest path.
     initial=False: COPY into temp table then upsert — safe for incremental updates.
     """
+    t0 = monotonic()
     raw = engine.raw_connection()
     try:
         with raw.cursor() as cur:
@@ -387,6 +411,11 @@ def _csv_to_postgres(csv_path: Path, engine, *, initial: bool) -> None:
         raw.commit()
     finally:
         raw.close()
+    logger.info(
+        "event=phase_done phase=copy_to_pg mode=%s duration_ms=%d csv_bytes=%d",
+        "initial" if initial else "upsert",
+        int((monotonic() - t0) * 1000), csv_path.stat().st_size,
+    )
 
 
 def rebuild_history_pg(
@@ -400,6 +429,9 @@ def rebuild_history_pg(
     DuckDB is used as an ETL engine only — no .duckdb file is persisted.
     Returns the number of price rows written to PostgreSQL.
     """
+    t0 = monotonic()
+    logger.info("event=history_import_start mode=rebuild_pg xz_bytes=%d", xz_path.stat().st_size)
+
     cache_dir = xz_path.parent
     ndjson_path = cache_dir / "AllPrices.ndjson"
     csv_path = cache_dir / "AllPrices_flat.csv"
@@ -437,6 +469,12 @@ def rebuild_history_pg(
     if progress_cb:
         progress_cb(92, "Finishing import", f"PostgreSQL price_rows updated with {row_count:,} price points.")
 
+    logger.info(
+        "event=history_import_done mode=rebuild_pg uuid_count=%d row_count=%d "
+        "copy_path=%s duration_ms=%d",
+        uuid_count, row_count, "initial" if not has_rows else "upsert",
+        int((monotonic() - t0) * 1000),
+    )
     return row_count
 
 
@@ -451,6 +489,9 @@ def merge_today_prices_pg(
     Returns (uuid_count, row_count): cards seen in the file, and CSV rows
     upserted (sum across normal/foil/etched and date keys).
     """
+    t0 = monotonic()
+    logger.info("event=history_import_start mode=merge_pg xz_bytes=%d", xz_path.stat().st_size)
+
     cache_dir = xz_path.parent
     ndjson_path = cache_dir / "AllPricesToday.ndjson"
     csv_path = cache_dir / "AllPricesToday_flat.csv"
@@ -475,6 +516,10 @@ def merge_today_prices_pg(
     if progress_cb:
         progress_cb(95, "Done", f"Merged {row_count:,} price points into PostgreSQL.")
 
+    logger.info(
+        "event=history_import_done mode=merge_pg uuid_count=%d row_count=%d duration_ms=%d",
+        uuid_count, row_count, int((monotonic() - t0) * 1000),
+    )
     return uuid_count, row_count
 
 
@@ -489,6 +534,9 @@ def merge_today_prices(
     Uses the same NDJSON → DuckDB SQL path as rebuild_history_db for speed.
     Gaps in existing history are left intact. Returns (uuid_count, row_count).
     """
+    t0 = monotonic()
+    logger.info("event=history_import_start mode=merge_local xz_bytes=%d", xz_path.stat().st_size)
+
     cache_dir = xz_path.parent
     ndjson_path = cache_dir / "AllPricesToday.ndjson"
 
@@ -519,4 +567,9 @@ def merge_today_prices(
 
     if progress_cb:
         progress_cb(95, "Merging today's prices", f"Merged {row_count:,} today's price points.")
+
+    logger.info(
+        "event=history_import_done mode=merge_local uuid_count=%d row_count=%d duration_ms=%d",
+        uuid_count, row_count, int((monotonic() - t0) * 1000),
+    )
     return uuid_count, row_count

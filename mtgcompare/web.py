@@ -35,11 +35,17 @@ from sqlalchemy import text
 
 from . import auth, db, history_import, run_log
 from . import inventory as inv
+from .log_context import REQUEST_ID_HEADER, bind_request_id, install_record_factory
 from .shops import ACTIVE_SHOPS, SHIPPING_JPY, SHOP_FLAGS, collect_prices, shop_slug
 from .utils import get_fx
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 LOGGING_CONF = ROOT_DIR / "logging.conf"
+
+# Install the LogRecord factory before fileConfig so every record carries
+# request_id/user_id defaults — the formatter references those fields and
+# would KeyError on any record that lacks them.
+install_record_factory()
 
 # Apply file-based logging config at import time so it takes effect under
 # gunicorn (which imports `mtgcompare.web:app` and never calls main()).
@@ -57,6 +63,23 @@ if db.IS_POSTGRES and not _SECRET_KEY:
         "(production must not use the public dev fallback)."
     )
 app.secret_key = _SECRET_KEY or "mtgcompare-local-dev"
+
+
+# Stamp a per-request id BEFORE the auth blueprint's gate runs, so even
+# the kick-to-login redirect carries a correlatable id in its log line.
+# Honors an upstream X-Request-Id when the proxy injects one.
+@app.before_request
+def _bind_log_context():
+    bind_request_id()
+
+
+@app.after_request
+def _echo_request_id(response):
+    rid = getattr(g, "request_id", None)
+    if rid:
+        response.headers.setdefault(REQUEST_ID_HEADER, rid)
+    return response
+
 
 app.register_blueprint(auth.bp)
 
@@ -138,10 +161,12 @@ def _get_user_id() -> str:
     if auth.WORKOS_ENABLED:
         return getattr(g, "user_id", "anonymous")
     if not db.IS_POSTGRES:
+        g.user_id = "local"
         return "local"
     header_value = request.headers.get(_USER_ID_HEADER, "").strip()
     if not header_value:
         abort(403)
+    g.user_id = header_value
     return header_value
 
 
@@ -271,6 +296,7 @@ def index():
     error: str | None = None
 
     if q:
+        t0 = monotonic()
         fx = _get_fx()
         if fx is None:
             error = "Could not fetch FX rate; try again later."
@@ -283,6 +309,14 @@ def index():
                 results.sort(key=lambda r: r["price_jpy_with_shipping"])
             else:
                 results.sort(key=lambda r: r["price_jpy"])
+        app.logger.info(
+            "event=search_query q=%r shops_enabled=%s include_shipping=%d "
+            "result_count=%d duration_ms=%d",
+            q,
+            len(enabled_shops) if enabled_shops is not None else "all",
+            int(include_shipping), len(results),
+            int((monotonic() - t0) * 1000),
+        )
 
     return render_template(
         "index.html",
@@ -385,6 +419,7 @@ def _fetch_decklist_prices(
     prices_by_name: dict[str, list[dict]] = {n: [] for n in names_to_search}
     if not names_to_search:
         return prices_by_name
+    shops_count = len(enabled_shops) if enabled_shops is not None else "all"
     with ThreadPoolExecutor(max_workers=min(len(names_to_search), 6)) as executor:
         future_to_name = {
             executor.submit(
@@ -398,7 +433,10 @@ def _fetch_decklist_prices(
             try:
                 prices_by_name[n] = future.result()
             except Exception as exc:
-                app.logger.error("Price fetch failed for %r: %s", name_canonical[n], exc)
+                app.logger.error(
+                    "event=price_fetch_failed card=%r decklist_size=%d shops_enabled=%s detail=%s",
+                    name_canonical[n], len(names_to_search), shops_count, exc,
+                )
     for n in names_to_search:
         prices_by_name[n].sort(key=lambda r: r["price_jpy"])
     return prices_by_name
@@ -504,6 +542,7 @@ def _load_inventory_qty_map(use_inventory: bool) -> dict[str, int]:
 
 @app.route("/decklist", methods=["POST"])
 def decklist_search():
+    t0 = monotonic()
     text = request.form.get("decklist", "").strip()
     shipping_overrides_jpy = _parse_shipping_overrides(request.form)
     ship_cfg = _shipping_config(shipping_overrides_jpy)
@@ -512,7 +551,14 @@ def decklist_search():
     shop_filter_active = enabled_shops is not None
     shop_filter_cfg = _shop_filter_config(enabled_shops)
 
-    def _early_return(error_msg: str, fx_val=None):
+    def _early_return(error_msg: str, fx_val=None, *, reason: str):
+        app.logger.info(
+            "event=decklist_search status=rejected reason=%s shops_enabled=%s "
+            "use_inventory=%d duration_ms=%d",
+            reason,
+            len(enabled_shops) if enabled_shops is not None else "all",
+            int(use_inventory), int((monotonic() - t0) * 1000),
+        )
         return render_template(
             "decklist.html",
             decklist=text,
@@ -530,23 +576,28 @@ def decklist_search():
 
     card_items = _parse_decklist(text)
     if not card_items:
-        return _early_return("No cards parsed. Use format: '1 Card Name' or '4x Card Name (SET)'")
+        return _early_return(
+            "No cards parsed. Use format: '1 Card Name' or '4x Card Name (SET)'",
+            reason="parse_empty",
+        )
 
     total_cards = sum(qty for qty, _ in card_items)
     if total_cards > MAX_DECKLIST_CARDS:
         return _early_return(
             f"Decklist is {total_cards} cards — the limit is {MAX_DECKLIST_CARDS}. "
-            "Trim it or split into multiple searches."
+            "Trim it or split into multiple searches.",
+            reason="too_large",
         )
 
     name_qty, name_canonical = _consolidate_decklist(card_items)
     inv_map = _load_inventory_qty_map(use_inventory)
     name_inv_qty, name_needed = _deduct_inventory(name_qty, inv_map)
     names_to_search = [n for n in name_qty if name_needed[n] > 0]
+    inventory_hits = sum(1 for n in name_qty if name_inv_qty[n] > 0)
 
     fx = _get_fx()
     if fx is None and names_to_search:
-        return _early_return("Could not fetch FX rate; try again later.")
+        return _early_return("Could not fetch FX rate; try again later.", reason="fx_unavailable")
 
     prices_by_name = (
         _fetch_decklist_prices(names_to_search, name_canonical, fx, enabled_shops)
@@ -558,6 +609,16 @@ def decklist_search():
 
     card_rows = _build_card_rows(name_qty, name_canonical, name_inv_qty, name_needed, prices_by_name)
     shop_list, totals = _compute_shop_totals(card_rows, shipping_overrides_jpy, fx)
+
+    rows_with_match = sum(1 for r in card_rows if r["best"] is not None)
+    app.logger.info(
+        "event=decklist_search status=ok size=%d distinct_names=%d "
+        "names_searched=%d inventory_hits=%d shops_enabled=%s use_inventory=%d "
+        "rows_with_match=%d duration_ms=%d",
+        total_cards, len(name_qty), len(names_to_search), inventory_hits,
+        len(enabled_shops) if enabled_shops is not None else "all",
+        int(use_inventory), rows_with_match, int((monotonic() - t0) * 1000),
+    )
 
     return render_template(
         "decklist.html",
@@ -1252,7 +1313,10 @@ def market_history_download():
                 detail=f"Downloaded history for {mapped_count} lot(s) and imported {point_count} daily price points.",
             )
         except Exception as exc:
-            app.logger.exception("MTGJSON history download failed")
+            app.logger.exception(
+                "event=history_download_failed job_id=%s class=%s",
+                job_id, type(exc).__name__,
+            )
             _set_download_job(
                 job_id,
                 state="error",
@@ -1370,6 +1434,7 @@ def _opt_float(value: str) -> float | None:
 @app.route("/inventory/add", methods=["POST"])
 def inventory_add():
     user_id = _get_user_id()
+    record = {}
     try:
         record = {
             "card_name": request.form["card_name"].strip(),
@@ -1388,10 +1453,17 @@ def inventory_add():
             return redirect(url_for("inventory"))
         inv.add_one(record, user_id)
     except Exception as exc:
-        app.logger.exception("single-card add failed")
+        app.logger.exception(
+            "event=inventory_add_failed source=manual card=%r set_code=%r",
+            record.get("card_name"), record.get("set_code"),
+        )
         flash(f"Add failed: {exc}")
         return redirect(url_for("inventory"))
 
+    app.logger.info(
+        "event=inventory_add source=manual card=%r set_code=%r quantity=%d",
+        record["card_name"], record["set_code"], record["quantity"],
+    )
     flash(f"Added {record['quantity']}x {record['card_name']} [{record['set_code']}].")
     return redirect(url_for("inventory"))
 
@@ -1406,8 +1478,15 @@ def inventory_add_bulk():
     try:
         count = inv.add_many(records, user_id)
     except Exception as exc:
-        app.logger.exception("bulk add failed")
+        app.logger.exception(
+            "event=inventory_add_failed source=decklist record_count=%d",
+            len(records),
+        )
         return {"ok": False, "error": str(exc)}, 500
+    app.logger.info(
+        "event=inventory_add source=decklist record_count=%d added=%d",
+        len(records), count,
+    )
     flash(f"Added {count} card(s) from decklist.")
     return {"ok": True, "count": count}
 
@@ -1429,12 +1508,19 @@ def inventory_import():
     try:
         count = inv.import_csv(tmp_path, replace=replace, user_id=user_id)
     except Exception as exc:
-        app.logger.exception("inventory import failed")
+        app.logger.exception(
+            "event=inventory_import_failed filename=%r replace_mode=%d",
+            uploaded.filename, int(replace),
+        )
         flash(f"Import failed: {exc}")
         return redirect(url_for("inventory"))
     finally:
         Path(tmp_path).unlink(missing_ok=True)
 
+    app.logger.info(
+        "event=inventory_import filename=%r replace_mode=%d rows=%d",
+        uploaded.filename, int(replace), count,
+    )
     verb = "Replaced inventory with" if replace else "Appended"
     flash(f"{verb} {count} rows from {uploaded.filename}.")
     return redirect(url_for("inventory"))

@@ -10,6 +10,7 @@ The `parse_search_response` function is pure and is what tests exercise.
 """
 import logging
 import time
+from time import monotonic
 from typing import Optional
 
 import requests
@@ -85,19 +86,22 @@ class ScryfallScrapper(MtgScrapper):
         super().__init__()
         self.fx = fx if fx is not None else get_fx("jpy")
         self.session = session or make_session()
-        self.logger = logging.getLogger("scryfall")
+        self.logger = logging.getLogger("mtgcompare.scrappers.scryfall")
 
     def get_prices(self, card_name: str) -> list[dict]:
+        t0 = monotonic()
         pages = self._fetch_all_pages(card_name)
         if not pages:
-            self.logger.info(f"No Scryfall results for {card_name!r}")
+            self.logger.info(
+                "event=shop_query shop='Scryfall' card=%r rows=0 duration_ms=%d",
+                card_name, int((monotonic() - t0) * 1000),
+            )
             return []
         records = parse_search_response(pages, card_name, self.fx)
-        for r in records:
-            self.logger.info(
-                f"Found {r['card']} [{r['set']}] ${r['price_usd']:.2f} "
-                f"(¥{r['price_jpy']:.0f})"
-            )
+        self.logger.info(
+            "event=shop_query shop='Scryfall' card=%r rows=%d duration_ms=%d",
+            card_name, len(records), int((monotonic() - t0) * 1000),
+        )
         return records
 
     def _fetch_all_pages(self, card_name: str) -> list[dict]:

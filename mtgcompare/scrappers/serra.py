@@ -128,7 +128,7 @@ def parse_search_html(html: str, card_name: str, fx_jpy_per_usd: float) -> list[
 class CardshopSerraScrapper(HtmlSearchScrapper):
     SHOP_NAME = "Cardshop Serra"
     SEARCH_URL = SEARCH_URL
-    LOGGER_NAME = "serra"
+    LOGGER_NAME = "mtgcompare.scrappers.serra"
     SEARCH_PARAM_NAME = "name"
 
     def parse_html(self, html: str, card_name: str) -> list[dict]:

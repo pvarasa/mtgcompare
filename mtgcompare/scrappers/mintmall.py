@@ -146,7 +146,7 @@ def parse_search_html(html: str, card_name: str, fx_jpy_per_usd: float) -> list[
 class MintMallScrapper(HtmlSearchScrapper):
     SHOP_NAME = "MINT MALL"
     SEARCH_URL = SEARCH_URL
-    LOGGER_NAME = "mintmall"
+    LOGGER_NAME = "mtgcompare.scrappers.mintmall"
     SEARCH_PARAM_NAME = "name"
 
     def parse_html(self, html: str, card_name: str) -> list[dict]:
