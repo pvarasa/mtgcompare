@@ -243,12 +243,33 @@ def _migrate(conn) -> None:
                 conn.execute(text(
                     f"ALTER TABLE {table} ALTER COLUMN uuid TYPE UUID USING uuid::UUID"
                 ))
+
+        # shop_listings.first_seen was in the v1.5.0 schema and was dropped
+        # in the immediate code-review cleanup. Existing DBs created at
+        # v1.5.0 still have the column with NOT NULL and no default — every
+        # cache write since that cleanup has been silently failing on those
+        # DBs because the new INSERT omits the column.
+        first_seen_exists = conn.execute(text("""
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'shop_listings' AND column_name = 'first_seen'
+        """)).fetchone()
+        if first_seen_exists:
+            conn.execute(text("ALTER TABLE shop_listings DROP COLUMN first_seen"))
     else:
         cols = {r[1] for r in conn.execute(text("PRAGMA table_info(inventory)")).fetchall()}
         if "user_id" not in cols:
             conn.execute(text(
                 "ALTER TABLE inventory ADD COLUMN user_id TEXT NOT NULL DEFAULT 'local'"
             ))
+
+        # Same orphaned-column fix for SQLite. SQLite supports
+        # ALTER TABLE ... DROP COLUMN since 3.35 (2021); Python 3.12 ships
+        # with 3.40+, so this works on all supported runtimes.
+        listing_cols = {
+            r[1] for r in conn.execute(text("PRAGMA table_info(shop_listings)")).fetchall()
+        }
+        if "first_seen" in listing_cols:
+            conn.execute(text("ALTER TABLE shop_listings DROP COLUMN first_seen"))
 
 
 def init_schema() -> None:

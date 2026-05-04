@@ -39,8 +39,8 @@ Your inventory is stored in `~/Library/Application Support/mtgcompare/inventory.
 ## Features
 
 ### Price search
-- **Single card** — search by name across all shops simultaneously; the cheapest result is highlighted.
-- **Decklist** — paste a list in `1 Sol Ring`, `4x Force of Will (ALL)`, or `1 Rhystic Study (C21) 79` format; the app finds the best price per card and shows a per-shop spending breakdown.
+- **Single card** — search by name across all shops in parallel; the cheapest result is highlighted. Cold searches take ~5–10 s (bounded by the slowest shop); already-searched cards return from a 24 h DB cache in ~10–200 ms.
+- **Decklist** — paste a list in `1 Sol Ring`, `4x Force of Will (ALL)`, or `1 Rhystic Study (C21) 79` format (max 100 cards per search); the app finds the best price per card and shows a per-shop spending breakdown.
 - **Shipping-aware sorting** — enable per-shop shipping estimates to sort and total by true landed cost.
 - **Use inventory** — check this on a decklist search and already-owned copies are deducted automatically; only the remaining quantity is priced.
 
@@ -60,6 +60,10 @@ Your inventory is stored in `~/Library/Application Support/mtgcompare/inventory.
 | Shop | Market | Data |
 |---|---|---|
 | Hareruya | 🇯🇵 JP | Price + stock + condition |
+| Cardshop Serra | 🇯🇵 JP | Price + stock |
+| BLACK FROG | 🇯🇵 JP | Price |
+| Card Rush | 🇯🇵 JP | Price + stock |
+| MINT MALL | 🇯🇵 JP | Price + stock (multi-tenant marketplace) |
 | SingleStar | 🇯🇵 JP | Price + stock |
 | TokyoMTG | 🇯🇵 JP | Price + stock |
 | TCGPlayer (via Scryfall) | 🇺🇸 US | Market price (stock not available) |
@@ -170,7 +174,7 @@ DATABASE_URL=postgresql+psycopg2://... uv run pytest -m pg # PostgreSQL bulk-loa
 Produces `dist/mtgcompare-windows.zip`. To publish a release, push a version tag:
 
 ```bash
-git tag v1.3.0 && git push --tags
+git tag v1.6.0 && git push --tags
 ```
 
 GitHub Actions builds and attaches the zip to the GitHub Release automatically.
@@ -199,8 +203,9 @@ docker-compose.yml  Local dev stack (app + postgres)
 ### Limitations
 
 - FX is fetched once from `yfinance` and cached for the process lifetime.
-- Hareruya results are capped to page 1 (no pagination).
 - Card matching is case-insensitive exact match — fuzzy matching is not supported.
 - Scryfall's USD price reflects TCGPlayer market price, not the cheapest individual listing.
 - Shipping is a per-order flat estimate, not a live checkout quote.
 - Tax, import duties, and cross-shop order splitting are not modeled.
+- Cached prices age out after 24 h, but FX drift inside that window can introduce 1–2 % error on the USD column. The JPY column is always exactly what the shop charged at scrape time.
+- Decklist search is capped at 100 cards per request (sized to fit a Commander deck).

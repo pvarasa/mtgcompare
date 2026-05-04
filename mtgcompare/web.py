@@ -24,7 +24,7 @@ from sqlalchemy import text
 
 from . import auth, db, history_import, run_log
 from . import inventory as inv
-from .shops import SHIPPING_JPY, SHOP_FLAGS, collect_prices, shop_slug
+from .shops import ACTIVE_SHOPS, SHIPPING_JPY, SHOP_FLAGS, collect_prices, shop_slug
 from .utils import get_fx
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -202,6 +202,35 @@ def _parse_shipping_overrides(source) -> dict[str, int]:
     return overrides
 
 
+def _parse_enabled_shops(source) -> set[str] | None:
+    """Return the set of enabled shop *display names*, or None for "all on".
+
+    The UI submits ``shop_filter=1`` whenever the filter panel is open, plus
+    one ``shop_<slug>=1`` per checkbox the user kept. With the flag absent
+    we treat the search as default (all shops). With the flag present we
+    honor the explicit selection — including the empty-set case where the
+    user has deselected everything.
+    """
+    if source.get("shop_filter") != "1":
+        return None
+    return {
+        name for name in ACTIVE_SHOPS
+        if source.get(f"shop_{shop_slug(name)}") == "1"
+    }
+
+
+def _shop_filter_config(enabled: set[str] | None) -> list[dict]:
+    """Per-shop checkbox state for the filter panel template."""
+    return [
+        {
+            "shop": name,
+            "slug": shop_slug(name),
+            "enabled": enabled is None or name in enabled,
+        }
+        for name in ACTIVE_SHOPS
+    ]
+
+
 def _normalize_set_code(code: str | None, *, upper: bool = False) -> str:
     normalized = code.split("_")[0] if code else ""
     return normalized.upper() if upper else normalized.lower()
@@ -217,6 +246,9 @@ def index():
     include_shipping = request.args.get("shipping") == "1"
     shipping_overrides_jpy = _parse_shipping_overrides(request.args)
     ship_cfg = _shipping_config(shipping_overrides_jpy)
+    enabled_shops = _parse_enabled_shops(request.args)
+    shop_filter_active = enabled_shops is not None
+    shop_filter_cfg = _shop_filter_config(enabled_shops)
 
     results: list[dict] = []
     error: str | None = None
@@ -226,7 +258,7 @@ def index():
         if fx is None:
             error = "Could not fetch FX rate; try again later."
         else:
-            results = collect_prices(q, fx, logger=app.logger)
+            results = collect_prices(q, fx, enabled=enabled_shops, logger=app.logger)
             if include_shipping:
                 for r in results:
                     r["ship_jpy"] = shipping_overrides_jpy.get(r["shop"], 0)
@@ -244,6 +276,8 @@ def index():
         shop_flags=SHOP_FLAGS,
         shipping_config=ship_cfg,
         include_shipping=include_shipping,
+        shop_filter_config=shop_filter_cfg,
+        shop_filter_active=shop_filter_active,
         active="search",
     )
 
@@ -288,8 +322,8 @@ def _parse_decklist(text: str) -> list[tuple[int, str]]:
     return result
 
 
-def _fetch_card_prices(card_name: str, fx: float) -> list[dict]:
-    return collect_prices(card_name, fx, logger=app.logger)
+def _fetch_card_prices(card_name: str, fx: float, enabled: set[str] | None = None) -> list[dict]:
+    return collect_prices(card_name, fx, enabled=enabled, logger=app.logger)
 
 
 def _deduct_inventory(
@@ -316,6 +350,9 @@ def decklist_search():
     shipping_overrides_jpy = _parse_shipping_overrides(request.form)
     ship_cfg = _shipping_config(shipping_overrides_jpy)
     use_inventory = request.form.get("use_inventory") == "1"
+    enabled_shops = _parse_enabled_shops(request.form)
+    shop_filter_active = enabled_shops is not None
+    shop_filter_cfg = _shop_filter_config(enabled_shops)
 
     def _early_return(error_msg: str, fx_val=None):
         return render_template(
@@ -328,6 +365,8 @@ def decklist_search():
             shipping_total_jpy=0,
             fx=fx_val, shop_flags=SHOP_FLAGS,
             shipping_config=ship_cfg, active="search",
+            shop_filter_config=shop_filter_cfg,
+            shop_filter_active=shop_filter_active,
             use_inventory=use_inventory,
         )
 
@@ -372,7 +411,7 @@ def decklist_search():
     if names_to_search and fx is not None:
         with ThreadPoolExecutor(max_workers=min(len(names_to_search), 6)) as executor:
             future_to_name = {
-                executor.submit(_fetch_card_prices, name_canonical[n], fx): n
+                executor.submit(_fetch_card_prices, name_canonical[n], fx, enabled_shops): n
                 for n in names_to_search
             }
             for future in as_completed(future_to_name):
@@ -451,6 +490,8 @@ def decklist_search():
         fx=fx,
         shop_flags=SHOP_FLAGS,
         shipping_config=ship_cfg,
+        shop_filter_config=shop_filter_cfg,
+        shop_filter_active=shop_filter_active,
         active="search",
         error=None,
         use_inventory=use_inventory,

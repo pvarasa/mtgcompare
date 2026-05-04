@@ -11,6 +11,47 @@ import mtgcompare.db as db_module
 from mtgcompare import web
 
 
+def test_parse_enabled_shops_default_returns_none():
+    """No shop_filter flag → all shops on (the historical behavior)."""
+    source = {"q": "Sol Ring"}
+    assert web._parse_enabled_shops(source) is None
+
+
+def test_parse_enabled_shops_explicit_subset():
+    """shop_filter=1 + a few shop_<slug>=1 keys → just those shops."""
+    source = {
+        "shop_filter": "1",
+        "shop_hareruya": "1",
+        "shop_card_rush": "1",
+    }
+    enabled = web._parse_enabled_shops(source)
+    assert enabled == {"Hareruya", "Card Rush"}
+
+
+def test_parse_enabled_shops_empty_when_user_deselects_all():
+    """shop_filter=1 with no shop_<slug>=1 → an explicit empty set, not None."""
+    source = {"shop_filter": "1"}
+    enabled = web._parse_enabled_shops(source)
+    assert enabled == set()  # empty, not None
+
+
+def test_shop_filter_config_marks_unspecified_as_enabled():
+    cfg = web._shop_filter_config(None)
+    assert cfg, "should produce one entry per active shop"
+    assert all(c["enabled"] for c in cfg)
+    for c in cfg:
+        assert c["slug"] == web.shop_slug(c["shop"])
+
+
+def test_shop_filter_config_partial_selection():
+    cfg = web._shop_filter_config({"Hareruya"})
+    by_shop = {c["shop"]: c["enabled"] for c in cfg}
+    assert by_shop["Hareruya"] is True
+    # Pick any other shop and assert it's marked disabled
+    any_other = next(s for s in by_shop if s != "Hareruya")
+    assert by_shop[any_other] is False
+
+
 def test_decklist_search_rejects_oversized_lists():
     """Total card count above MAX_DECKLIST_CARDS should short-circuit
     with a clear error rather than fanning out shop scrapes."""
@@ -148,15 +189,29 @@ def test_deduct_inventory_multiple_lots_aggregated():
 def test_fetch_card_prices_uses_shared_collector(monkeypatch):
     expected = [{"shop": "Test Shop", "price_jpy": 100}]
 
-    def fake_collect_prices(card_name, fx, logger=None):
+    def fake_collect_prices(card_name, fx, *, enabled=None, logger=None):
         assert card_name == "Force of Will"
         assert fx == 150.0
         assert logger is web.app.logger
+        assert enabled is None
         return expected
 
     monkeypatch.setattr(web, "collect_prices", fake_collect_prices)
 
     assert web._fetch_card_prices("Force of Will", 150.0) == expected
+
+
+def test_fetch_card_prices_passes_enabled_filter(monkeypatch):
+    """The decklist worker must propagate the shop filter to collect_prices."""
+    captured = {}
+
+    def fake_collect_prices(card_name, fx, *, enabled=None, logger=None):
+        captured["enabled"] = enabled
+        return []
+
+    monkeypatch.setattr(web, "collect_prices", fake_collect_prices)
+    web._fetch_card_prices("Force of Will", 150.0, {"Hareruya", "Card Rush"})
+    assert captured["enabled"] == {"Hareruya", "Card Rush"}
 
 
 def test_history_cutoff_for_known_period():

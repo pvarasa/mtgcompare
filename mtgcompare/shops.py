@@ -1,6 +1,7 @@
 import os
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Optional
 
 from .cache import DEFAULT_TTL, CachedScrapper
 from .scrappers.blackfrog import BlackFrogScrapper
@@ -49,7 +50,12 @@ def shop_slug(name: str) -> str:
 CACHE_ENABLED = os.environ.get("MTGCOMPARE_CACHE_ENABLED", "1") not in ("0", "false", "False")
 
 
-def build_scrapers(fx: float) -> list:
+def build_scrapers(fx: float, enabled: Optional[set[str]] = None) -> list:
+    """Construct the configured scrapers, optionally filtered to ``enabled``.
+
+    ``enabled`` is a set of *display names* (e.g. ``{"Hareruya", "Card Rush"}``).
+    None means "all on" — the default search behavior.
+    """
     raw = [
         ("Hareruya",             HareruyaScrapper(fx=fx)),
         ("TCGPlayer (Scryfall)", ScryfallScrapper(fx=fx)),
@@ -65,20 +71,45 @@ def build_scrapers(fx: float) -> list:
         # line once dig +short www.enndalgames.com @8.8.8.8 returns an IP.
         # ("ENNDAL GAMES",         EnndalGamesScrapper(fx=fx)),
     ]
+    if enabled is not None:
+        raw = [(name, s) for name, s in raw if name in enabled]
     if not CACHE_ENABLED:
         return [s for _, s in raw]
     return [CachedScrapper(s, shop_name=name, ttl=DEFAULT_TTL) for name, s in raw]
 
 
-def collect_prices(card_name: str, fx: float, logger=None) -> list[dict]:
+# Active shops in registration order — used by the UI to render the filter
+# panel. Excludes ENNDAL GAMES while it is commented out of build_scrapers.
+ACTIVE_SHOPS: list[str] = [
+    "Hareruya",
+    "TCGPlayer (Scryfall)",
+    "SingleStar",
+    "TokyoMTG",
+    "Card Rush",
+    "Cardshop Serra",
+    "BLACK FROG",
+    "MINT MALL",
+]
+
+
+def collect_prices(
+    card_name: str,
+    fx: float,
+    *,
+    enabled: Optional[set[str]] = None,
+    logger=None,
+) -> list[dict]:
     """Fetch and concatenate all shop results for a single card.
 
     Fan-out is parallel: total wall-clock is bounded by the slowest shop,
     not the sum. Per-scraper exceptions are isolated so one failing shop
-    doesn't drop results from the rest.
+    doesn't drop results from the rest. If ``enabled`` is provided, only
+    shops whose display name is in the set are scraped.
     """
-    scrapers = build_scrapers(fx)
+    scrapers = build_scrapers(fx, enabled=enabled)
     results: list[dict] = []
+    if not scrapers:
+        return results
     with ThreadPoolExecutor(max_workers=len(scrapers)) as ex:
         futures = {ex.submit(s.get_prices, card_name): s for s in scrapers}
         for fut in as_completed(futures):
