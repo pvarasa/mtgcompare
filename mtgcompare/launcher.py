@@ -72,7 +72,7 @@ def _open_browser(_icon=None, _item=None) -> None:
     webbrowser.open(URL)
 
 
-def _quit(icon: pystray.Icon, _item=None) -> None:
+def _quit(icon, _item=None) -> None:  # icon is pystray.Icon (untyped package)
     icon.stop()
     # Flask thread is a daemon; the process exits once the tray loop ends.
 

@@ -115,7 +115,7 @@ def parse_search_html(html: str, card_name: str, fx_jpy_per_usd: float) -> list[
 
         # Each in-stock NM option contributes a record.
         for option in select_el.select("option"):
-            spec_id = (option.get("value") or "").strip()
+            spec_id = str(option.get("value") or "").strip()
             cond_text = option.get_text(" ", strip=True)
             if not spec_id:
                 continue
@@ -126,8 +126,7 @@ def parse_search_html(html: str, card_name: str, fx_jpy_per_usd: float) -> list[
             if entry is None or entry["stock"] <= 0:
                 continue
 
-            href = (link_el.get("href") if link_el else "") or ""
-            href = href.strip()
+            href = str((link_el.get("href") if link_el else "") or "").strip()
             link = href if href.startswith("http") else f"{BASE_URL}{href}"
 
             records.append({

@@ -380,9 +380,8 @@ def callback():
     _set_session_cookies(resp,
                          access_token=session["access_token"],
                          refresh_token=session["refresh_token"])
-    common = dict(path="/", samesite="Lax", secure=True)
-    resp.delete_cookie(STATE_COOKIE, **common)
-    resp.delete_cookie(RETURN_TO_COOKIE, **common)
+    resp.delete_cookie(STATE_COOKIE, path="/", samesite="Lax", secure=True)
+    resp.delete_cookie(RETURN_TO_COOKIE, path="/", samesite="Lax", secure=True)
     return resp
 
 
@@ -432,13 +431,19 @@ def webhook():
         return jsonify({"ok": False, "error": "signature verification failed"}), 401
 
     inv.init_schema()
-    data = event.data
-    user_id = data.id
-    if event.event == "user.deleted":
+    # WorkOS's event union includes EventSchemaUnknown for events the SDK
+    # doesn't model. Use getattr so we silently no-op on those instead of
+    # crashing on attribute access.
+    data = getattr(event, "data", None)
+    event_type = getattr(event, "event", None)
+    user_id = getattr(data, "id", None)
+    if data is None or user_id is None or event_type is None:
+        return jsonify({"ok": True, "ignored": "unsupported event"}), 200
+    if event_type == "user.deleted":
         with db.get_conn() as conn:
             conn.execute(text("DELETE FROM inventory WHERE user_id = :uid"), {"uid": user_id})
             conn.execute(text("DELETE FROM users WHERE workos_user_id = :uid"), {"uid": user_id})
-    elif event.event in ("user.created", "user.updated"):
+    elif event_type in ("user.created", "user.updated"):
         _upsert_user({
             "id": user_id,
             "email": getattr(data, "email", None),

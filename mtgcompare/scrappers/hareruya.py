@@ -67,7 +67,7 @@ def parse_lazy_html(html: str, card_name: str, fx_jpy_per_usd: float) -> list[di
         price_jpy = float(price_match.group(1).replace(",", ""))
         price_usd = round(price_jpy / fx_jpy_per_usd, 2)
 
-        href = (name_el.get("href") or "").strip()
+        href = str(name_el.get("href") or "").strip()
         link = f"{BASE_URL}{href}" if href.startswith("/") else href
 
         records.append({

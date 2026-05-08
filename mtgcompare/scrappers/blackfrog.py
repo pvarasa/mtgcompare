@@ -100,7 +100,7 @@ def parse_search_html(html: str, card_name: str, fx_jpy_per_usd: float) -> list[
         if price_jpy <= 0:
             continue
 
-        href = (name_el.get("href") or "").strip()
+        href = str(name_el.get("href") or "").strip()
         link = href if href.startswith("http") else f"{BASE_URL}{href}"
 
         records.append({

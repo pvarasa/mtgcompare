@@ -85,7 +85,7 @@ def parse_search_html(html: str, card_name: str, fx_jpy_per_usd: float) -> list[
         if en.lower() != target:
             continue
 
-        link = (title_el.get("href") or "").strip()
+        link = str(title_el.get("href") or "").strip()
         if link and not link.startswith("http"):
             link = f"{BASE_URL}{link}"
 

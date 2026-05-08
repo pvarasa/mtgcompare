@@ -329,7 +329,7 @@ def rebuild_history_db(
     try:
         conn.execute(_DUCKDB_SCHEMA)
         conn.execute(_build_load_sql(upsert=False), [str(ndjson_path)])
-        row_count: int = conn.execute("SELECT COUNT(*) FROM price_rows").fetchone()[0]
+        row_count: int = (conn.execute("SELECT COUNT(*) FROM price_rows").fetchone() or (0,))[0]
     finally:
         conn.close()
 
@@ -554,7 +554,7 @@ def merge_today_prices(
     try:
         tmp.execute(_DUCKDB_SCHEMA)
         tmp.execute(_build_load_sql(upsert=False), [str(ndjson_path)])
-        row_count: int = tmp.execute("SELECT COUNT(*) FROM price_rows").fetchone()[0]
+        row_count: int = (tmp.execute("SELECT COUNT(*) FROM price_rows").fetchone() or (0,))[0]
     finally:
         tmp.close()
 

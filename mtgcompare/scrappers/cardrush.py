@@ -108,7 +108,7 @@ def parse_search_html(html: str, card_name: str, fx_jpy_per_usd: float) -> list[
         price_jpy = float(price_match.group(1).replace(",", ""))
         price_usd = round(price_jpy / fx_jpy_per_usd, 2)
 
-        href = (link_el.get("href") or "").strip()
+        href = str(link_el.get("href") or "").strip()
         link = href if href.startswith("http") else f"{BASE_URL}{href}"
 
         records.append({

@@ -25,6 +25,7 @@ mtgcompare-app = "mtgcompare.launcher:main"
 
 [dependency-groups]
 dev = [
+    "pyright>=1.1.400",
     "pytest>=9.0",
     "ruff>=0.15.12",
 ]
@@ -52,6 +53,18 @@ ignore = ["E701"]  # allow compact single-line if/return style
 # Forcing line breaks there hurts readability without catching real bugs.
 # S101 (assert) is the standard pytest pattern.
 "tests/*" = ["E501", "S101"]
+
+[tool.pyright]
+# Type-check the package only; tests stay untyped for now.
+# `basic` mode: catches real bugs (None misuse, wrong arg types, missing
+# attributes) without forcing annotations everywhere — the right level for a
+# codebase that's adopting types gradually.
+include = ["mtgcompare"]
+exclude = ["**/__pycache__", ".venv", "mtgjson", "dist", "build"]
+pythonVersion = "3.12"
+typeCheckingMode = "basic"
+reportMissingImports = "error"
+reportMissingTypeStubs = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

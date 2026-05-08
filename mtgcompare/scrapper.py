@@ -3,7 +3,7 @@ from abc import ABC, abstractmethod
 
 class MtgScrapper(ABC):
     @abstractmethod
-    def get_prices(self, card_name):
+    def get_prices(self, card_name: str) -> list[dict]:
         """
         Get the prices for the card in the shop represented by this scrapper
 
@@ -18,4 +18,4 @@ class MtgScrapper(ABC):
             'condition': 'NM',
             'link': 'https://www.hareruyamtg.com/en/products/detail/14183?lang=EN'
         """
-        pass
+        ...

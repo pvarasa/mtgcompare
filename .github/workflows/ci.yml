@@ -25,6 +25,28 @@ jobs:
       - name: Ruff lint
         run: uv run ruff check mtgcompare/ tests/
 
+  typecheck:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: pip install uv
+
+      # `--all-groups` so pyright can resolve the desktop deps (pystray,
+      # pillow) imported by mtgcompare/launcher.py. Without them pyright
+      # emits reportMissingImports for the launcher.
+      - name: Install dependencies
+        run: uv sync --all-groups
+
+      - name: Pyright
+        run: uv run pyright
+
   test:
     runs-on: ubuntu-latest
 
