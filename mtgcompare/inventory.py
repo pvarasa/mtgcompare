@@ -17,7 +17,7 @@ import sys
 from collections.abc import Iterator
 from typing import IO
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 
 from .db import get_conn, init_schema, row_to_dict
 
@@ -125,7 +125,7 @@ def list_all(user_id: str = "local") -> list[dict]:
     """Return all inventory rows for the given user."""
     with get_conn() as conn:
         rows = conn.execute(
-            text("""SELECT card_name, set_code, set_name, card_number, quantity,
+            text("""SELECT id, card_name, set_code, set_name, card_number, quantity,
                           condition, printing, language, price_bought, date_bought
                    FROM inventory
                    WHERE user_id = :uid
@@ -133,6 +133,23 @@ def list_all(user_id: str = "local") -> list[dict]:
             {"uid": user_id},
         ).mappings().all()
     return [row_to_dict(r) for r in rows]
+
+
+def delete(ids: list[int], user_id: str = "local") -> int:
+    """Delete inventory rows by id, scoped to user_id. Returns rows affected.
+
+    The user_id clause is the ownership gate: a user cannot delete another
+    user's rows even if they guess the id.
+    """
+    if not ids:
+        return 0
+    with get_conn() as conn:
+        result = conn.execute(
+            text("DELETE FROM inventory WHERE user_id = :uid AND id IN :ids")
+            .bindparams(bindparam("ids", expanding=True)),
+            {"uid": user_id, "ids": ids},
+        )
+    return result.rowcount or 0
 
 
 def list_all_global() -> list[dict]:

@@ -187,13 +187,27 @@
     .inv-export-bar .sel-count { color: var(--muted); font-size: .85rem; flex: 1 1 100%; }
     .inv-export-bar .inv-export-actions { display: flex; gap: .5rem; flex-wrap: nowrap; }
     .inv-export-bar .inv-export-actions button { flex: 1 1 auto; }
+    .inv-export-bar .inv-export-actions button.danger {
+      border-color: #b04848;
+      color: #f5a5a5;
+    }
+    @media (hover: hover) {
+      .inv-export-bar .inv-export-actions button.danger:hover:not(:disabled) {
+        border-color: #d96b6b;
+        color: #ffb9b9;
+        background: rgba(176, 72, 72, 0.12);
+      }
+    }
     @media (min-width: 540px) {
       .inv-export-bar .sel-count { flex: 0 1 auto; min-width: 7rem; }
       .inv-export-bar .inv-export-actions button { flex: 0 0 auto; }
     }
 {% endblock %}
 {% block content %}
-  <div class="inv-stats">
+  <div class="inv-stats"
+       data-lots="{{ stats.printings }}"
+       data-copies="{{ stats.total_copies }}"
+       data-cost="{{ '%.2f'|format(stats.total_cost) }}">
     <strong>{{ '{:,}'.format(stats.total_copies) }}</strong> copies
     across <strong>{{ '{:,}'.format(stats.printings) }}</strong> lots
     &middot; cost basis <strong>${{ '%.2f'|format(stats.total_cost) }}</strong>
@@ -302,6 +316,7 @@
       <div class="inv-export-actions">
         <button type="button" id="inv-export-deck" disabled>Export decklist</button>
         <button type="button" id="inv-export-csv" disabled>Export CSV</button>
+        <button type="button" id="inv-delete" class="danger" disabled>Delete selected</button>
       </div>
     </div>
 
@@ -323,7 +338,8 @@
       </thead>
       <tbody>
         {% for r in rows %}
-          <tr data-name="{{ r.card_name|lower }}"
+          <tr data-id="{{ r.id }}"
+              data-name="{{ r.card_name|lower }}"
               data-price="{% if r.price_bought is not none %}{{ '%.2f'|format(r.price_bought) }}{% endif %}"
               data-card="{{ r.card_name }}"
               data-set="{{ r.set_code }}"
@@ -362,11 +378,12 @@
       const priceMode  = document.getElementById('inv-price-mode');
       const priceValue = document.getElementById('inv-price-value');
       if (!input || !priceMode || !priceValue) return;
-      const rows     = Array.from(document.querySelectorAll('#inv-table tbody tr'));
+      let rows      = Array.from(document.querySelectorAll('#inv-table tbody tr'));
       const checkAll = document.getElementById('inv-check-all');
       const selCount = document.getElementById('inv-sel-count');
       const btnDeck  = document.getElementById('inv-export-deck');
       const btnCsv   = document.getElementById('inv-export-csv');
+      const btnDelete = document.getElementById('inv-delete');
       let frameId = 0;
 
       function visibleRows() { return rows.filter(tr => !tr.hidden); }
@@ -379,6 +396,7 @@
         selCount.textContent = n === 0 ? '0 selected' : `${n} selected`;
         btnDeck.disabled = n === 0;
         btnCsv.disabled  = n === 0;
+        if (btnDelete) btnDelete.disabled = n === 0;
         const vis = visibleRows();
         const allChecked = vis.length > 0 && vis.every(tr => tr.querySelector('input[type=checkbox]').checked);
         checkAll.indeterminate = !allChecked && n > 0;
@@ -478,6 +496,58 @@
             tr.dataset.price, tr.dataset.date,
           ].map(csvCell).join(','));
           download('inventory.csv', [headers.join(','), ...dataRows].join('\r\n'), 'text/csv');
+        });
+      }
+
+      if (btnDelete) {
+        btnDelete.addEventListener('click', async () => {
+          const targets = checkedRows();
+          if (targets.length === 0) return;
+          if (!window.confirm(`Delete ${targets.length} card(s)? This cannot be undone.`)) return;
+          const ids = targets.map(tr => parseInt(tr.dataset.id, 10)).filter(Number.isFinite);
+          btnDelete.disabled = true;
+          try {
+            const csrf = document.querySelector('meta[name="csrf-token"]')?.content || "";
+            const response = await fetch("{{ url_for('inventory_delete') }}", {
+              method: "POST",
+              headers: { "Content-Type": "application/json", "X-CSRFToken": csrf },
+              body: JSON.stringify({ ids }),
+            });
+            if (!response.ok) {
+              window.alert(`Delete failed: server returned ${response.status}`);
+              btnDelete.disabled = false;
+              return;
+            }
+            // Subtract deleted lots/copies/cost from the stats line, drop the
+            // rows from the DOM, and rebuild the cached row list. Preserves
+            // the user's filter and price-mode state across the operation.
+            const stats = document.querySelector('.inv-stats');
+            let lotsLeft = parseInt((stats?.dataset.lots) ?? '0', 10);
+            let copiesLeft = parseInt((stats?.dataset.copies) ?? '0', 10);
+            let costLeft = parseFloat((stats?.dataset.cost) ?? '0');
+            for (const tr of targets) {
+              lotsLeft -= 1;
+              copiesLeft -= parseInt(tr.dataset.qty, 10) || 0;
+              const p = parseFloat(tr.dataset.price);
+              if (Number.isFinite(p)) costLeft -= p * (parseInt(tr.dataset.qty, 10) || 0);
+              tr.remove();
+            }
+            if (stats) {
+              stats.dataset.lots = String(lotsLeft);
+              stats.dataset.copies = String(copiesLeft);
+              stats.dataset.cost = costLeft.toFixed(2);
+              const fmt = new Intl.NumberFormat('en-US');
+              stats.innerHTML =
+                `<strong>${fmt.format(copiesLeft)}</strong> copies ` +
+                `across <strong>${fmt.format(lotsLeft)}</strong> lots ` +
+                `&middot; cost basis <strong>$${costLeft.toFixed(2)}</strong>`;
+            }
+            rows = Array.from(document.querySelectorAll('#inv-table tbody tr'));
+            updateState();
+          } catch (error) {
+            window.alert(`Network error: ${error.message}`);
+            btnDelete.disabled = false;
+          }
         });
       }
 

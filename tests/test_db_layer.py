@@ -272,6 +272,39 @@ class TestInventoryUserScoping:
         row = inv.list_all("alice")[0]
         assert row["price_bought"] is None
 
+    def test_list_all_includes_id(self, test_db):
+        inv.add_one(_CARD_A, user_id="alice")
+        row = inv.list_all("alice")[0]
+        assert isinstance(row["id"], int)
+
+    def test_delete_removes_only_listed_ids(self, test_db):
+        inv.add_many([_CARD_A, _CARD_B], user_id="alice")
+        rows = inv.list_all("alice")
+        target_id = next(r["id"] for r in rows if r["card_name"] == "Force of Will")
+
+        count = inv.delete([target_id], user_id="alice")
+
+        assert count == 1
+        remaining = inv.list_all("alice")
+        assert {r["card_name"] for r in remaining} == {"Mana Drain"}
+
+    def test_delete_returns_zero_for_empty_list(self, test_db):
+        inv.add_one(_CARD_A, user_id="alice")
+        assert inv.delete([], user_id="alice") == 0
+        assert len(inv.list_all("alice")) == 1
+
+    def test_delete_does_not_cross_users(self, test_db):
+        inv.add_one(_CARD_A, user_id="alice")
+        inv.add_one(_CARD_B, user_id="bob")
+        bob_id = inv.list_all("bob")[0]["id"]
+
+        # Alice tries to delete one of Bob's rows by guessing the id.
+        count = inv.delete([bob_id], user_id="alice")
+
+        assert count == 0
+        # Bob's inventory is untouched.
+        assert len(inv.list_all("bob")) == 1
+
 
 # ---------------------------------------------------------------------------
 # db.row_to_dict — type normalisation contract

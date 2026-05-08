@@ -4,11 +4,27 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import create_engine, text
 
 import mtgcompare.auth as auth_module
 import mtgcompare.db as db_module
+from mtgcompare import inventory as inv
 from mtgcompare import web
+
+
+@pytest.fixture()
+def test_db(tmp_path, monkeypatch):
+    """Swap db.engine for a fresh temp SQLite database (same shape as test_db_layer)."""
+    db_path = tmp_path / "test.db"
+    test_engine = create_engine(
+        f"sqlite:///{db_path}",
+        connect_args={"check_same_thread": False},
+    )
+    monkeypatch.setattr(db_module, "engine", test_engine)
+    monkeypatch.setattr(db_module, "DB_PATH", db_path)
+    monkeypatch.setattr(db_module, "IS_POSTGRES", False)
+    db_module.init_schema()
+    yield db_module
 
 
 def test_parse_enabled_shops_default_returns_none():
@@ -711,4 +727,55 @@ def test_populate_market_prices_handles_postgres_types(monkeypatch):
 
     assert captured["rows"][0]["price_usd"] == pytest.approx(1.23)
     assert isinstance(captured["rows"][0]["price_usd"], float)
+
+
+# ---------------------------------------------------------------------------
+# /inventory/delete
+# ---------------------------------------------------------------------------
+
+_DEL_CARD = {
+    "card_name": "Force of Will", "set_code": "ALL", "set_name": "Alliances",
+    "card_number": "1", "quantity": 2, "condition": "NM",
+    "printing": "Normal", "language": "English",
+    "price_bought": 50.0, "date_bought": "2026-01-01",
+}
+
+
+def test_inventory_delete_happy_path(test_db):
+    inv.add_one(_DEL_CARD)  # default user_id=local, matches the route
+    target_id = inv.list_all()[0]["id"]
+    with web.app.test_client() as client:
+        resp = client.post(
+            "/inventory/delete",
+            json={"ids": [target_id]},
+        )
+    assert resp.status_code == 200
+    assert resp.get_json() == {"ok": True, "count": 1}
+    assert inv.list_all() == []
+
+
+def test_inventory_delete_rejects_empty_ids(test_db):
+    with web.app.test_client() as client:
+        resp = client.post("/inventory/delete", json={"ids": []})
+    assert resp.status_code == 400
+
+
+def test_inventory_delete_rejects_invalid_ids(test_db):
+    with web.app.test_client() as client:
+        resp = client.post("/inventory/delete", json={"ids": ["not-an-int"]})
+    assert resp.status_code == 400
+
+
+def test_inventory_delete_does_not_cross_users(test_db, monkeypatch):
+    """A user's POST cannot remove another user's row even if they guess the id."""
+    inv.add_one(_DEL_CARD, user_id="bob")
+    bob_id = inv.list_all("bob")[0]["id"]
+
+    # Pin the request user to alice; bob's row must survive.
+    monkeypatch.setattr(web, "_get_user_id", lambda: "alice")
+    with web.app.test_client() as client:
+        resp = client.post("/inventory/delete", json={"ids": [bob_id]})
+    assert resp.status_code == 200
+    assert resp.get_json() == {"ok": True, "count": 0}
+    assert len(inv.list_all("bob")) == 1
 

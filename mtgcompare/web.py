@@ -1519,6 +1519,30 @@ def inventory_add_bulk():
     return {"ok": True, "count": count}
 
 
+@app.route("/inventory/delete", methods=["POST"])
+def inventory_delete():
+    user_id = _get_user_id()
+    payload = request.get_json(silent=True) or {}
+    raw_ids = payload.get("ids") or []
+    if not isinstance(raw_ids, list) or not raw_ids:
+        return {"ok": False, "error": "No ids"}, 400
+    try:
+        ids = [int(x) for x in raw_ids]
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "Invalid ids"}, 400
+    try:
+        count = inv.delete(ids, user_id)
+    except Exception as exc:
+        app.logger.exception(
+            "event=inventory_delete_failed requested=%d", len(ids),
+        )
+        return {"ok": False, "error": str(exc)}, 500
+    app.logger.info(
+        "event=inventory_delete requested=%d deleted=%d", len(ids), count,
+    )
+    return {"ok": True, "count": count}
+
+
 @app.route("/inventory/import", methods=["POST"])
 def inventory_import():
     user_id = _get_user_id()
