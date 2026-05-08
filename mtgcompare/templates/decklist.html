@@ -95,7 +95,9 @@
     user-select: none;
     padding: .3rem 0;
   }
-  details.ship-details > summary:hover { color: var(--fg); }
+  @media (hover: hover) {
+    details.ship-details > summary:hover { color: var(--fg); }
+  }
   .ship-cfg {
     display: flex;
     flex-wrap: wrap;
@@ -190,6 +192,7 @@
     {% endif %}
 
     {% if card_rows %}
+      <div class="table-scroll">
       <table>
         <thead>
           <tr>
@@ -257,6 +260,7 @@
           {% endfor %}
         </tbody>
       </table>
+      </div>
 
       {% if missing_rows %}
         <div class="dl-not-found">

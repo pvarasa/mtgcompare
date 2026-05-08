@@ -12,9 +12,10 @@
     border-radius: 6px;
     font-weight: 500;
   }
-  .search-mode button:hover { color: var(--fg); background: var(--bg-alt); }
   .search-mode button { border-color: var(--border); color: var(--muted); }
-  .search-mode button:hover { border-color: var(--gold); color: var(--gold); background: transparent; }
+  @media (hover: hover) {
+    .search-mode button:hover { border-color: var(--gold); color: var(--gold); background: transparent; }
+  }
   .search-mode button.active { border-color: var(--gold); color: var(--gold); background: var(--gold-dim); }
 
   /* Single-card panel: override global form flex so we can stack rows */
@@ -138,7 +139,9 @@
     border-radius: 4px;
     cursor: pointer;
   }
-  .shop-filter-actions button:hover { color: var(--gold); border-color: var(--gold); }
+  @media (hover: hover) {
+    .shop-filter-actions button:hover { color: var(--gold); border-color: var(--gold); }
+  }
 
   /* Search progress indicator — visible only while the form is submitting. */
   .search-loading {
@@ -281,6 +284,7 @@
     </p>
 
     {% if results %}
+      <div class="table-scroll">
       <table id="results-table">
         <thead>
           <tr>
@@ -314,6 +318,7 @@
           {% endfor %}
         </tbody>
       </table>
+      </div>
     {% else %}
       <div class="empty">No results.</div>
     {% endif %}

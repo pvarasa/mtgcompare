@@ -61,9 +61,10 @@
       border-radius: 6px;
       font-weight: 500;
     }
-    .add-mode button:hover { color: var(--fg); background: var(--bg); }
     .add-mode button { border-color: var(--border); color: var(--muted); }
-    .add-mode button:hover { border-color: var(--gold); color: var(--gold); background: transparent; }
+    @media (hover: hover) {
+      .add-mode button:hover { border-color: var(--gold); color: var(--gold); background: transparent; }
+    }
     .add-mode button.active { border-color: var(--gold); color: var(--gold); background: var(--gold-dim); }
 
     .add-form {
@@ -110,6 +111,20 @@
       display: flex;
       justify-content: flex-end;
       margin-top: .2rem;
+    }
+    @media (max-width: 540px) {
+      .add-form { display: grid; grid-template-columns: 1fr 1fr; gap: .6rem; }
+      .add-form label.grow { grid-column: 1 / -1; }
+      .add-form label { min-width: 0; }
+      .add-form .w-qty,
+      .add-form .w-coll,
+      .add-form .w-cond,
+      .add-form .w-print,
+      .add-form .w-lang,
+      .add-form .w-price,
+      .add-form .w-date { width: 100%; }
+      .add-form .actions { grid-column: 1 / -1; }
+      .add-form .actions button { width: 100%; }
     }
 
     .decklist-body textarea {
@@ -290,6 +305,7 @@
       </div>
     </div>
 
+    <div class="table-scroll">
     <table id="inv-table">
       <thead>
         <tr>
@@ -332,6 +348,7 @@
         {% endfor %}
       </tbody>
     </table>
+    </div>
   {% else %}
     <div class="empty">
       No inventory yet. Add a card above, paste a decklist, or import a Deckbox/CardCastle-style CSV.

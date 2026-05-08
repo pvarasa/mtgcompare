@@ -45,8 +45,9 @@
       margin: 0 0 1.5rem;
       display: flex;
       align-items: center;
-      gap: .55rem;
+      gap: .55rem .75rem;
       justify-content: space-between;
+      flex-wrap: wrap;
     }
     .user-greeting {
       font-family: 'Inter', system-ui, sans-serif;
@@ -83,7 +84,9 @@
       font-family: inherit;
       transition: background .15s, color .15s;
     }
-    button:hover { background: var(--gold); color: #0f1117; }
+    @media (hover: hover) {
+      button:hover { background: var(--gold); color: #0f1117; }
+    }
     button:disabled {
       border-color: #353535;
       color: #484848;
@@ -105,6 +108,11 @@
       padding: .6rem 1rem;
       border-radius: 6px;
       margin-bottom: 1rem;
+    }
+    .table-scroll {
+      width: 100%;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
     }
     table {
       width: 100%;
@@ -130,7 +138,9 @@
     tbody tr.cheapest { background: rgba(201, 168, 76, 0.1); }
     .num { text-align: right; font-variant-numeric: tabular-nums; }
     a { color: var(--blue); text-decoration: none; }
-    a:hover { text-decoration: underline; }
+    @media (hover: hover) {
+      a:hover { text-decoration: underline; }
+    }
     .empty { color: var(--muted); padding: 2rem 0; text-align: center; }
     .flag {
       display: inline-block;
@@ -147,7 +157,17 @@
       border: 1px solid rgba(201, 168, 76, 0.3);
       margin-left: .4rem;
     }
-    .tabs { display: flex; flex-wrap: wrap; gap: .3rem; margin-bottom: 1.5rem; border-bottom: 1px solid var(--border); }
+    .tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .3rem;
+      margin-bottom: 1.5rem;
+      border-bottom: 1px solid var(--border);
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      background: var(--bg);
+    }
     .tabs a {
       padding: .55rem 1.4rem;
       color: var(--muted);
@@ -162,7 +182,9 @@
       margin-bottom: -1px;
       transition: color .15s, background .15s;
     }
-    .tabs a:hover { color: var(--gold); text-decoration: none; }
+    @media (hover: hover) {
+      .tabs a:hover { color: var(--gold); text-decoration: none; }
+    }
     .tabs a.active {
       color: var(--gold);
       background: var(--bg-alt);
@@ -187,20 +209,24 @@
       cursor: pointer;
       transition: color .15s, background .15s;
     }
-    .tabs .logout-button:hover { color: var(--gold); }
+    @media (hover: hover) {
+      .tabs .logout-button:hover { color: var(--gold); }
+    }
     .card-icon {
       background: transparent;
       border: 0;
-      padding: 2px 4px;
-      margin-right: .35rem;
+      padding: 6px 8px;
+      margin-right: .15rem;
       color: var(--muted);
       cursor: pointer;
-      vertical-align: -3px;
+      vertical-align: -6px;
       border-radius: 4px;
       line-height: 0;
       transition: none;
     }
-    .card-icon:hover { color: var(--fg); background: var(--bg-alt); }
+    @media (hover: hover) {
+      .card-icon:hover { color: var(--fg); background: var(--bg-alt); }
+    }
     .card-icon svg { display: block; }
     .card-modal {
       position: fixed;
@@ -246,7 +272,31 @@
       border: 0;
       cursor: pointer;
     }
-    .card-modal-close:hover { color: var(--gold); background: transparent; }
+    @media (hover: hover) {
+      .card-modal-close:hover { color: var(--gold); background: transparent; }
+    }
+    @media (max-width: 540px) {
+      body {
+        margin: .75rem auto;
+        padding: 0 .6rem;
+      }
+      h1 {
+        font-size: 1.05rem;
+        letter-spacing: .1em;
+        margin-bottom: 1rem;
+      }
+      .user-greeting { font-size: .72rem; }
+      .tabs { margin-bottom: 1rem; }
+      .tabs a, .tabs .logout-button { padding: .5rem .9rem; font-size: .72rem; }
+      .card-modal-close { top: .25rem; right: .25rem; }
+      /* 44px touch target on mobile, with overrides for small inline controls. */
+      button { min-height: 44px; }
+      .card-icon,
+      .tabs .logout-button,
+      .card-modal-close,
+      .shop-filter-actions button,
+      .market-chart-trigger { min-height: 0; }
+    }
     {% block extra_css %}{% endblock %}
   </style>
 </head>

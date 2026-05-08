@@ -167,9 +167,11 @@
     color: var(--gold);
     flex: 0 0 auto;
   }
-  .market-chart-trigger:hover {
-    color: #0f1117;
-    background: linear-gradient(180deg, var(--gold), #ecd389);
+  @media (hover: hover) {
+    .market-chart-trigger:hover {
+      color: #0f1117;
+      background: linear-gradient(180deg, var(--gold), #ecd389);
+    }
   }
   .market-chart-trigger svg {
     width: .9rem;
@@ -649,7 +651,13 @@
             `;
           }).join('');
 
-          const xIndexes = [0, Math.floor((points.length - 1) / 2), points.length - 1]
+          // Drop the middle date label on narrow viewports — three ticks
+          // collide because tick text is rendered in screen pixels while
+          // tick X positions scale with the viewBox.
+          const narrow = window.innerWidth < 480;
+          const xIndexes = (narrow
+            ? [0, points.length - 1]
+            : [0, Math.floor((points.length - 1) / 2), points.length - 1])
             .filter((index, position, array) => array.indexOf(index) === position);
 
           const yMarkup = yTicks.map(value => {
