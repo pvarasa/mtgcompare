@@ -60,12 +60,20 @@
   </div>
 
   <div id="inv-select-banner" class="select-banner" hidden>
-    <span>
+    <span class="banner-page" data-banner-state="page">
       All <strong>{{ rows|length }}</strong> rows on this page selected.
+      {% if total > rows|length %}
+      <button type="button" id="inv-select-all-matching" class="link-button">
+        Select all <strong>{{ '{:,}'.format(total) }}</strong> matching rows
+      </button>
+      {% endif %}
     </span>
-    <button type="button" id="inv-select-all-matching" class="link-button">
-      Select all <strong>{{ '{:,}'.format(total) }}</strong> matching rows
-    </button>
+    <span class="banner-all" data-banner-state="all" hidden>
+      All <strong>{{ '{:,}'.format(total) }}</strong> matching rows selected.
+      <button type="button" id="inv-clear-selection" class="link-button">
+        Clear selection
+      </button>
+    </span>
   </div>
 
   <div class="table-scroll">

@@ -422,11 +422,10 @@ def delete_matching(
 ) -> int:
     """Delete all inventory rows for the user that match the filter.
 
-    Refuses to run with no filter (would wipe the user's inventory) — for
-    that, use a SQL truncate / the /inventory/import replace flow instead.
+    With no filter (q is None/empty and price_mode is None/"any"), deletes
+    the user's entire inventory. Callers are responsible for confirming
+    destructive intent before invoking this with no filter.
     """
-    if not q and price_mode in (None, "", "any"):
-        raise ValueError("delete_matching requires at least one filter")
     where_sql, binds = _user_where(user_id, q=q,
                                    price_mode=price_mode, price_value=price_value)
     with get_conn() as conn:

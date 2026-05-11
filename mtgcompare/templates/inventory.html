@@ -210,6 +210,7 @@
       gap: .6rem;
       flex-wrap: wrap;
     }
+    .select-banner[hidden] { display: none; }
     .select-banner .link-button {
       background: transparent; border: 0; padding: 0;
       color: var(--gold); cursor: pointer; font: inherit;
@@ -426,9 +427,9 @@
     </div>
   {% endif %}
 
-  <script src="{{ url_for('static', filename='inventoryadd.js') }}" defer></script>
-  <script src="{{ url_for('static', filename='paginatedtable.js') }}" defer></script>
-  <script defer>
+  <script src="{{ url_for('static', filename='inventoryadd.js') }}"></script>
+  <script src="{{ url_for('static', filename='paginatedtable.js') }}"></script>
+  <script>
     // Inventory-specific glue on top of the shared paginated-table client:
     // selection state, bulk delete (per-page and "all matching"), CSV /
     // decklist export. The shared client handles filtering, sorting,
@@ -456,44 +457,116 @@
         return document.querySelector('meta[name="csrf-token"]')?.content || '';
       }
 
+      // Gmail-style virtual selection:
+      //   - "page" mode (default): row checkboxes drive selection; toolbar
+      //     acts on what's visibly ticked.
+      //   - "all" mode: user has clicked "Select all N matching" — the
+      //     virtual selection covers the entire filtered set across pages.
+      //     Row checkboxes appear ticked; clicking any of them collapses
+      //     back to page mode with the resulting checkbox state. Exports
+      //     are disabled because they're page-DOM-driven.
+      const TYPED_CONFIRM_THRESHOLD = 100;
+
       function attachSelectionHandlers(scope) {
         const checkAll = scope.querySelector('#inv-check-all');
         const banner   = scope.querySelector('#inv-select-banner');
+        const bannerPage = scope.querySelector('[data-banner-state="page"]');
+        const bannerAll  = scope.querySelector('[data-banner-state="all"]');
         const btnDeck  = scope.querySelector('#inv-export-deck');
         const btnCsv   = scope.querySelector('#inv-export-csv');
         const btnDel   = scope.querySelector('#inv-delete');
         const selBtn   = scope.querySelector('#inv-select-all-matching');
+        const clrBtn   = scope.querySelector('#inv-clear-selection');
         const selSpan  = scope.querySelector('#inv-sel-count');
         if (!selSpan) return;
+
+        const totalMatching = parseInt(
+          scope.querySelector('.result-summary')?.dataset.total || '0', 10);
         const rowCbs = () => Array.from(scope.querySelectorAll('#inv-table tbody tr input[type=checkbox]'));
         const checkedTrs = () => Array.from(scope.querySelectorAll('#inv-table tbody tr'))
           .filter(tr => tr.querySelector('input[type=checkbox]:checked'));
 
-        function updateState() {
-          const n = checkedTrs().length;
-          selSpan.textContent = n === 0 ? '0 selected on this page' : `${n} selected on this page`;
-          if (btnDeck) btnDeck.disabled = n === 0;
-          if (btnCsv)  btnCsv.disabled  = n === 0;
-          if (btnDel)  btnDel.disabled  = n === 0;
-          if (checkAll) {
-            const cbs = rowCbs();
-            const all = cbs.length > 0 && cbs.every(cb => cb.checked);
-            checkAll.checked = all;
-            checkAll.indeterminate = !all && n > 0;
-          }
-          if (banner) {
-            const cbs = rowCbs();
-            const all = cbs.length > 0 && cbs.every(cb => cb.checked);
-            const totalMatching = parseInt(scope.querySelector('.result-summary')?.dataset.total || '0', 10);
-            banner.hidden = !(all && totalMatching > cbs.length);
+        // Closure-local: virtual all-matching mode flag. Reset on every
+        // partial swap (this handler reattaches fresh).
+        let allMatching = false;
+
+        function setExportDisabled(disabled, reason) {
+          for (const btn of [btnDeck, btnCsv]) {
+            if (!btn) continue;
+            btn.disabled = disabled;
+            if (disabled && reason) btn.title = reason;
+            else btn.removeAttribute('title');
           }
         }
 
-        rowCbs().forEach(cb => cb.addEventListener('change', updateState));
+        function updateState() {
+          if (allMatching) {
+            selSpan.textContent = `${totalMatching.toLocaleString()} selected (all matching)`;
+            if (btnDel) {
+              btnDel.disabled = totalMatching === 0;
+              btnDel.textContent = `Delete ${totalMatching.toLocaleString()} selected`;
+            }
+            setExportDisabled(true, 'Clear selection to export the visible page');
+            if (checkAll) { checkAll.checked = true; checkAll.indeterminate = false; }
+            if (banner)   banner.hidden = false;
+            if (bannerPage) bannerPage.hidden = true;
+            if (bannerAll)  bannerAll.hidden  = false;
+            return;
+          }
+
+          const n = checkedTrs().length;
+          const cbs = rowCbs();
+          const allPageChecked = cbs.length > 0 && cbs.every(cb => cb.checked);
+          selSpan.textContent = n === 0
+            ? '0 selected on this page'
+            : `${n} selected on this page`;
+          setExportDisabled(n === 0);
+          if (btnDel) {
+            btnDel.disabled = n === 0;
+            btnDel.textContent = n === 0
+              ? 'Delete selected'
+              : `Delete ${n} selected`;
+          }
+          if (checkAll) {
+            checkAll.checked = allPageChecked;
+            checkAll.indeterminate = !allPageChecked && n > 0;
+          }
+          if (banner) {
+            // Banner only shows when the user has ticked the whole page and
+            // there are more matching rows off-page.
+            banner.hidden = !(allPageChecked && totalMatching > cbs.length);
+            if (bannerPage) bannerPage.hidden = false;
+            if (bannerAll)  bannerAll.hidden  = true;
+          }
+        }
+
+        function collapseToPage() { allMatching = false; updateState(); }
+
+        rowCbs().forEach(cb => {
+          cb.addEventListener('change', () => {
+            // Any explicit row-level interaction breaks out of virtual mode.
+            if (allMatching) allMatching = false;
+            updateState();
+          });
+        });
         if (checkAll) {
           checkAll.addEventListener('change', () => {
+            allMatching = false;
             rowCbs().forEach(cb => { cb.checked = checkAll.checked; });
             updateState();
+          });
+        }
+        if (selBtn) {
+          selBtn.addEventListener('click', () => {
+            allMatching = true;
+            rowCbs().forEach(cb => { cb.checked = true; });
+            updateState();
+          });
+        }
+        if (clrBtn) {
+          clrBtn.addEventListener('click', () => {
+            rowCbs().forEach(cb => { cb.checked = false; });
+            collapseToPage();
           });
         }
 
@@ -520,19 +593,32 @@
 
         if (btnDel) {
           btnDel.addEventListener('click', async () => {
-            const targets = checkedTrs();
-            if (targets.length === 0) return;
-            if (!window.confirm(`Delete ${targets.length} card(s) on this page? This cannot be undone.`)) return;
-            const ids = targets.map(tr => parseInt(tr.dataset.id, 10)).filter(Number.isFinite);
+            let body;
+            let count;
+            if (allMatching) {
+              count = totalMatching;
+              const q          = form.querySelector('input[name="q"]').value.trim();
+              const price_mode = form.querySelector('select[name="price_mode"]').value;
+              const price_value = form.querySelector('input[name="price_value"]').value.trim();
+              body = { match: { q, price_mode, price_value } };
+            } else {
+              const targets = checkedTrs();
+              if (targets.length === 0) return;
+              count = targets.length;
+              const ids = targets.map(tr => parseInt(tr.dataset.id, 10)).filter(Number.isFinite);
+              body = { ids };
+            }
+            if (!confirmDelete(count, allMatching)) return;
             btnDel.disabled = true;
             try {
               const response = await fetch(inventoryDeleteUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrfToken() },
-                body: JSON.stringify({ ids }),
+                body: JSON.stringify(body),
               });
               if (!response.ok) {
-                window.alert(`Delete failed: server returned ${response.status}`);
+                const errBody = await response.json().catch(() => ({}));
+                window.alert(`Delete failed: ${errBody.error || response.status}`);
                 btnDel.disabled = false;
                 return;
               }
@@ -547,47 +633,23 @@
           });
         }
 
-        if (selBtn) {
-          selBtn.addEventListener('click', async () => {
-            const totalMatching = parseInt(scope.querySelector('.result-summary')?.dataset.total || '0', 10);
-            if (!window.confirm(
-              `Delete ALL ${totalMatching.toLocaleString()} matching rows across all pages?\n\n` +
-              `This cannot be undone.`
-            )) return;
-            selBtn.disabled = true;
-            try {
-              const response = await fetch(inventoryDeleteUrl, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrfToken() },
-                body: JSON.stringify({
-                  match: {
-                    q: form.querySelector('input[name="q"]').value.trim(),
-                    price_mode: form.querySelector('select[name="price_mode"]').value,
-                    price_value: form.querySelector('input[name="price_value"]').value.trim(),
-                  },
-                }),
-              });
-              if (!response.ok) {
-                const body = await response.json().catch(() => ({}));
-                window.alert(`Delete failed: ${body.error || response.status}`);
-                selBtn.disabled = false;
-                return;
-              }
-              window.location.reload();
-            } catch (error) {
-              window.alert(`Network error: ${error.message}`);
-              selBtn.disabled = false;
-            }
-          });
-        }
-
         updateState();
       }
 
-      // The shared client loads with `defer`; this script also runs with
-      // `defer`, but the ordering between two deferred scripts is the
-      // order they appear in the document — so paginatedtable.js is
-      // guaranteed to have run before this line.
+      function confirmDelete(count, virtual) {
+        if (count <= 0) return false;
+        const noun = count === 1 ? 'row' : 'rows';
+        const scope = virtual
+          ? `all ${count.toLocaleString()} matching ${noun} across all pages`
+          : `${count.toLocaleString()} ${noun}`;
+        if (count > TYPED_CONFIRM_THRESHOLD) {
+          const answer = window.prompt(
+            `Delete ${scope}?\n\nThis cannot be undone. Type DELETE to confirm.`);
+          return answer === 'DELETE';
+        }
+        return window.confirm(`Delete ${scope}? This cannot be undone.`);
+      }
+
       window.mtgcompare.attachPaginatedTable({
         form, wrapper,
         spinnerClass: 'inv-loading',

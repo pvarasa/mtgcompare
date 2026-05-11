@@ -1803,9 +1803,12 @@ def inventory_delete():
                                               "Delete selected"
       - {"match": {"q": "...", "price_mode": "lte", "price_value": 0.5}}
                                               — filter-based, used by the
-                                              "Select all matching → delete"
-                                              banner. Refuses to fire without
-                                              at least one filter present.
+                                              virtual "Select all matching"
+                                              flow. With an empty/absent
+                                              filter, wipes the user's
+                                              entire inventory; the client
+                                              is responsible for typed
+                                              confirmation on large counts.
     """
     user_id = _get_user_id()
     payload = request.get_json(silent=True) or {}
@@ -1842,9 +1845,6 @@ def inventory_delete():
         count = inv.delete_matching(
             user_id, q=q, price_mode=price_mode, price_value=price_value,
         )
-    except ValueError as exc:
-        # Empty filter — refuse rather than wipe the inventory.
-        return {"ok": False, "error": str(exc)}, 400
     except Exception as exc:
         app.logger.exception(
             "event=inventory_delete_failed source=match q=%r price_mode=%r",

@@ -779,3 +779,40 @@ def test_inventory_delete_does_not_cross_users(test_db, monkeypatch):
     assert resp.get_json() == {"ok": True, "count": 0}
     assert len(inv.list_all("bob")) == 1
 
+
+def test_inventory_delete_match_filtered(test_db):
+    inv.add_one(_DEL_CARD)
+    other = dict(_DEL_CARD, card_name="Lightning Bolt", set_code="LEA")
+    inv.add_one(other)
+    with web.app.test_client() as client:
+        resp = client.post(
+            "/inventory/delete",
+            json={"match": {"q": "Force"}},
+        )
+    assert resp.status_code == 200
+    assert resp.get_json() == {"ok": True, "count": 1}
+    names = [r["card_name"] for r in inv.list_all()]
+    assert names == ["Lightning Bolt"]
+
+
+def test_inventory_delete_match_no_filter_wipes_user(test_db, monkeypatch):
+    """Empty match payload wipes the requesting user's full inventory.
+
+    The frontend gates this with typed-DELETE confirmation; the server
+    trusts the request once it's authenticated to the user.
+    """
+    inv.add_one(_DEL_CARD)  # default user_id=local
+    other = dict(_DEL_CARD, card_name="Lightning Bolt", set_code="LEA")
+    inv.add_one(other)
+    inv.add_one(_DEL_CARD, user_id="bob")  # different user, must survive
+
+    with web.app.test_client() as client:
+        resp = client.post(
+            "/inventory/delete",
+            json={"match": {"q": "", "price_mode": "any", "price_value": ""}},
+        )
+    assert resp.status_code == 200
+    assert resp.get_json() == {"ok": True, "count": 2}
+    assert inv.list_all() == []
+    assert len(inv.list_all("bob")) == 1
+
