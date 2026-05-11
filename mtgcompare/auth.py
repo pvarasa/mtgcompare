@@ -12,8 +12,10 @@ mints a new pair when the access token expires.
 """
 from __future__ import annotations
 
+import functools
 import os
 import secrets
+import time
 from datetime import UTC, datetime
 
 import jwt
@@ -136,10 +138,6 @@ def _to_session(response) -> dict:
         "access_token": response.access_token,
         "refresh_token": response.refresh_token,
     }
-
-
-import functools
-import time
 
 
 @functools.lru_cache(maxsize=1024)

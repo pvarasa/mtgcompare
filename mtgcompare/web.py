@@ -20,7 +20,9 @@ from time import monotonic
 from uuid import uuid4
 
 import duckdb
+import orjson
 import requests
+from cachetools import TTLCache
 from flask import (
     Flask,
     abort,
@@ -32,6 +34,7 @@ from flask import (
     request,
     url_for,
 )
+from flask.json.provider import JSONProvider
 from sqlalchemy import text
 
 from . import auth, db, history_import, run_log
@@ -67,8 +70,6 @@ app = Flask(__name__)
 # Swap Flask's stdlib JSON for orjson — 5-10x faster encoding, ~half the
 # memory. Affects /auth/me, /market/history, /inventory/add-bulk, and the
 # decklist preview endpoint. Drop-in: same .dumps()/.loads() shape.
-import orjson  # noqa: E402
-from flask.json.provider import JSONProvider  # noqa: E402
 class _OrjsonProvider(JSONProvider):
     def dumps(self, obj, **_):
         return orjson.dumps(obj).decode()
@@ -1226,20 +1227,17 @@ _MKT_SORT_CHOICES = (
 
 
 # Cache the heavy per-request /market computation. Keyed on the full
-# filter+sort+page tuple per user. TTL is configurable via env: default 60s
-# is trivially safe (prices update daily; inventory staleness bounded by
-# TTL). Setting MARKET_CACHE_TTL=0 disables the cache entirely, which is
-# how we isolate the SQL-pagination win from the cache win in load tests.
-# Cleared explicitly after price-update runs to flush across users.
-from cachetools import TTLCache  # noqa: E402
-from threading import Lock as _CacheLock  # noqa: E402
+# filter+sort+page tuple per user. TTL configurable via env (default 60s).
+# Set MARKET_CACHE_TTL=0 to disable (every request runs the full Python
+# computation — useful for ops debugging, not normal operation). Cleared
+# explicitly after price-update runs so users don't keep seeing stale PnL.
 _MARKET_CACHE_TTL = int(os.environ.get("MARKET_CACHE_TTL", "60"))
-_market_data_cache: "TTLCache[tuple, dict]" = TTLCache(
-    maxsize=512,
-    ttl=_MARKET_CACHE_TTL if _MARKET_CACHE_TTL > 0 else 1,  # ttl=0 not allowed by cachetools
-)
-_market_data_cache_lock = _CacheLock()
 _MARKET_CACHE_ENABLED = _MARKET_CACHE_TTL > 0
+_market_data_cache: TTLCache = TTLCache(  # keys = tuples, values = template ctx dicts
+    maxsize=512,
+    ttl=_MARKET_CACHE_TTL if _MARKET_CACHE_ENABLED else 1,  # ttl=0 not allowed by cachetools
+)
+_market_data_cache_lock = Lock()
 
 
 def _market_cache_get(key):
@@ -1287,122 +1285,10 @@ def _compute_market_ctx(user_id: str, params: dict) -> dict:
     """All the expensive /market computation, factored out so the route
     handler can cache the result.
 
-    On Postgres, dispatches to the SQL-paginated path (the JOIN + PnL +
-    pagination happen at the DB level — O(50) rows out instead of O(N)
-    rows through Python). SQLite falls back to the legacy Python path.
+    Returns the full template context dict (whichever branch applied —
+    empty inventory, no-price-cache, or full). The handler picks the
+    template based on `partial=tbody` and renders.
     """
-    if db.IS_POSTGRES:
-        return _compute_market_ctx_sql(user_id, params)
-    return _compute_market_ctx_python(user_id, params)
-
-
-def _market_environmental_ctx() -> tuple[bool, str | None, str | None, bool]:
-    """Shared bits both code paths need: cache freshness + history-DB state."""
-    with db.get_conn() as conn:
-        cache_row = conn.execute(text(
-            "SELECT max(fetched_at) AS latest, count(*) AS n FROM market_prices"
-        )).mappings().first()
-        mtgjson_downloaded_at = _read_meta(conn, "mtgjson_history_downloaded_at")
-    has_cache = bool(cache_row and cache_row["n"])
-    last_refreshed = _format_ago(cache_row["latest"]) if cache_row and cache_row["latest"] else None
-    history_db_exists = _has_price_history()
-    mtgjson_last_downloaded = _format_ago(mtgjson_downloaded_at) if history_db_exists else None
-    return has_cache, last_refreshed, mtgjson_last_downloaded, history_db_exists
-
-
-def _compute_market_ctx_sql(user_id: str, params: dict) -> dict:
-    """Postgres path. Two queries (page + aggregate) joined to market_prices."""
-    has_cache, last_refreshed, mtgjson_last_downloaded, history_db_exists = _market_environmental_ctx()
-    common = {
-        "last_refreshed": last_refreshed,
-        "mtgjson_last_downloaded": mtgjson_last_downloaded,
-        "history_db_exists": history_db_exists,
-        "allow_price_update": not db.IS_POSTGRES,
-        "active": "market",
-        "params": params,
-        "per_page_choices": _PER_PAGE_CHOICES,
-    }
-
-    # Cheap pre-check to mirror the Python path's empty-inventory branch.
-    # count_matching uses the same WHERE so it covers user-filter combos.
-    total = inv.count_matching(
-        user_id,
-        q=params["q"] or None,
-        price_mode=params["price_mode"],
-        price_value=params["price_value"],
-    )
-    if total == 0:
-        return {
-            "rows": [], "summary": None, "fx": None, "error": None,
-            "has_cache": has_cache,
-            "total": 0, "total_pages": 1,
-            **common,
-        }
-
-    # The page itself.
-    fx = _get_fx() if has_cache else None
-    rows = inv.list_market_paginated(
-        user_id,
-        q=params["q"] or None,
-        sort=params["sort"], direction=params["direction"],
-        page=params["page"], per_page=params["per_page"],
-        price_mode=params["price_mode"], price_value=params["price_value"],
-    )
-    # SQL returns market_price_usd / cost_basis_usd / market_value_usd /
-    # pnl_usd / pnl_pct. JPY values are FX-derived, easier in Python.
-    if fx is not None:
-        for row in rows:
-            mp = row.get("market_price_usd")
-            mv_usd = row.get("market_value_usd")
-            row["market_price_jpy"] = round(mp * fx) if mp is not None else None
-            row["market_value_jpy"] = round(mv_usd * fx) if mv_usd is not None else None
-    else:
-        for row in rows:
-            row["market_price_jpy"] = None
-            row["market_value_jpy"] = None
-
-    # Aggregate across the whole filter (NOT just the page).
-    if has_cache:
-        agg = inv.aggregate_market(
-            user_id,
-            q=params["q"] or None,
-            price_mode=params["price_mode"],
-            price_value=params["price_value"],
-        )
-        summary = {
-            **agg,
-            "total_market_jpy": round(agg["total_market_usd"] * fx) if fx else 0,
-        }
-    else:
-        summary = None
-
-    if not has_cache:
-        return {
-            "rows": rows, "summary": None, "fx": None, "error": None,
-            "has_cache": False,
-            "last_refreshed": None,
-            "total": total, "total_pages": 1,
-            **{k: v for k, v in common.items() if k != "last_refreshed"},
-        }
-
-    total_pages = max(1, math.ceil(total / params["per_page"]))
-    if params["page"] > total_pages:
-        params["page"] = total_pages
-
-    return {
-        "rows": rows,
-        "summary": summary,
-        "fx": fx,
-        "error": None,
-        "has_cache": True,
-        "total": total,
-        "total_pages": total_pages,
-        **common,
-    }
-
-
-def _compute_market_ctx_python(user_id: str, params: dict) -> dict:
-    """SQLite fallback. Same shape, Python-side join + sort + paginate."""
     inventory_rows = inv.list_filtered_for_market(
         user_id,
         q=params["q"] or None,

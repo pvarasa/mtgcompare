@@ -246,6 +246,15 @@ def _migrate(conn) -> None:
             "ON inventory (user_id, lower(card_name))"
         ))
 
+        # Older versions briefly shipped an expression index on
+        # (lower(card_name), lower(set_code), is_foil) of market_prices
+        # for a SQL JOIN path on /market that we measured to be slower
+        # than the Python join. The path was reverted; drop the index
+        # if it's still lying around — it's dead weight otherwise.
+        conn.execute(text(
+            "DROP INDEX IF EXISTS idx_market_prices_lower_key"
+        ))
+
         for table in ("price_rows", "mtgjson_card_map"):
             col_type = conn.execute(text("""
                 SELECT data_type FROM information_schema.columns
