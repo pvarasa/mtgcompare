@@ -373,12 +373,8 @@ def list_filtered_for_market(
 ) -> list[dict]:
     """Return ALL matching rows (no pagination, no sort).
 
-    Used by the /market route, which must compute summary aggregates and
-    sort by derived columns (PnL, market value) that the SQL layer doesn't
-    know about. Pagination then happens in Python on the joined result.
-
-    Still better than the legacy `list_all` because the WHERE narrows the
-    set before Python sees it.
+    Used by the /market route on SQLite (where the joined SQL path isn't
+    available). Python-side join + sort + paginate happens in the caller.
     """
     where_sql, binds = _user_where(user_id, q=q,
                                    price_mode=price_mode, price_value=price_value)
@@ -390,6 +386,171 @@ def list_filtered_for_market(
             binds,
         ).mappings().all()
     return [row_to_dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Postgres-only /market path: push the LEFT JOIN against market_prices,
+# the PnL math, and the pagination into SQL. Cuts per-request cost on
+# /market from O(N) Python work down to two indexed-friendly queries
+# returning O(50) rows + O(1) aggregates.
+#
+# The join key normalization (lower + split on '_') mirrors what the
+# Python path does — see _normalize_set_code in web.py.
+# ---------------------------------------------------------------------------
+
+# SQL expressions for each sort column. Bare column refs for indexed
+# inventory columns, SELECT-list aliases for derived/JOIN'd columns
+# (Postgres allows the alias in ORDER BY).
+_MARKET_SORT_TO_SQL = {
+    "card_name":        "inv.card_name",
+    "set_code":         "inv.set_code",
+    "quantity":         "inv.quantity",
+    "price_bought":     "inv.price_bought",
+    "market_price_usd": "market_price_usd",
+    # Sort by JPY is monotonic with USD * qty (fx is a positive constant),
+    # so the ordering matches without needing the runtime fx value.
+    "market_value_jpy": "(mp.price_usd * inv.quantity)",
+    "pnl_usd":          "pnl_usd",
+    "pnl_pct":          "pnl_pct",
+}
+
+_MARKET_JOIN_CLAUSE = """
+    LEFT JOIN market_prices mp
+      ON lower(mp.card_name) = lower(inv.card_name)
+      AND lower(mp.set_code) = lower(split_part(inv.set_code, '_', 1))
+      AND mp.is_foil = CASE WHEN lower(inv.printing) = 'foil' THEN 1 ELSE 0 END
+"""
+
+
+def list_market_paginated(
+    user_id: str,
+    *,
+    q: str | None = None,
+    sort: str = "pnl_usd",
+    direction: str = "desc",
+    page: int = 1,
+    per_page: int = 50,
+    price_mode: str | None = None,
+    price_value: float | None = None,
+) -> list[dict]:
+    """Paginated /market rows with prices joined and PnL pre-computed in SQL.
+
+    Postgres-only — uses `split_part`. Caller is responsible for adding
+    `market_price_jpy` and `market_value_jpy` (those depend on the
+    runtime FX rate, which is a Python value).
+    """
+    from .db import IS_POSTGRES
+    if not IS_POSTGRES:
+        raise NotImplementedError("list_market_paginated requires PostgreSQL")
+
+    where_extra, binds = _filter_clause(q, price_mode, price_value)
+    where_sql = "inv.user_id = :uid" + (f" AND {where_extra}" if where_extra else "")
+    binds["uid"] = user_id
+
+    sort_expr = _MARKET_SORT_TO_SQL.get(sort, _MARKET_SORT_TO_SQL["pnl_usd"])
+    dir_norm = "DESC NULLS LAST" if (direction or "").lower() == "desc" else "ASC NULLS LAST"
+    binds.update({"lim": per_page, "off": (page - 1) * per_page})
+
+    # The CASE expressions match the rounding the Python path applied so
+    # outputs are byte-for-byte equivalent across the two code paths.
+    sql = text(f"""
+        SELECT
+          inv.id, inv.card_name, inv.set_code, inv.set_name, inv.card_number,
+          inv.quantity, inv.condition, inv.printing, inv.language,
+          inv.price_bought, inv.date_bought,
+          mp.price_usd AS market_price_usd,
+          CASE WHEN inv.price_bought IS NOT NULL
+               THEN ROUND((inv.price_bought * inv.quantity)::numeric, 2)
+          END AS cost_basis_usd,
+          CASE WHEN mp.price_usd IS NOT NULL
+               THEN ROUND((mp.price_usd * inv.quantity)::numeric, 2)
+          END AS market_value_usd,
+          CASE WHEN inv.price_bought IS NOT NULL AND mp.price_usd IS NOT NULL
+               THEN ROUND(((mp.price_usd - inv.price_bought) * inv.quantity)::numeric, 2)
+          END AS pnl_usd,
+          CASE WHEN inv.price_bought > 0 AND mp.price_usd IS NOT NULL
+               THEN ROUND(((mp.price_usd / inv.price_bought - 1) * 100)::numeric, 1)
+          END AS pnl_pct
+        FROM inventory inv
+        {_MARKET_JOIN_CLAUSE}
+        WHERE {where_sql}
+        ORDER BY {sort_expr} {dir_norm},
+                 inv.card_name, inv.set_code, inv.card_number, inv.id
+        LIMIT :lim OFFSET :off
+    """)  # noqa: S608
+
+    with get_conn() as conn:
+        rows = conn.execute(sql, binds).mappings().all()
+    return [row_to_dict(r) for r in rows]
+
+
+def aggregate_market(
+    user_id: str,
+    *,
+    q: str | None = None,
+    price_mode: str | None = None,
+    price_value: float | None = None,
+) -> dict:
+    """SQL aggregate for the /market summary.
+
+    Computed across the whole filtered set (not just the page), so the
+    "Cost basis $X" totals stay correct regardless of pagination state.
+    Postgres-only — caller must dispatch on IS_POSTGRES.
+    """
+    from .db import IS_POSTGRES
+    if not IS_POSTGRES:
+        raise NotImplementedError("aggregate_market requires PostgreSQL")
+
+    where_extra, binds = _filter_clause(q, price_mode, price_value)
+    where_sql = "inv.user_id = :uid" + (f" AND {where_extra}" if where_extra else "")
+    binds["uid"] = user_id
+
+    sql = text(f"""
+        SELECT
+          COUNT(*) AS lots_total,
+          COALESCE(SUM(CASE WHEN inv.price_bought IS NOT NULL
+                            THEN inv.price_bought * inv.quantity END), 0) AS total_cost_usd,
+          COALESCE(SUM(CASE WHEN mp.price_usd IS NOT NULL
+                            THEN mp.price_usd * inv.quantity END), 0) AS total_market_usd,
+          COALESCE(SUM(CASE WHEN inv.price_bought IS NOT NULL AND mp.price_usd IS NOT NULL
+                            THEN (mp.price_usd - inv.price_bought) * inv.quantity END), 0) AS total_pnl_usd,
+          COUNT(CASE WHEN inv.price_bought IS NULL THEN 1 END) AS lots_no_cost,
+          COUNT(CASE WHEN mp.price_usd IS NULL THEN 1 END) AS lots_no_market,
+          COUNT(CASE WHEN inv.price_bought IS NOT NULL AND mp.price_usd IS NOT NULL
+                     THEN 1 END) AS lots_in_pnl
+        FROM inventory inv
+        {_MARKET_JOIN_CLAUSE}
+        WHERE {where_sql}
+    """)  # noqa: S608
+
+    with get_conn() as conn:
+        row = conn.execute(sql, binds).mappings().first()
+
+    row = row_to_dict(row)
+    total_cost = float(row["total_cost_usd"])
+    total_pnl  = float(row["total_pnl_usd"])
+    pnl_pct = round(total_pnl / total_cost * 100, 1) if total_cost > 0 else None
+    return {
+        "total_cost_usd":   round(total_cost, 2),
+        "total_pnl_usd":    round(total_pnl, 2),
+        "pnl_pct":          pnl_pct,
+        "total_market_usd": round(float(row["total_market_usd"]), 2),
+        "lots_total":       int(row["lots_total"]),
+        "lots_no_cost":     int(row["lots_no_cost"]),
+        "lots_no_market":   int(row["lots_no_market"]),
+        "lots_in_pnl":      int(row["lots_in_pnl"]),
+    }
+
+
+def count_market_matching(
+    user_id: str,
+    *,
+    q: str | None = None,
+    price_mode: str | None = None,
+    price_value: float | None = None,
+) -> int:
+    """Count of rows the SQL-paginated /market would yield (for total_pages)."""
+    return count_matching(user_id, q=q, price_mode=price_mode, price_value=price_value)
 
 
 def _main() -> None:
