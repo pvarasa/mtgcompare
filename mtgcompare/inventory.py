@@ -182,6 +182,211 @@ def stats(user_id: str = "local") -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# Paginated / filtered read API used by the /inventory and /market pages.
+#
+# Everything that takes filters builds the same WHERE fragment, so calls
+# stay consistent across the page (table query, count, aggregate, bulk
+# delete). Filter args are bound parameters — no SQL injection surface.
+#
+# Sort column names are whitelisted (anything outside the list falls back
+# to card_name, asc). The whitelist doubles as documentation of which
+# sorts the schema can serve efficiently — every entry is either a
+# primary key column or covered by an index.
+# ---------------------------------------------------------------------------
+
+_SORT_COLUMNS = {
+    "card_name":     "card_name",
+    "set_code":      "set_code",
+    "quantity":      "quantity",
+    "price_bought":  "price_bought",
+    "condition":     "condition",
+    "printing":      "printing",
+    "date_bought":   "date_bought",
+}
+
+_PRICE_MODES = {"any", "empty", "has", "lte", "gte", "eq"}
+
+
+def _filter_clause(q: str | None, price_mode: str | None,
+                   price_value: float | None) -> tuple[str, dict]:
+    """Build the WHERE-clause fragment + bind dict for the inventory filters.
+
+    The returned string has no leading AND/WHERE — callers prepend whichever
+    they need (the user_id clause is always present, so callers join with AND).
+    """
+    parts: list[str] = []
+    binds: dict = {}
+
+    if q:
+        # Substring match — matches "Beacon Bolt" / "Firebolt" when the
+        # user types "bolt". The prefix-only index can't fully serve this
+        # but the `WHERE user_id = ...` clause narrows to one user first,
+        # so the scan is over hundreds of rows, not millions.
+        parts.append("lower(card_name) LIKE :q")
+        binds["q"] = "%" + q.lower() + "%"
+
+    if price_mode in _PRICE_MODES and price_mode != "any":
+        if price_mode == "empty":
+            parts.append("price_bought IS NULL")
+        elif price_mode == "has":
+            parts.append("price_bought IS NOT NULL")
+        elif price_value is not None:
+            op = {"lte": "<=", "gte": ">=", "eq": "="}[price_mode]
+            parts.append(f"price_bought {op} :price_v")
+            binds["price_v"] = price_value
+
+    return (" AND ".join(parts), binds)
+
+
+def _normalize_sort(sort: str | None, direction: str | None) -> tuple[str, str]:
+    col = _SORT_COLUMNS.get(sort or "", "card_name")
+    dir_norm = "DESC" if (direction or "").lower() == "desc" else "ASC"
+    # Stable secondary sort so paginated views don't shuffle rows that
+    # happen to be tied on the primary key.
+    if col == "card_name":
+        tail = "set_code, card_number, id"
+    else:
+        tail = "card_name, set_code, card_number, id"
+    return (col, dir_norm), f"{col} {dir_norm}, {tail}"
+
+
+def list_paginated(
+    user_id: str,
+    *,
+    q: str | None = None,
+    sort: str | None = "card_name",
+    direction: str | None = "asc",
+    page: int = 1,
+    per_page: int = 50,
+    price_mode: str | None = None,
+    price_value: float | None = None,
+) -> list[dict]:
+    """Return a single page of the user's inventory matching the filters.
+
+    `page` is 1-indexed; `per_page` is clamped to [1, 500] by the caller.
+    """
+    where_extra, binds = _filter_clause(q, price_mode, price_value)
+    where_sql = "user_id = :uid" + (f" AND {where_extra}" if where_extra else "")
+    _, order_sql = _normalize_sort(sort, direction)
+    binds.update({"uid": user_id, "lim": per_page, "off": (page - 1) * per_page})
+
+    with get_conn() as conn:
+        rows = conn.execute(
+            text(f"""SELECT id, card_name, set_code, set_name, card_number, quantity,
+                            condition, printing, language, price_bought, date_bought
+                     FROM inventory
+                     WHERE {where_sql}
+                     ORDER BY {order_sql}
+                     LIMIT :lim OFFSET :off"""),  # noqa: S608 — where/order built from whitelisted columns
+            binds,
+        ).mappings().all()
+    return [row_to_dict(r) for r in rows]
+
+
+def count_matching(
+    user_id: str,
+    *,
+    q: str | None = None,
+    price_mode: str | None = None,
+    price_value: float | None = None,
+) -> int:
+    """Count inventory rows for the user that match the same filters as list_paginated."""
+    where_extra, binds = _filter_clause(q, price_mode, price_value)
+    where_sql = "user_id = :uid" + (f" AND {where_extra}" if where_extra else "")
+    binds["uid"] = user_id
+    with get_conn() as conn:
+        row = conn.execute(
+            text(f"SELECT count(*) FROM inventory WHERE {where_sql}"),  # noqa: S608
+            binds,
+        ).scalar()
+    return int(row or 0)
+
+
+def aggregate_inventory(
+    user_id: str,
+    *,
+    q: str | None = None,
+    price_mode: str | None = None,
+    price_value: float | None = None,
+) -> dict:
+    """Aggregate stats for the rows matching the filter (NOT just the current page)."""
+    where_extra, binds = _filter_clause(q, price_mode, price_value)
+    where_sql = "user_id = :uid" + (f" AND {where_extra}" if where_extra else "")
+    binds["uid"] = user_id
+    with get_conn() as conn:
+        row = conn.execute(
+            text(f"""SELECT COUNT(*) AS printings,
+                            COALESCE(SUM(quantity), 0) AS total_copies,
+                            COALESCE(SUM(quantity * COALESCE(price_bought, 0)), 0.0) AS total_cost
+                     FROM inventory
+                     WHERE {where_sql}"""),  # noqa: S608
+            binds,
+        ).mappings().first()
+    row = row_to_dict(row)
+    return {
+        "printings":    int(row["printings"]),
+        "total_copies": int(row["total_copies"]),
+        "total_cost":   round(float(row["total_cost"]), 2),
+    }
+
+
+def delete_matching(
+    user_id: str,
+    *,
+    q: str | None = None,
+    price_mode: str | None = None,
+    price_value: float | None = None,
+) -> int:
+    """Delete all inventory rows for the user that match the filter.
+
+    Refuses to run with no filter (would wipe the user's inventory) — for
+    that, use a SQL truncate / the /inventory/import replace flow instead.
+    """
+    if not q and price_mode in (None, "", "any"):
+        raise ValueError("delete_matching requires at least one filter")
+    where_extra, binds = _filter_clause(q, price_mode, price_value)
+    where_sql = "user_id = :uid AND " + where_extra
+    binds["uid"] = user_id
+    with get_conn() as conn:
+        result = conn.execute(
+            text(f"DELETE FROM inventory WHERE {where_sql}"),  # noqa: S608
+            binds,
+        )
+    return result.rowcount or 0
+
+
+def list_filtered_for_market(
+    user_id: str,
+    *,
+    q: str | None = None,
+    price_mode: str | None = None,
+    price_value: float | None = None,
+) -> list[dict]:
+    """Return ALL matching rows (no pagination, no sort).
+
+    Used by the /market route, which must compute summary aggregates and
+    sort by derived columns (PnL, market value) that the SQL layer doesn't
+    know about. Pagination then happens in Python on the joined result.
+
+    Still better than the legacy `list_all` because the WHERE narrows the
+    set before Python sees it.
+    """
+    where_extra, binds = _filter_clause(q, price_mode, price_value)
+    where_sql = "user_id = :uid" + (f" AND {where_extra}" if where_extra else "")
+    binds["uid"] = user_id
+    with get_conn() as conn:
+        rows = conn.execute(
+            text(f"""SELECT id, card_name, set_code, set_name, card_number, quantity,
+                            condition, printing, language, price_bought, date_bought
+                     FROM inventory
+                     WHERE {where_sql}
+                     ORDER BY card_name, set_code, card_number, id"""),  # noqa: S608
+            binds,
+        ).mappings().all()
+    return [row_to_dict(r) for r in rows]
+
+
 def _main() -> None:
     p = argparse.ArgumentParser(prog="inventory")
     sub = p.add_subparsers(dest="cmd", required=True)

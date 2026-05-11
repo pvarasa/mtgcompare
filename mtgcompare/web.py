@@ -7,6 +7,7 @@ import hmac
 import json
 import logging.config
 import lzma
+import math
 import os
 import re
 import tempfile
@@ -1204,11 +1205,76 @@ def _import_mtgjson_history(rows: list[dict], *, progress_cb=None) -> tuple[int,
     return len(card_maps), history_row_count
 
 
+_MKT_SORT_CHOICES = (
+    "card_name", "set_code", "quantity", "price_bought",
+    "market_price_usd", "market_value_jpy", "pnl_usd", "pnl_pct",
+)
+
+
+def _parse_market_query(args) -> dict:
+    """Mirror of _parse_inventory_query for the /market page.
+
+    Same filter shape (q + price_mode/value) so users can carry context
+    from the inventory page; the sort whitelist is wider to cover the
+    derived columns (PnL, market value) computed in Python.
+    """
+    per_page = _clamp_int(args.get("per_page"), default=50, lo=1, hi=200)
+    if per_page not in _PER_PAGE_CHOICES:
+        per_page = 50
+    page = _clamp_int(args.get("page"), default=1, lo=1, hi=10_000)
+
+    sort = args.get("sort") or "pnl_usd"
+    if sort not in _MKT_SORT_CHOICES:
+        sort = "pnl_usd"
+    direction = args.get("dir", "desc" if sort == "pnl_usd" else "asc").lower()
+    if direction not in ("asc", "desc"):
+        direction = "asc"
+
+    q = (args.get("q") or "").strip()
+    price_mode = args.get("price_mode") or "any"
+    if price_mode not in {"any", "empty", "has", "lte", "gte", "eq"}:
+        price_mode = "any"
+    price_value = _opt_float(args.get("price_value"))
+
+    return {
+        "q": q, "sort": sort, "direction": direction,
+        "page": page, "per_page": per_page,
+        "price_mode": price_mode, "price_value": price_value,
+    }
+
+
+def _sort_key_market(col: str, descending: bool):
+    """Return a `key=` callable for sorting the priced rows list.
+
+    Nulls always sort to the end — clicking "sort by PnL desc" should put
+    rows with PnL=null at the bottom, not above the best-performing ones.
+    """
+    def key(row):
+        v = row.get(col)
+        # First tuple element pushes nulls to the bottom in both orders;
+        # second element is the sort value with sign-flip for descending.
+        if v is None:
+            return (1, 0)
+        if isinstance(v, str):
+            v_cmp = v.lower()
+        else:
+            v_cmp = -float(v) if descending else float(v)
+        return (0, v_cmp)
+    return key
+
+
 @app.route("/market")
 def market():
     inv.init_schema()
     user_id = _get_user_id()
-    inventory_rows = inv.list_all(user_id)
+    params = _parse_market_query(request.args)
+
+    inventory_rows = inv.list_filtered_for_market(
+        user_id,
+        q=params["q"] or None,
+        price_mode=params["price_mode"],
+        price_value=params["price_value"],
+    )
 
     # Load cached prices — no live fetch on GET.
     with db.get_conn() as conn:
@@ -1239,6 +1305,8 @@ def market():
             history_db_exists=history_db_exists,
             allow_price_update=not db.IS_POSTGRES,
             active="market",
+            params=params, total=0, total_pages=1,
+            per_page_choices=_PER_PAGE_CHOICES,
         )
 
     fx = _get_fx() if has_cache else None
@@ -1263,6 +1331,8 @@ def market():
             history_db_exists=history_db_exists,
             allow_price_update=not db.IS_POSTGRES,
             active="market",
+            params=params, total=len(priced), total_pages=1,
+            per_page_choices=_PER_PAGE_CHOICES,
         )
 
     for row in priced:
@@ -1279,7 +1349,10 @@ def market():
             row["pnl_usd"] = None
             row["pnl_pct"] = None
 
-    priced.sort(key=lambda r: (r["pnl_usd"] is None, -(r["pnl_usd"] or 0)))
+    # Sort by the column requested in the URL. Summary aggregates below
+    # are computed across the WHOLE filtered set (not just the page),
+    # because that's what the user expects "Cost basis $X" to mean.
+    priced.sort(key=_sort_key_market(params["sort"], params["direction"] == "desc"))
 
     pnl_rows    = [r for r in priced if r["pnl_usd"]          is not None]
     cost_rows   = [r for r in priced if r["cost_basis_usd"]   is not None]
@@ -1302,15 +1375,33 @@ def market():
         "lots_in_pnl":      len(pnl_rows),
     }
 
-    return render_template(
-        "market.html",
-        rows=priced, summary=summary, fx=fx, error=None,
-        has_cache=True, last_refreshed=last_refreshed,
-        mtgjson_last_downloaded=mtgjson_last_downloaded,
-        history_db_exists=history_db_exists,
-        allow_price_update=not db.IS_POSTGRES,
-        active="market",
-    )
+    # Paginate AFTER the summary is computed.
+    total = len(priced)
+    total_pages = max(1, math.ceil(total / params["per_page"])) if total else 1
+    if params["page"] > total_pages:
+        params["page"] = total_pages
+    start = (params["page"] - 1) * params["per_page"]
+    page_rows = priced[start:start + params["per_page"]]
+
+    ctx = {
+        "rows": page_rows,
+        "summary": summary,
+        "fx": fx,
+        "error": None,
+        "has_cache": True,
+        "last_refreshed": last_refreshed,
+        "mtgjson_last_downloaded": mtgjson_last_downloaded,
+        "history_db_exists": history_db_exists,
+        "allow_price_update": not db.IS_POSTGRES,
+        "active": "market",
+        "params": params,
+        "total": total,
+        "total_pages": total_pages,
+        "per_page_choices": _PER_PAGE_CHOICES,
+    }
+    if request.args.get("partial") == "tbody":
+        return render_template("_market_table.html", **ctx)
+    return render_template("market.html", **ctx)
 
 
 @app.route("/market/history/download", methods=["POST"])
@@ -1437,16 +1528,102 @@ def market_history():
     })
 
 
+_PER_PAGE_CHOICES = (25, 50, 100, 200)
+_INV_SORT_CHOICES = ("card_name", "set_code", "quantity", "price_bought",
+                     "condition", "printing", "date_bought")
+
+
+def _clamp_int(value: str | None, *, default: int, lo: int, hi: int) -> int:
+    """Tolerate junk in URL params — never 500 on a malformed ?page=foo."""
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(lo, min(hi, n))
+
+
+def _parse_inventory_query(args) -> dict:
+    """Pull pagination/filter/sort params out of request.args, with defaults.
+
+    Used by both `/inventory` and `/inventory/delete-matching` so the same
+    URL the user is staring at matches the rows they're about to act on.
+    """
+    per_page = _clamp_int(args.get("per_page"), default=50, lo=1, hi=200)
+    if per_page not in _PER_PAGE_CHOICES:
+        per_page = 50
+    page = _clamp_int(args.get("page"), default=1, lo=1, hi=10_000)
+
+    sort = args.get("sort") or "card_name"
+    if sort not in _INV_SORT_CHOICES:
+        sort = "card_name"
+    direction = args.get("dir", "asc").lower()
+    if direction not in ("asc", "desc"):
+        direction = "asc"
+
+    q = (args.get("q") or "").strip()
+    price_mode = args.get("price_mode") or "any"
+    if price_mode not in {"any", "empty", "has", "lte", "gte", "eq"}:
+        price_mode = "any"
+    price_value = _opt_float(args.get("price_value"))
+
+    return {
+        "q": q, "sort": sort, "direction": direction,
+        "page": page, "per_page": per_page,
+        "price_mode": price_mode, "price_value": price_value,
+    }
+
+
 @app.route("/inventory")
 def inventory():
     inv.init_schema()
     user_id = _get_user_id()
-    return render_template(
-        "inventory.html",
-        rows=inv.list_all(user_id),
-        stats=inv.stats(user_id),
-        active="inventory",
+    params = _parse_inventory_query(request.args)
+
+    total = inv.count_matching(
+        user_id,
+        q=params["q"] or None,
+        price_mode=params["price_mode"],
+        price_value=params["price_value"],
     )
+    total_pages = max(1, math.ceil(total / params["per_page"])) if total else 1
+    # If the user landed on a stale page (e.g. they were on page 5, then
+    # filtered down to 2 pages of results), pin them to the last real
+    # page rather than rendering an empty body.
+    if params["page"] > total_pages:
+        params["page"] = total_pages
+
+    rows = inv.list_paginated(
+        user_id,
+        q=params["q"] or None,
+        sort=params["sort"], direction=params["direction"],
+        page=params["page"], per_page=params["per_page"],
+        price_mode=params["price_mode"], price_value=params["price_value"],
+    )
+
+    # Unconditional stats (no filter) so the stats line at the top stays
+    # an "inventory at a glance" — separate from the filtered subtotal
+    # shown in the result count.
+    stats = inv.stats(user_id)
+    matched = inv.aggregate_inventory(
+        user_id,
+        q=params["q"] or None,
+        price_mode=params["price_mode"],
+        price_value=params["price_value"],
+    )
+
+    ctx = {
+        "rows": rows,
+        "stats": stats,
+        "matched": matched,
+        "params": params,
+        "total": total,
+        "total_pages": total_pages,
+        "per_page_choices": _PER_PAGE_CHOICES,
+        "active": "inventory",
+    }
+    if request.args.get("partial") == "tbody":
+        return render_template("_inventory_table.html", **ctx)
+    return render_template("inventory.html", **ctx)
 
 
 def _opt_float(value: str) -> float | None:
@@ -1521,24 +1698,64 @@ def inventory_add_bulk():
 
 @app.route("/inventory/delete", methods=["POST"])
 def inventory_delete():
+    """Delete inventory rows for the current user.
+
+    Two payload shapes:
+      - {"ids": [1, 2, 3]}                  — id-based, used by per-page
+                                              "Delete selected"
+      - {"match": {"q": "...", "price_mode": "lte", "price_value": 0.5}}
+                                              — filter-based, used by the
+                                              "Select all matching → delete"
+                                              banner. Refuses to fire without
+                                              at least one filter present.
+    """
     user_id = _get_user_id()
     payload = request.get_json(silent=True) or {}
-    raw_ids = payload.get("ids") or []
-    if not isinstance(raw_ids, list) or not raw_ids:
-        return {"ok": False, "error": "No ids"}, 400
+
+    if "ids" in payload:
+        raw_ids = payload.get("ids") or []
+        if not isinstance(raw_ids, list) or not raw_ids:
+            return {"ok": False, "error": "No ids"}, 400
+        try:
+            ids = [int(x) for x in raw_ids]
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "Invalid ids"}, 400
+        try:
+            count = inv.delete(ids, user_id)
+        except Exception as exc:
+            app.logger.exception(
+                "event=inventory_delete_failed source=ids requested=%d",
+                len(ids),
+            )
+            return {"ok": False, "error": str(exc)}, 500
+        app.logger.info(
+            "event=inventory_delete source=ids requested=%d deleted=%d",
+            len(ids), count,
+        )
+        return {"ok": True, "count": count}
+
+    match = payload.get("match")
+    if not isinstance(match, dict):
+        return {"ok": False, "error": "Provide 'ids' or 'match'"}, 400
+    q = (match.get("q") or "").strip() or None
+    price_mode = match.get("price_mode") or "any"
+    price_value = _opt_float(str(match.get("price_value", "")))
     try:
-        ids = [int(x) for x in raw_ids]
-    except (TypeError, ValueError):
-        return {"ok": False, "error": "Invalid ids"}, 400
-    try:
-        count = inv.delete(ids, user_id)
+        count = inv.delete_matching(
+            user_id, q=q, price_mode=price_mode, price_value=price_value,
+        )
+    except ValueError as exc:
+        # Empty filter — refuse rather than wipe the inventory.
+        return {"ok": False, "error": str(exc)}, 400
     except Exception as exc:
         app.logger.exception(
-            "event=inventory_delete_failed requested=%d", len(ids),
+            "event=inventory_delete_failed source=match q=%r price_mode=%r",
+            q, price_mode,
         )
         return {"ok": False, "error": str(exc)}, 500
     app.logger.info(
-        "event=inventory_delete requested=%d deleted=%d", len(ids), count,
+        "event=inventory_delete source=match q=%r price_mode=%r deleted=%d",
+        q, price_mode, count,
     )
     return {"ok": True, "count": count}
 

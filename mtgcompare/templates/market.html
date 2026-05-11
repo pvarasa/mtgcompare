@@ -116,8 +116,25 @@
     margin-bottom: 1.2rem;
   }
 
-  #mkt-filter { margin-bottom: .75rem; }
-  #mkt-filter input {
+  /* Filter form (server-driven; JS upgrades it to instant fragment fetches). */
+  .mkt-filter {
+    margin-bottom: .75rem;
+    display: grid;
+    gap: .6rem;
+    grid-template-columns: minmax(0, 18rem) auto minmax(0, 10rem) auto;
+    align-items: end;
+  }
+  .mkt-filter label {
+    display: flex;
+    flex-direction: column;
+    gap: .25rem;
+    color: var(--muted);
+    font-size: .75rem;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+  }
+  .mkt-filter input,
+  .mkt-filter select {
     padding: .45rem .55rem;
     background: var(--bg-alt);
     color: var(--fg);
@@ -125,28 +142,93 @@
     border-radius: 5px;
     font-size: .9rem;
     font-family: inherit;
-    width: 18rem;
-    max-width: 100%;
+    box-sizing: border-box;
+    width: 100%;
   }
+  .mkt-filter .filter-actions { display: flex; gap: .4rem; }
+  .mkt-filter .filter-actions button { padding: .4rem .8rem; font-size: .85rem; }
+  @media (max-width: 720px) {
+    .mkt-filter { grid-template-columns: 1fr; }
+  }
+
+  /* Spinner while a partial fetch is in flight. */
+  #mkt-table-wrapper { position: relative; transition: opacity .15s; }
+  #mkt-table-wrapper.is-loading { opacity: .55; pointer-events: none; }
+  .mkt-loading {
+    position: absolute; top: .5rem; right: .5rem;
+    color: var(--muted); font-size: .8rem; display: none;
+  }
+  #mkt-table-wrapper.is-loading .mkt-loading { display: inline-block; }
 
   .mkt-table-scroll { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
   #mkt-table { table-layout: fixed; width: 100%; min-width: 50rem; }
-  #mkt-table th[data-col="0"] { width: auto; }
-  #mkt-table th[data-col="1"] { width: 3.8rem; }
-  #mkt-table th[data-col="2"] { width: 2.5rem; }
-  #mkt-table th[data-col="3"] { width: 5.2rem; }
-  #mkt-table th[data-col="4"] { width: 4.5rem; }
-  #mkt-table th[data-col="5"] { width: 4.8rem; }
-  #mkt-table th[data-col="6"] { width: 4.8rem; }
-  #mkt-table th[data-col="7"] { width: 7rem; }
-  #mkt-table th[data-col="8"] { width: 6rem; }
-  #mkt-table th[data-col="9"] { width: 5.5rem; }
+  /* Column widths by position; the partial doesn't carry numeric col ids. */
+  #mkt-table thead th:nth-child(1) { width: auto; }      /* Card */
+  #mkt-table thead th:nth-child(2) { width: 3.8rem; }    /* Set */
+  #mkt-table thead th:nth-child(3) { width: 2.8rem; }    /* Qty */
+  #mkt-table thead th:nth-child(4) { width: 5.2rem; }    /* Cond. */
+  #mkt-table thead th:nth-child(5) { width: 4.5rem; }    /* Print */
+  #mkt-table thead th:nth-child(6) { width: 4.8rem; }    /* Paid $ */
+  #mkt-table thead th:nth-child(7) { width: 4.8rem; }    /* Mkt $ */
+  #mkt-table thead th:nth-child(8) { width: 7rem; }      /* Mkt JPY */
+  #mkt-table thead th:nth-child(9) { width: 6rem; }      /* PnL */
+  #mkt-table thead th:nth-child(10) { width: 5.5rem; }   /* % */
   #mkt-table th,
   #mkt-table td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #mkt-table td:first-child { white-space: normal; overflow: visible; text-overflow: unset; }
-  #mkt-table thead th[data-col] { user-select: none; }
-  #mkt-table thead th[data-sort="asc"]::after { content: " ^"; color: var(--gold); }
-  #mkt-table thead th[data-sort="desc"]::after { content: " v"; color: var(--gold); }
+
+  /* Sort link styling — server-driven headers. */
+  #mkt-table th.sortable a.sort-link {
+    color: inherit; text-decoration: none;
+    display: inline-block; cursor: pointer; user-select: none;
+  }
+  #mkt-table th.sortable a.sort-link:hover { color: var(--gold); }
+  #mkt-table th.sortable.sort-active a.sort-link { color: var(--gold); }
+  #mkt-table th.sortable .sort-arrow { margin-left: .15rem; font-size: .9em; }
+
+  /* Result summary line above the table. */
+  .result-summary { color: var(--muted); font-size: .85rem; margin: .1rem 0 .75rem; }
+  .result-summary strong { color: var(--fg); font-weight: 600; }
+
+  /* Pagination footer — shared shape with inventory page. */
+  .pagination {
+    display: flex; align-items: center; gap: 1rem;
+    margin-top: .75rem; flex-wrap: wrap;
+    font-size: .88rem; color: var(--muted);
+  }
+  .pagination .page-info { flex: 1 1 auto; min-width: 14rem; }
+  .pagination strong { color: var(--fg); font-weight: 600; }
+  .pagination .page-controls { display: flex; align-items: center; gap: .25rem; }
+  .pagination .pg-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 2rem; padding: .25rem .45rem;
+    border: 1px solid var(--border); border-radius: 4px;
+    color: var(--muted); text-decoration: none;
+    font-size: .95rem; line-height: 1;
+  }
+  @media (hover: hover) {
+    .pagination .pg-btn:hover:not(.disabled) {
+      color: var(--gold); border-color: var(--gold); text-decoration: none;
+    }
+  }
+  .pagination .pg-btn.disabled { opacity: .35; pointer-events: none; }
+  .pagination .page-of { display: inline-flex; align-items: center; gap: .35rem; }
+  .pagination .page-of input {
+    width: 3.5rem; padding: .25rem .35rem;
+    background: var(--bg); color: var(--fg);
+    border: 1px solid var(--border); border-radius: 4px;
+    font-family: inherit; font-size: inherit; text-align: center;
+  }
+  .pagination .per-page select {
+    padding: .25rem .35rem;
+    background: var(--bg); color: var(--fg);
+    border: 1px solid var(--border); border-radius: 4px;
+    font-family: inherit; font-size: .85rem;
+  }
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; padding: 0;
+    margin: -1px; overflow: hidden; clip: rect(0,0,0,0); border: 0;
+  }
 
   .market-cell {
     display: flex;
@@ -420,89 +502,41 @@
       Charts show blank days when there's no price for that date.
     </p>
 
-    <div id="mkt-filter">
-      <input type="text" id="mkt-filter-input" placeholder="Filter by card name..." autocomplete="off">
-    </div>
+    {# Filter form. Plain GET works without JS; the page JS upgrades it
+       to incremental fragment fetches. #}
+    <form id="mkt-filter-form" class="mkt-filter" method="get" action="{{ url_for('market') }}">
+      <label>Card name
+        <input type="text" id="mkt-filter-input" name="q"
+               value="{{ params.q }}"
+               placeholder="Filter by card name..." autocomplete="off">
+      </label>
+      <label>Price filter
+        <select id="mkt-price-mode" name="price_mode">
+          {% set m = params.price_mode %}
+          <option value="any"   {% if m == 'any' %}selected{% endif %}>Any cost</option>
+          <option value="empty" {% if m == 'empty' %}selected{% endif %}>Uncosted only</option>
+          <option value="has"   {% if m == 'has' %}selected{% endif %}>Has cost</option>
+          <option value="lte"   {% if m == 'lte' %}selected{% endif %}>Cost &lt;=</option>
+          <option value="gte"   {% if m == 'gte' %}selected{% endif %}>Cost &gt;=</option>
+        </select>
+      </label>
+      <label>Cost basis
+        <input type="number" id="mkt-price-value" name="price_value"
+               min="0" step="0.01" placeholder="Any"
+               value="{% if params.price_value is not none %}{{ params.price_value }}{% endif %}">
+      </label>
+      <input type="hidden" name="sort" value="{{ params.sort }}">
+      <input type="hidden" name="dir" value="{{ params.direction }}">
+      <input type="hidden" name="page" value="{{ params.page }}">
+      <input type="hidden" name="per_page" value="{{ params.per_page }}">
+      <div class="filter-actions">
+        <button type="submit">Search</button>
+      </div>
+    </form>
 
-    <div class="mkt-table-scroll">
-    <table id="mkt-table" style="contain:layout style">
-      <thead>
-        <tr>
-          <th data-col="0">Card</th>
-          <th data-col="1">Set</th>
-          <th class="num" data-col="2">Qty</th>
-          <th data-col="3">Cond.</th>
-          <th data-col="4">Print</th>
-          <th class="num" data-col="5">Paid $</th>
-          <th class="num" data-col="6">Mkt $</th>
-          <th class="num" data-col="7">Mkt JPY</th>
-          <th class="num" data-col="8">PnL</th>
-          <th class="num" data-col="9">%</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for row in rows %}
-          <tr data-name="{{ row.card_name|lower }}">
-            <td>
-              <div class="market-cell">
-                <button
-                  type="button"
-                  class="market-chart-trigger"
-                  title="View price chart"
-                  aria-label="View price chart for {{ row.card_name }} {{ row.set_code }}"
-                  data-chart-card="{{ row.card_name }}"
-                  data-chart-set="{{ row.set_code }}"
-                  data-chart-number="{{ row.card_number }}"
-                  data-chart-printing="{{ row.printing }}"
-                >
-                  <svg viewBox="0 0 24 24" aria-hidden="true">
-                    <path d="M4 17.5h16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-                    <path d="M5 14.5 9.2 10l3.4 2.9 5.4-6.4 1.6 1.3" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
-                    <circle cx="9.2" cy="10" r="1.2" fill="currentColor"/>
-                    <circle cx="12.6" cy="12.9" r="1.2" fill="currentColor"/>
-                    <circle cx="18" cy="6.5" r="1.2" fill="currentColor"/>
-                  </svg>
-                </button>
-                <span>{{ card_icon(row.card_name, row.set_code) }}{{ row.card_name }}</span>
-              </div>
-            </td>
-            <td title="{{ row.set_name }}">{{ row.set_code }}</td>
-            <td class="num" data-val="{{ row.quantity }}">{{ row.quantity }}</td>
-            <td>{{ row.condition|condition_abbr }}</td>
-            <td>{{ row.printing }}</td>
-            <td class="num" data-val="{{ row.price_bought if row.price_bought is not none else '' }}">
-              {% if row.price_bought is not none %}${{ '%.2f'|format(row.price_bought) }}{% else %}<span class="pnl-none">-</span>{% endif %}
-            </td>
-            <td class="num" data-val="{{ row.market_price_usd if row.market_price_usd is not none else '' }}">
-              {% if row.market_price_usd is not none %}${{ '%.2f'|format(row.market_price_usd) }}{% else %}<span class="pnl-none">?</span>{% endif %}
-            </td>
-            <td class="num" data-val="{{ row.market_value_jpy if row.market_value_jpy is not none else '' }}">
-              {% if row.market_value_jpy is not none %}JPY {{ '{:,.0f}'.format(row.market_value_jpy) }}{% else %}<span class="pnl-none">?</span>{% endif %}
-            </td>
-            <td class="num" data-val="{{ row.pnl_usd if row.pnl_usd is not none else '' }}">
-              {% if row.pnl_usd is not none %}
-                <span class="{% if row.pnl_usd > 0 %}pnl-up{% elif row.pnl_usd < 0 %}pnl-down{% endif %}">
-                  {% if row.pnl_usd > 0 %}+{% endif %}${{ '%.2f'|format(row.pnl_usd) }}
-                </span>
-              {% elif row.price_bought is none %}
-                <span class="pnl-none">-</span>
-              {% else %}
-                <span class="pnl-none">?</span>
-              {% endif %}
-            </td>
-            <td class="num" data-val="{{ row.pnl_pct if row.pnl_pct is not none else '' }}">
-              {% if row.pnl_pct is not none %}
-                <span class="{% if row.pnl_pct > 0 %}pnl-up{% elif row.pnl_pct < 0 %}pnl-down{% endif %}">
-                  {% if row.pnl_pct > 0 %}+{% endif %}{{ row.pnl_pct }}%
-                </span>
-              {% else %}
-                <span class="pnl-none">-</span>
-              {% endif %}
-            </td>
-          </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+    <div id="mkt-table-wrapper">
+      <span class="mkt-loading">Loading…</span>
+      {% include "_market_table.html" %}
     </div>
 
     <div id="market-chart-modal" class="market-chart-modal">
@@ -738,7 +772,11 @@
           if (event.key === 'Escape') closeModal();
         });
 
-        document.querySelector('#mkt-table tbody').addEventListener('click', event => {
+        // Delegate chart clicks on the wrapper, not the tbody — the
+        // tbody is replaced on every filter/sort/pagination fetch, but
+        // the wrapper stays put for the page's lifetime.
+        const mktWrapper = document.getElementById('mkt-table-wrapper');
+        (mktWrapper || document).addEventListener('click', event => {
           const btn = event.target.closest('.market-chart-trigger');
           if (!btn) return;
           openModal();
@@ -866,65 +904,157 @@
           });
         }
 
-        const input = document.getElementById('mkt-filter-input');
-        const rows = Array.from(document.querySelectorAll('#mkt-table tbody tr'));
-        let frame = 0;
+        // --- Server-driven filter, sort, and pagination -------------------
+        // Filter typing debounces and fetches the table partial; sort
+        // headers and pagination links also fetch partials. URL stays in
+        // sync via replaceState/pushState so back/forward and copy-link
+        // both work.
+        const mktForm = document.getElementById('mkt-filter-form');
+        if (mktForm && mktWrapper) {
+          const q          = mktForm.querySelector('#mkt-filter-input');
+          const priceMode  = mktForm.querySelector('#mkt-price-mode');
+          const priceValue = mktForm.querySelector('#mkt-price-value');
+          const sortInput  = mktForm.querySelector('input[name="sort"]');
+          const dirInput   = mktForm.querySelector('input[name="dir"]');
+          const pageInput  = mktForm.querySelector('input[name="page"]');
+          const perInput   = mktForm.querySelector('input[name="per_page"]');
+          const filterBtn  = mktForm.querySelector('.filter-actions');
 
-        function applyFilter() {
-          frame = 0;
-          const q = input.value.trim().toLowerCase();
-          rows.forEach(tr => {
-            const shouldHide = q && !tr.dataset.name.includes(q);
-            if (tr.hidden !== shouldHide) tr.hidden = shouldHide;
-          });
-        }
+          if (filterBtn) filterBtn.style.display = 'none';
 
-        input.addEventListener('input', () => {
-          if (frame) cancelAnimationFrame(frame);
-          frame = requestAnimationFrame(applyFilter);
-        });
+          let mktInflight = null;
+          let mktDebounce = 0;
 
-        const tbody = document.querySelector('#mkt-table tbody');
-        let sortCol = -1;
-        let sortAsc = true;
+          function syncPriceValueState() {
+            const needsValue = ['lte', 'gte', 'eq'].includes(priceMode.value);
+            priceValue.disabled = !needsValue;
+            if (!needsValue) priceValue.value = '';
+          }
 
-        function cellVal(tr, col) {
-          const td = tr.children[col];
-          const raw = td.dataset.val;
-          if (raw !== undefined) return raw === '' ? null : parseFloat(raw);
-          return td.textContent.trim().toLowerCase();
-        }
-
-        document.querySelectorAll('#mkt-table thead th[data-col]').forEach(th => {
-          th.style.cursor = 'pointer';
-          th.addEventListener('click', () => {
-            const col = parseInt(th.dataset.col, 10);
-            if (sortCol === col) {
-              sortAsc = !sortAsc;
-            } else {
-              sortCol = col;
-              sortAsc = true;
+          function buildQuery(overrides = {}) {
+            const params = new URLSearchParams();
+            const fields = {
+              q: q.value.trim(),
+              price_mode: priceMode.value,
+              price_value: priceValue.value.trim(),
+              sort: sortInput.value,
+              dir:  dirInput.value,
+              page: pageInput.value,
+              per_page: perInput.value,
+            };
+            Object.assign(fields, overrides);
+            for (const [k, v] of Object.entries(fields)) {
+              if (v !== '' && v !== null && v !== undefined) params.set(k, v);
             }
+            return params.toString();
+          }
 
-            document.querySelectorAll('#mkt-table thead th').forEach(header => {
-              header.dataset.sort = '';
-            });
-            th.dataset.sort = sortAsc ? 'asc' : 'desc';
+          async function fetchFragment(overrides, opts = {}) {
+            if (overrides.sort  !== undefined) sortInput.value = overrides.sort;
+            if (overrides.dir   !== undefined) dirInput.value  = overrides.dir;
+            if (overrides.page  !== undefined) pageInput.value = overrides.page;
+            if (overrides.per_page !== undefined) perInput.value = overrides.per_page;
+            const qs = buildQuery();
+            if (mktInflight) mktInflight.abort();
+            mktInflight = new AbortController();
+            mktWrapper.classList.add('is-loading');
+            try {
+              const res = await fetch(`${mktForm.action}?${qs}&partial=tbody`, { signal: mktInflight.signal });
+              if (!res.ok) throw new Error(`HTTP ${res.status}`);
+              const html = await res.text();
+              mktWrapper.innerHTML = `<span class="mkt-loading">Loading…</span>` + html;
+              attachMktTableHandlers();
+            } catch (err) {
+              if (err.name !== 'AbortError') console.error('market fetch failed', err);
+            } finally {
+              mktWrapper.classList.remove('is-loading');
+              mktInflight = null;
+            }
+            const navMode = opts.history || 'replace';
+            const fullPath = `${mktForm.action}?${qs}`;
+            if (navMode === 'push') {
+              history.pushState({ mkt: true, qs }, '', fullPath);
+            } else {
+              history.replaceState({ mkt: true, qs }, '', fullPath);
+            }
+          }
 
-            const sorted = rows.slice().sort((a, b) => {
-              let av = cellVal(a, col);
-              let bv = cellVal(b, col);
-              if (av === null && bv === null) return 0;
-              if (av === null) return 1;
-              if (bv === null) return -1;
-              if (typeof av === 'string') return sortAsc ? av.localeCompare(bv) : bv.localeCompare(av);
-              return sortAsc ? av - bv : bv - av;
-            });
-            const frag = document.createDocumentFragment();
-            sorted.forEach(tr => frag.appendChild(tr));
-            tbody.appendChild(frag);
+          q.addEventListener('input', () => {
+            clearTimeout(mktDebounce);
+            mktDebounce = setTimeout(() => {
+              pageInput.value = '1';
+              fetchFragment({});
+            }, 250);
           });
-        });
+          priceMode.addEventListener('change', () => {
+            syncPriceValueState();
+            pageInput.value = '1';
+            fetchFragment({});
+          });
+          priceValue.addEventListener('input', () => {
+            clearTimeout(mktDebounce);
+            mktDebounce = setTimeout(() => {
+              pageInput.value = '1';
+              fetchFragment({});
+            }, 250);
+          });
+          mktForm.addEventListener('submit', (event) => {
+            event.preventDefault();
+            pageInput.value = '1';
+            fetchFragment({});
+          });
+
+          function attachMktTableHandlers() {
+            mktWrapper.querySelectorAll('th.sortable a.sort-link').forEach((a) => {
+              a.addEventListener('click', (event) => {
+                event.preventDefault();
+                fetchFragment({ sort: a.dataset.sort, dir: a.dataset.dir, page: 1 },
+                              { history: 'push' });
+              });
+            });
+            mktWrapper.querySelectorAll('a.pg-btn').forEach((a) => {
+              a.addEventListener('click', (event) => {
+                event.preventDefault();
+                if (a.classList.contains('disabled')) return;
+                fetchFragment({ page: a.dataset.page }, { history: 'push' });
+              });
+            });
+            const pgIn = mktWrapper.querySelector('#mkt-page-input');
+            if (pgIn) {
+              const commit = () => {
+                const n = Math.max(1, parseInt(pgIn.value, 10) || 1);
+                fetchFragment({ page: n }, { history: 'push' });
+              };
+              pgIn.addEventListener('change', commit);
+              pgIn.addEventListener('keydown', (event) => {
+                if (event.key === 'Enter') { event.preventDefault(); commit(); }
+              });
+            }
+            const perSel = mktWrapper.querySelector('#mkt-per-page');
+            if (perSel) {
+              perSel.addEventListener('change', () => {
+                fetchFragment({ per_page: perSel.value, page: 1 },
+                              { history: 'push' });
+              });
+            }
+          }
+
+          window.addEventListener('popstate', () => {
+            const usp = new URLSearchParams(window.location.search);
+            q.value          = usp.get('q') || '';
+            priceMode.value  = usp.get('price_mode') || 'any';
+            priceValue.value = usp.get('price_value') || '';
+            sortInput.value  = usp.get('sort') || 'pnl_usd';
+            dirInput.value   = usp.get('dir') || 'desc';
+            pageInput.value  = usp.get('page') || '1';
+            perInput.value   = usp.get('per_page') || '50';
+            syncPriceValueState();
+            fetchFragment({}, { history: 'replace' });
+          });
+
+          syncPriceValueState();
+          attachMktTableHandlers();
+        }
       })();
     </script>
   {% endif %}

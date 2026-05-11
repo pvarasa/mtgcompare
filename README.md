@@ -46,12 +46,14 @@ Your inventory is stored in `~/Library/Application Support/mtgcompare/inventory.
 
 ### Inventory
 - Add cards one at a time (Scryfall autocomplete for name and set), paste a decklist, or import a Deckbox/CardCastle CSV.
-- Filter by name or purchase price; select any subset and export as a decklist `.txt` or CSV.
+- Filter by name (substring match) or purchase price; sort by any column header; paginated for fast loads on large collections.
+- Page-scoped selection for `Delete selected`, `Export decklist`, `Export CSV`; a "Select all NN matching" banner lets you bulk-delete every row matching the current filter across all pages.
 - In server mode, each user's inventory is isolated by the identity provided by your auth proxy.
 
 ### Market valuation
 - Click **Update prices** to download MTGJSON/TCGPlayer price history for your whole collection in one go.
-- See total cost basis, total market value, and unrealized PnL per lot and in aggregate.
+- See total cost basis, total market value, and unrealized PnL per lot and in aggregate (computed across the whole filter, not just the visible page).
+- Sort by any column — including derived ones like PnL or market value — and paginate at 25 / 50 / 100 / 200 rows per page.
 - Price history charts show daily price movements per card.
 - Prices are shared across all users; inventory is per-user.
 

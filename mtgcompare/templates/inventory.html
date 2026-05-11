@@ -1,14 +1,16 @@
 {% extends "base.html" %}
-{% from "_macros.html" import card_icon %}
 {% block title %}Inventory - mtgcompare{% endblock %}
 {% block extra_css %}
     .inv-stats { color: var(--muted); font-size: .9rem; margin-bottom: 1rem; }
     .inv-stats strong { color: var(--fg); font-weight: 600; }
+
+    /* Filter form — same look as before; on no-JS it's a real GET form
+       with a Search button, with JS it submits on input changes. */
     .inv-filter {
       margin-bottom: 1rem;
       display: grid;
       gap: .6rem;
-      grid-template-columns: minmax(0, 1fr) auto minmax(0, 10rem);
+      grid-template-columns: minmax(0, 1fr) auto minmax(0, 10rem) auto;
       align-items: end;
     }
     .inv-filter label {
@@ -31,9 +33,21 @@
       font-size: .9rem;
       font-family: inherit;
     }
+    .inv-filter .filter-actions { display: flex; gap: .4rem; }
+    .inv-filter .filter-actions button { padding: .4rem .8rem; font-size: .85rem; }
     @media (max-width: 720px) {
       .inv-filter { grid-template-columns: 1fr; }
     }
+
+    /* Spinner shown while a partial fetch is in flight. */
+    #inv-table-wrapper { position: relative; transition: opacity .15s; }
+    #inv-table-wrapper.is-loading { opacity: .55; pointer-events: none; }
+    .inv-loading {
+      position: absolute; top: .5rem; right: .5rem;
+      color: var(--muted); font-size: .8rem;
+      display: none;
+    }
+    #inv-table-wrapper.is-loading .inv-loading { display: inline-block; }
 
     .add-panel {
       background: var(--bg-alt);
@@ -169,6 +183,83 @@
     #inv-table { contain: layout style; }
     .col-date { white-space: nowrap; }
 
+    /* Sort link styling — headers turn into clickable links. */
+    th.sortable a.sort-link {
+      color: inherit; text-decoration: none;
+      display: inline-block; cursor: pointer;
+    }
+    th.sortable a.sort-link:hover { color: var(--gold); }
+    th.sortable.sort-active a.sort-link { color: var(--gold); }
+    th.sortable .sort-arrow { margin-left: .15rem; font-size: .9em; }
+
+    /* Result summary row above the table. */
+    .result-summary { color: var(--muted); font-size: .85rem; margin: .1rem 0 .75rem; }
+    .result-summary strong { color: var(--fg); font-weight: 600; }
+
+    /* "Select all matching" banner. */
+    .select-banner {
+      background: rgba(201, 168, 76, 0.08);
+      border: 1px solid rgba(201, 168, 76, 0.3);
+      color: var(--fg);
+      padding: .55rem .75rem;
+      border-radius: 6px;
+      margin-bottom: .75rem;
+      font-size: .9rem;
+      display: flex;
+      align-items: center;
+      gap: .6rem;
+      flex-wrap: wrap;
+    }
+    .select-banner .link-button {
+      background: transparent; border: 0; padding: 0;
+      color: var(--gold); cursor: pointer; font: inherit;
+      text-decoration: underline; min-height: 0;
+    }
+    @media (hover: hover) { .select-banner .link-button:hover { color: #d9b85a; } }
+
+    /* Pagination footer. */
+    .pagination {
+      display: flex; align-items: center; gap: 1rem;
+      margin-top: .75rem; flex-wrap: wrap;
+      font-size: .88rem; color: var(--muted);
+    }
+    .pagination .page-info { flex: 1 1 auto; min-width: 14rem; }
+    .pagination strong { color: var(--fg); font-weight: 600; }
+    .pagination .page-controls { display: flex; align-items: center; gap: .25rem; }
+    .pagination .pg-btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      min-width: 2rem; padding: .25rem .45rem;
+      border: 1px solid var(--border); border-radius: 4px;
+      color: var(--muted); text-decoration: none;
+      font-size: .95rem; line-height: 1;
+    }
+    @media (hover: hover) {
+      .pagination .pg-btn:hover:not(.disabled) {
+        color: var(--gold); border-color: var(--gold); text-decoration: none;
+      }
+    }
+    .pagination .pg-btn.disabled {
+      opacity: .35; pointer-events: none;
+    }
+    .pagination .page-of { display: inline-flex; align-items: center; gap: .35rem; }
+    .pagination .page-of input {
+      width: 3.5rem; padding: .25rem .35rem;
+      background: var(--bg); color: var(--fg);
+      border: 1px solid var(--border); border-radius: 4px;
+      font-family: inherit; font-size: inherit;
+      text-align: center;
+    }
+    .pagination .per-page select {
+      padding: .25rem .35rem;
+      background: var(--bg); color: var(--fg);
+      border: 1px solid var(--border); border-radius: 4px;
+      font-family: inherit; font-size: .85rem;
+    }
+    .sr-only {
+      position: absolute; width: 1px; height: 1px; padding: 0;
+      margin: -1px; overflow: hidden; clip: rect(0,0,0,0); border: 0;
+    }
+
     .csv-body { display: flex; flex-wrap: wrap; gap: 1rem; align-items: center; }
     .csv-body input[type=file] { color: var(--muted); font-size: .85rem; max-width: 100%; }
     .csv-mode { display: inline-flex; gap: 1rem; }
@@ -204,10 +295,7 @@
     }
 {% endblock %}
 {% block content %}
-  <div class="inv-stats"
-       data-lots="{{ stats.printings }}"
-       data-copies="{{ stats.total_copies }}"
-       data-cost="{{ '%.2f'|format(stats.total_cost) }}">
+  <div class="inv-stats">
     <strong>{{ '{:,}'.format(stats.total_copies) }}</strong> copies
     across <strong>{{ '{:,}'.format(stats.printings) }}</strong> lots
     &middot; cost basis <strong>${{ '%.2f'|format(stats.total_cost) }}</strong>
@@ -291,79 +379,46 @@
     </form>
   </div>
 
-  {% if rows %}
-    <div class="inv-filter">
+  {# Filter form. Plain GET so it works without JS; the page JS upgrades it
+     to incremental fragment fetches. The form persists current sort/page
+     state via hidden inputs so a non-JS submit doesn't drop them. #}
+  {% if stats.printings > 0 %}
+    <form id="inv-filter-form" class="inv-filter" method="get" action="{{ url_for('inventory') }}">
       <label>Name
-        <input type="text" id="inv-filter-input" placeholder="Filter by card name..." autocomplete="off">
+        <input type="text" id="inv-filter-input" name="q"
+               value="{{ params.q }}"
+               placeholder="Filter by card name..." autocomplete="off">
       </label>
       <label>Price filter
-        <select id="inv-price-mode">
-          <option value="any">Any price</option>
-          <option value="empty">Empty only</option>
-          <option value="has">Has price</option>
-          <option value="lte">Price <=</option>
-          <option value="gte">Price >=</option>
-          <option value="eq">Price =</option>
+        <select id="inv-price-mode" name="price_mode">
+          {% set m = params.price_mode %}
+          <option value="any"   {% if m == 'any' %}selected{% endif %}>Any price</option>
+          <option value="empty" {% if m == 'empty' %}selected{% endif %}>Empty only</option>
+          <option value="has"   {% if m == 'has' %}selected{% endif %}>Has price</option>
+          <option value="lte"   {% if m == 'lte' %}selected{% endif %}>Price &lt;=</option>
+          <option value="gte"   {% if m == 'gte' %}selected{% endif %}>Price &gt;=</option>
+          <option value="eq"    {% if m == 'eq' %}selected{% endif %}>Price =</option>
         </select>
       </label>
       <label>Price bought
-        <input type="number" id="inv-price-value" min="0" step="0.01" placeholder="Any" disabled>
+        <input type="number" id="inv-price-value" name="price_value"
+               min="0" step="0.01" placeholder="Any"
+               value="{% if params.price_value is not none %}{{ params.price_value }}{% endif %}">
       </label>
-    </div>
-
-    <div class="inv-export-bar">
-      <span class="sel-count" id="inv-sel-count">0 selected</span>
-      <div class="inv-export-actions">
-        <button type="button" id="inv-export-deck" disabled>Export decklist</button>
-        <button type="button" id="inv-export-csv" disabled>Export CSV</button>
-        <button type="button" id="inv-delete" class="danger" disabled>Delete selected</button>
+      {# Hidden state — preserved across non-JS reloads. JS-driven nav
+         updates them in-place before submitting via fetch. #}
+      <input type="hidden" name="sort" value="{{ params.sort }}">
+      <input type="hidden" name="dir" value="{{ params.direction }}">
+      <input type="hidden" name="page" value="{{ params.page }}">
+      <input type="hidden" name="per_page" value="{{ params.per_page }}">
+      <div class="filter-actions">
+        <button type="submit">Search</button>
       </div>
-    </div>
+    </form>
 
-    <div class="table-scroll">
-    <table id="inv-table">
-      <thead>
-        <tr>
-          <th class="inv-cb"><input type="checkbox" id="inv-check-all" title="Select all visible"></th>
-          <th>Name</th>
-          <th>Set</th>
-          <th>#</th>
-          <th class="num">Qty</th>
-          <th>Cond.</th>
-          <th>Print</th>
-          <th>Lang</th>
-          <th class="num">Bought $</th>
-          <th class="col-date">Date</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for r in rows %}
-          <tr data-id="{{ r.id }}"
-              data-name="{{ r.card_name|lower }}"
-              data-price="{% if r.price_bought is not none %}{{ '%.2f'|format(r.price_bought) }}{% endif %}"
-              data-card="{{ r.card_name }}"
-              data-set="{{ r.set_code }}"
-              data-setname="{{ r.set_name or '' }}"
-              data-num="{{ r.card_number or '' }}"
-              data-qty="{{ r.quantity }}"
-              data-cond="{{ r.condition or '' }}"
-              data-print="{{ r.printing or '' }}"
-              data-lang="{{ r.language or '' }}"
-              data-date="{{ r.date_bought or '' }}">
-            <td class="inv-cb"><input type="checkbox"></td>
-            <td>{{ card_icon(r.card_name, r.set_code) }}{{ r.card_name }}</td>
-            <td title="{{ r.set_name }}">{{ r.set_code }}</td>
-            <td>{{ r.card_number }}</td>
-            <td class="num">{{ r.quantity }}</td>
-            <td>{{ r.condition|condition_abbr }}</td>
-            <td>{{ r.printing }}</td>
-            <td>{{ r.language }}</td>
-            <td class="num">{% if r.price_bought is not none %}${{ '%.2f'|format(r.price_bought) }}{% else %}-{% endif %}</td>
-            <td class="col-date">{{ r.date_bought or "-" }}</td>
-          </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+    <div id="inv-table-wrapper">
+      <span class="inv-loading">Loading…</span>
+      {% include "_inventory_table.html" %}
     </div>
   {% else %}
     <div class="empty">
@@ -374,92 +429,297 @@
   <script src="{{ url_for('static', filename='inventoryadd.js') }}" defer></script>
   <script>
     (function () {
-      const input      = document.getElementById('inv-filter-input');
-      const priceMode  = document.getElementById('inv-price-mode');
-      const priceValue = document.getElementById('inv-price-value');
-      if (!input || !priceMode || !priceValue) return;
-      let rows      = Array.from(document.querySelectorAll('#inv-table tbody tr'));
-      const checkAll = document.getElementById('inv-check-all');
-      const selCount = document.getElementById('inv-sel-count');
-      const btnDeck  = document.getElementById('inv-export-deck');
-      const btnCsv   = document.getElementById('inv-export-csv');
-      const btnDelete = document.getElementById('inv-delete');
-      let frameId = 0;
+      const wrapper = document.getElementById('inv-table-wrapper');
+      const form    = document.getElementById('inv-filter-form');
+      if (!wrapper || !form) return;
 
-      function visibleRows() { return rows.filter(tr => !tr.hidden); }
-      function checkedRows() { return rows.filter(tr => tr.querySelector('input[type=checkbox]').checked); }
+      const q          = form.querySelector('#inv-filter-input');
+      const priceMode  = form.querySelector('#inv-price-mode');
+      const priceValue = form.querySelector('#inv-price-value');
+      const sortInput  = form.querySelector('input[name="sort"]');
+      const dirInput   = form.querySelector('input[name="dir"]');
+      const pageInput  = form.querySelector('input[name="page"]');
+      const perInput   = form.querySelector('input[name="per_page"]');
+      const filterBtn  = form.querySelector('.filter-actions');
 
-      function updateState() {
-        if (!checkAll) return;
-        const checked = checkedRows();
-        const n = checked.length;
-        selCount.textContent = n === 0 ? '0 selected' : `${n} selected`;
-        btnDeck.disabled = n === 0;
-        btnCsv.disabled  = n === 0;
-        if (btnDelete) btnDelete.disabled = n === 0;
-        const vis = visibleRows();
-        const allChecked = vis.length > 0 && vis.every(tr => tr.querySelector('input[type=checkbox]').checked);
-        checkAll.indeterminate = !allChecked && n > 0;
-        checkAll.checked = allChecked;
-      }
+      // The page works without JS via the Search button. With JS we
+      // hide the button and intercept everything.
+      if (filterBtn) filterBtn.style.display = 'none';
 
-      function applyFilter() {
-        frameId = 0;
-        const q = input.value.trim().toLowerCase();
-        const mode = priceMode.value;
-        const rawValue = priceValue.value.trim();
-        const parsedValue = rawValue === '' ? NaN : parseFloat(rawValue);
-        rows.forEach(tr => {
-          const matchesName = !q || tr.dataset.name.includes(q);
-          const rawPrice = tr.dataset.price || '';
-          const hasPrice = rawPrice !== '';
-          const rowPrice = hasPrice ? parseFloat(rawPrice) : NaN;
-          let matchesPrice = true;
+      let inflight = null;
+      let debounce = 0;
 
-          if (mode === 'empty') {
-            matchesPrice = !hasPrice;
-          } else if (mode === 'has') {
-            matchesPrice = hasPrice;
-          } else if (mode === 'lte') {
-            matchesPrice = Number.isFinite(parsedValue) && hasPrice && rowPrice <= parsedValue;
-          } else if (mode === 'gte') {
-            matchesPrice = Number.isFinite(parsedValue) && hasPrice && rowPrice >= parsedValue;
-          } else if (mode === 'eq') {
-            matchesPrice = Number.isFinite(parsedValue) && hasPrice && rowPrice === parsedValue;
-          }
-
-          const shouldHide = !(matchesName && matchesPrice);
-          if (tr.hidden !== shouldHide) tr.hidden = shouldHide;
-        });
-        updateState();
-      }
-
-      function queueFilter() {
-        if (frameId) cancelAnimationFrame(frameId);
-        frameId = requestAnimationFrame(applyFilter);
-      }
-
-      function syncPriceInputState() {
+      function syncPriceValueState() {
         const needsValue = ['lte', 'gte', 'eq'].includes(priceMode.value);
         priceValue.disabled = !needsValue;
         if (!needsValue) priceValue.value = '';
-        queueFilter();
       }
 
-      input.addEventListener('input', queueFilter);
-      priceMode.addEventListener('change', syncPriceInputState);
-      priceValue.addEventListener('input', queueFilter);
+      function buildQuery(overrides = {}) {
+        const params = new URLSearchParams();
+        const fields = {
+          q: q.value.trim(),
+          price_mode: priceMode.value,
+          price_value: priceValue.value.trim(),
+          sort: sortInput.value,
+          dir:  dirInput.value,
+          page: pageInput.value,
+          per_page: perInput.value,
+        };
+        Object.assign(fields, overrides);
+        for (const [k, v] of Object.entries(fields)) {
+          if (v !== '' && v !== null && v !== undefined) params.set(k, v);
+        }
+        return params.toString();
+      }
 
-      if (checkAll) {
-        checkAll.addEventListener('change', () => {
-          visibleRows().forEach(tr => {
-            tr.querySelector('input[type=checkbox]').checked = checkAll.checked;
+      async function fetchFragment(overrides, opts = {}) {
+        // Always apply overrides to the form state BEFORE building the
+        // URL — that way the resulting URL stays in sync with what the
+        // form would submit on a non-JS reload.
+        if (overrides.sort  !== undefined) sortInput.value = overrides.sort;
+        if (overrides.dir   !== undefined) dirInput.value  = overrides.dir;
+        if (overrides.page  !== undefined) pageInput.value = overrides.page;
+        if (overrides.per_page !== undefined) perInput.value = overrides.per_page;
+
+        const qs = buildQuery();
+        const url = `${form.action}?${qs}`;
+
+        // Cancel any pending request — last filter wins.
+        if (inflight) inflight.abort();
+        inflight = new AbortController();
+
+        wrapper.classList.add('is-loading');
+        try {
+          const res = await fetch(`${url}&partial=tbody`, { signal: inflight.signal });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const html = await res.text();
+          // Strip the script-loading wrapper and re-render the table.
+          wrapper.innerHTML = `<span class="inv-loading">Loading…</span>` + html;
+          // Re-attach handlers on the freshly rendered subtree.
+          attachTableHandlers();
+        } catch (err) {
+          if (err.name !== 'AbortError') {
+            console.error('inventory fetch failed', err);
+          }
+        } finally {
+          wrapper.classList.remove('is-loading');
+          inflight = null;
+        }
+
+        // Keep the address bar in sync. push for explicit navigation
+        // (page/sort), replace for ambient state changes (typing).
+        const navMode = opts.history || 'replace';
+        const fullPath = `${form.action}?${qs}`;
+        if (navMode === 'push') {
+          history.pushState({ inv: true, qs }, '', fullPath);
+        } else {
+          history.replaceState({ inv: true, qs }, '', fullPath);
+        }
+      }
+
+      // --- Event wiring (debounced typing + immediate selects) --------
+      q.addEventListener('input', () => {
+        clearTimeout(debounce);
+        debounce = setTimeout(() => {
+          pageInput.value = '1';  // any filter change → back to page 1
+          fetchFragment({});
+        }, 250);
+      });
+      priceMode.addEventListener('change', () => {
+        syncPriceValueState();
+        pageInput.value = '1';
+        fetchFragment({});
+      });
+      priceValue.addEventListener('input', () => {
+        clearTimeout(debounce);
+        debounce = setTimeout(() => {
+          pageInput.value = '1';
+          fetchFragment({});
+        }, 250);
+      });
+      form.addEventListener('submit', (event) => {
+        // Non-JS path also works; with JS we intercept.
+        event.preventDefault();
+        pageInput.value = '1';
+        fetchFragment({});
+      });
+
+      // --- Table-area handlers (re-attached after each partial swap) --
+      function attachTableHandlers() {
+        // Sort headers.
+        wrapper.querySelectorAll('th.sortable a.sort-link').forEach((a) => {
+          a.addEventListener('click', (event) => {
+            event.preventDefault();
+            const col = a.dataset.sort;
+            const dir = a.dataset.dir;
+            fetchFragment({ sort: col, dir: dir, page: 1 }, { history: 'push' });
           });
-          updateState();
         });
-        rows.forEach(tr => {
-          tr.querySelector('input[type=checkbox]').addEventListener('change', updateState);
+
+        // Pagination links.
+        wrapper.querySelectorAll('a.pg-btn').forEach((a) => {
+          a.addEventListener('click', (event) => {
+            event.preventDefault();
+            if (a.classList.contains('disabled')) return;
+            fetchFragment({ page: a.dataset.page }, { history: 'push' });
+          });
         });
+
+        // Page number input (Enter / blur).
+        const pgIn = wrapper.querySelector('#inv-page-input');
+        if (pgIn) {
+          const commit = () => {
+            const n = Math.max(1, parseInt(pgIn.value, 10) || 1);
+            fetchFragment({ page: n }, { history: 'push' });
+          };
+          pgIn.addEventListener('change', commit);
+          pgIn.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter') { event.preventDefault(); commit(); }
+          });
+        }
+
+        // Per-page select.
+        const perSel = wrapper.querySelector('#inv-per-page');
+        if (perSel) {
+          perSel.addEventListener('change', () => {
+            fetchFragment({ per_page: perSel.value, page: 1 }, { history: 'push' });
+          });
+        }
+
+        // Selection / bulk actions.
+        attachSelectionHandlers();
+      }
+
+      // --- Selection: page-scoped, with "select all matching" banner --
+      function attachSelectionHandlers() {
+        const checkAll = wrapper.querySelector('#inv-check-all');
+        const banner   = wrapper.querySelector('#inv-select-banner');
+        const btnDeck  = wrapper.querySelector('#inv-export-deck');
+        const btnCsv   = wrapper.querySelector('#inv-export-csv');
+        const btnDel   = wrapper.querySelector('#inv-delete');
+        const selBtn   = wrapper.querySelector('#inv-select-all-matching');
+        const selSpan  = wrapper.querySelector('#inv-sel-count');
+        if (!selSpan) return;
+        const rowCbs = () => Array.from(wrapper.querySelectorAll('#inv-table tbody tr input[type=checkbox]'));
+        const checkedTrs = () => Array.from(wrapper.querySelectorAll('#inv-table tbody tr'))
+          .filter(tr => tr.querySelector('input[type=checkbox]:checked'));
+
+        function updateState() {
+          const n = checkedTrs().length;
+          selSpan.textContent = n === 0 ? '0 selected on this page' : `${n} selected on this page`;
+          if (btnDeck) btnDeck.disabled = n === 0;
+          if (btnCsv)  btnCsv.disabled  = n === 0;
+          if (btnDel)  btnDel.disabled  = n === 0;
+          if (checkAll) {
+            const cbs = rowCbs();
+            const all = cbs.length > 0 && cbs.every(cb => cb.checked);
+            checkAll.checked = all;
+            checkAll.indeterminate = !all && n > 0;
+          }
+          if (banner) {
+            const cbs = rowCbs();
+            const all = cbs.length > 0 && cbs.every(cb => cb.checked);
+            const totalMatching = parseInt(wrapper.querySelector('.result-summary')?.dataset.total || '0', 10);
+            banner.hidden = !(all && totalMatching > cbs.length);
+          }
+        }
+
+        rowCbs().forEach(cb => cb.addEventListener('change', updateState));
+        if (checkAll) {
+          checkAll.addEventListener('change', () => {
+            rowCbs().forEach(cb => { cb.checked = checkAll.checked; });
+            updateState();
+          });
+        }
+
+        if (btnDeck) {
+          btnDeck.addEventListener('click', () => {
+            const lines = checkedTrs().map(tr =>
+              `${tr.dataset.qty}x ${tr.dataset.card} (${tr.dataset.set})`);
+            download('decklist.txt', lines.join('\n'), 'text/plain');
+          });
+        }
+        if (btnCsv) {
+          btnCsv.addEventListener('click', () => {
+            const headers = ['Card Name','Set Code','Set Name','Card Number',
+                             'Quantity','Condition','Printing','Language',
+                             'Price Bought','Date Bought'];
+            const dataRows = checkedTrs().map(tr => [
+              tr.dataset.card, tr.dataset.set, tr.dataset.setname, tr.dataset.num,
+              tr.dataset.qty,  tr.dataset.cond, tr.dataset.print, tr.dataset.lang,
+              tr.dataset.price, tr.dataset.date,
+            ].map(csvCell).join(','));
+            download('inventory.csv', [headers.join(','), ...dataRows].join('\r\n'), 'text/csv');
+          });
+        }
+
+        if (btnDel) {
+          btnDel.addEventListener('click', async () => {
+            const targets = checkedTrs();
+            if (targets.length === 0) return;
+            if (!window.confirm(`Delete ${targets.length} card(s) on this page? This cannot be undone.`)) return;
+            const ids = targets.map(tr => parseInt(tr.dataset.id, 10)).filter(Number.isFinite);
+            btnDel.disabled = true;
+            try {
+              const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
+              const response = await fetch("{{ url_for('inventory_delete') }}", {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrf },
+                body: JSON.stringify({ ids }),
+              });
+              if (!response.ok) {
+                window.alert(`Delete failed: server returned ${response.status}`);
+                btnDel.disabled = false;
+                return;
+              }
+              // Full reload: the stats line at the top is server-rendered
+              // outside the partial, so we need a fresh page to reflect
+              // the new totals (cost basis, total copies, lot count).
+              window.location.reload();
+            } catch (error) {
+              window.alert(`Network error: ${error.message}`);
+              btnDel.disabled = false;
+            }
+          });
+        }
+
+        if (selBtn) {
+          selBtn.addEventListener('click', async () => {
+            const totalMatching = parseInt(wrapper.querySelector('.result-summary')?.dataset.total || '0', 10);
+            if (!window.confirm(
+              `Delete ALL ${totalMatching.toLocaleString()} matching rows across all pages?\n\n` +
+              `This cannot be undone.`
+            )) return;
+            selBtn.disabled = true;
+            try {
+              const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
+              const response = await fetch("{{ url_for('inventory_delete') }}", {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrf },
+                body: JSON.stringify({
+                  match: {
+                    q: q.value.trim(),
+                    price_mode: priceMode.value,
+                    price_value: priceValue.value.trim(),
+                  },
+                }),
+              });
+              if (!response.ok) {
+                const body = await response.json().catch(() => ({}));
+                window.alert(`Delete failed: ${body.error || response.status}`);
+                selBtn.disabled = false;
+                return;
+              }
+              window.location.reload();
+            } catch (error) {
+              window.alert(`Network error: ${error.message}`);
+              selBtn.disabled = false;
+            }
+          });
+        }
+
+        updateState();
       }
 
       function download(filename, content, mime) {
@@ -469,89 +729,28 @@
         a.click();
         URL.revokeObjectURL(a.href);
       }
-
-      if (btnDeck) {
-        btnDeck.addEventListener('click', () => {
-          const lines = checkedRows().map(tr =>
-            `${tr.dataset.qty}x ${tr.dataset.card} (${tr.dataset.set})`
-          );
-          download('decklist.txt', lines.join('\n'), 'text/plain');
-        });
-      }
-
       function csvCell(v) {
         const s = v === null || v === undefined ? '' : String(v);
         return s.includes(',') || s.includes('"') || s.includes('\n')
           ? `"${s.replace(/"/g, '""')}"` : s;
       }
 
-      if (btnCsv) {
-        btnCsv.addEventListener('click', () => {
-          const headers = ['Card Name','Set Code','Set Name','Card Number',
-                           'Quantity','Condition','Printing','Language',
-                           'Price Bought','Date Bought'];
-          const dataRows = checkedRows().map(tr => [
-            tr.dataset.card, tr.dataset.set, tr.dataset.setname, tr.dataset.num,
-            tr.dataset.qty,  tr.dataset.cond, tr.dataset.print, tr.dataset.lang,
-            tr.dataset.price, tr.dataset.date,
-          ].map(csvCell).join(','));
-          download('inventory.csv', [headers.join(','), ...dataRows].join('\r\n'), 'text/csv');
-        });
-      }
+      window.addEventListener('popstate', () => {
+        // Re-sync the form from the URL and refetch.
+        const usp = new URLSearchParams(window.location.search);
+        q.value          = usp.get('q') || '';
+        priceMode.value  = usp.get('price_mode') || 'any';
+        priceValue.value = usp.get('price_value') || '';
+        sortInput.value  = usp.get('sort') || 'card_name';
+        dirInput.value   = usp.get('dir') || 'asc';
+        pageInput.value  = usp.get('page') || '1';
+        perInput.value   = usp.get('per_page') || '50';
+        syncPriceValueState();
+        fetchFragment({}, { history: 'replace' });
+      });
 
-      if (btnDelete) {
-        btnDelete.addEventListener('click', async () => {
-          const targets = checkedRows();
-          if (targets.length === 0) return;
-          if (!window.confirm(`Delete ${targets.length} card(s)? This cannot be undone.`)) return;
-          const ids = targets.map(tr => parseInt(tr.dataset.id, 10)).filter(Number.isFinite);
-          btnDelete.disabled = true;
-          try {
-            const csrf = document.querySelector('meta[name="csrf-token"]')?.content || "";
-            const response = await fetch("{{ url_for('inventory_delete') }}", {
-              method: "POST",
-              headers: { "Content-Type": "application/json", "X-CSRFToken": csrf },
-              body: JSON.stringify({ ids }),
-            });
-            if (!response.ok) {
-              window.alert(`Delete failed: server returned ${response.status}`);
-              btnDelete.disabled = false;
-              return;
-            }
-            // Subtract deleted lots/copies/cost from the stats line, drop the
-            // rows from the DOM, and rebuild the cached row list. Preserves
-            // the user's filter and price-mode state across the operation.
-            const stats = document.querySelector('.inv-stats');
-            let lotsLeft = parseInt((stats?.dataset.lots) ?? '0', 10);
-            let copiesLeft = parseInt((stats?.dataset.copies) ?? '0', 10);
-            let costLeft = parseFloat((stats?.dataset.cost) ?? '0');
-            for (const tr of targets) {
-              lotsLeft -= 1;
-              copiesLeft -= parseInt(tr.dataset.qty, 10) || 0;
-              const p = parseFloat(tr.dataset.price);
-              if (Number.isFinite(p)) costLeft -= p * (parseInt(tr.dataset.qty, 10) || 0);
-              tr.remove();
-            }
-            if (stats) {
-              stats.dataset.lots = String(lotsLeft);
-              stats.dataset.copies = String(copiesLeft);
-              stats.dataset.cost = costLeft.toFixed(2);
-              const fmt = new Intl.NumberFormat('en-US');
-              stats.innerHTML =
-                `<strong>${fmt.format(copiesLeft)}</strong> copies ` +
-                `across <strong>${fmt.format(lotsLeft)}</strong> lots ` +
-                `&middot; cost basis <strong>$${costLeft.toFixed(2)}</strong>`;
-            }
-            rows = Array.from(document.querySelectorAll('#inv-table tbody tr'));
-            updateState();
-          } catch (error) {
-            window.alert(`Network error: ${error.message}`);
-            btnDelete.disabled = false;
-          }
-        });
-      }
-
-      syncPriceInputState();
+      syncPriceValueState();
+      attachTableHandlers();
     })();
   </script>
 {% endblock %}

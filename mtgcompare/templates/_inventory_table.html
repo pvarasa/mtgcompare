@@ -1,0 +1,160 @@
+{# Re-render target for the /inventory page.
+
+   This partial is the response body of `/inventory?partial=tbody&...`. The
+   page JS fetches it on filter/sort/page change and swaps it into the
+   `#inv-table-wrapper` div, replacing both the table and the pagination
+   footer in one go. The full-page render also embeds this partial as its
+   initial body content, so the two paths render identically.
+
+   Variables expected:
+     rows, params, total, total_pages, per_page_choices, matched
+#}
+{% from "_macros.html" import card_icon %}
+
+{% set sort = params.sort %}
+{% set dir  = params.direction %}
+
+{# Build a query-string for a click — preserves the other params. #}
+{% macro qs(overrides) -%}
+?q={{ params.q }}&price_mode={{ params.price_mode }}{% if params.price_value is not none %}&price_value={{ params.price_value }}{% endif %}&per_page={{ params.per_page }}&page={% if 'page' in overrides %}{{ overrides.page }}{% else %}{{ params.page }}{% endif %}&sort={% if 'sort' in overrides %}{{ overrides.sort }}{% else %}{{ sort }}{% endif %}&dir={% if 'dir' in overrides %}{{ overrides.dir }}{% else %}{{ dir }}{% endif %}
+{%- endmacro %}
+
+{% macro sort_header(col, label, num=False) %}
+  {% set is_active = (sort == col) %}
+  {% set next_dir = 'desc' if (is_active and dir == 'asc') else 'asc' %}
+  <th class="sortable{% if num %} num{% endif %}{% if is_active %} sort-active{% endif %}"
+      data-sort-col="{{ col }}">
+    <a href="{{ qs({'sort': col, 'dir': next_dir, 'page': 1}) }}"
+       class="sort-link"
+       data-sort="{{ col }}" data-dir="{{ next_dir }}">
+      {{ label }}{% if is_active %}<span class="sort-arrow" aria-hidden="true">{{ '▾' if dir == 'desc' else '▴' }}</span>{% endif %}
+    </a>
+  </th>
+{% endmacro %}
+
+<div class="result-summary"
+     data-total="{{ total }}"
+     data-matched-printings="{{ matched.printings }}"
+     data-matched-copies="{{ matched.total_copies }}"
+     data-matched-cost="{{ '%.2f'|format(matched.total_cost) }}">
+  {% if params.q or params.price_mode not in ('any', '') %}
+    <strong>{{ '{:,}'.format(total) }}</strong> matching rows
+    {%- if matched.total_copies %}
+      &middot; {{ '{:,}'.format(matched.total_copies) }} copies
+      &middot; cost basis ${{ '%.2f'|format(matched.total_cost) }}
+    {%- endif %}
+  {% else %}
+    <strong>{{ '{:,}'.format(total) }}</strong> rows
+  {% endif %}
+</div>
+
+{% if rows %}
+  <div class="inv-export-bar">
+    <span class="sel-count" id="inv-sel-count">0 selected on this page</span>
+    <div class="inv-export-actions">
+      <button type="button" id="inv-export-deck" disabled>Export decklist</button>
+      <button type="button" id="inv-export-csv" disabled>Export CSV</button>
+      <button type="button" id="inv-delete" class="danger" disabled>Delete selected</button>
+    </div>
+  </div>
+
+  <div id="inv-select-banner" class="select-banner" hidden>
+    <span>
+      All <strong>{{ rows|length }}</strong> rows on this page selected.
+    </span>
+    <button type="button" id="inv-select-all-matching" class="link-button">
+      Select all <strong>{{ '{:,}'.format(total) }}</strong> matching rows
+    </button>
+  </div>
+
+  <div class="table-scroll">
+  <table id="inv-table">
+    <thead>
+      <tr>
+        <th class="inv-cb"><input type="checkbox" id="inv-check-all" title="Select all on this page"></th>
+        {{ sort_header('card_name', 'Name') }}
+        {{ sort_header('set_code', 'Set') }}
+        <th>#</th>
+        {{ sort_header('quantity', 'Qty', num=True) }}
+        {{ sort_header('condition', 'Cond.') }}
+        {{ sort_header('printing', 'Print') }}
+        <th>Lang</th>
+        {{ sort_header('price_bought', 'Bought $', num=True) }}
+        {{ sort_header('date_bought', 'Date') }}
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+        {# data-* values are consumed by the CSV / decklist export JS;
+           the old client-side filter that read `data-name` is gone. #}
+        <tr data-id="{{ r.id }}"
+            data-card="{{ r.card_name }}"
+            data-set="{{ r.set_code }}"
+            data-setname="{{ r.set_name or '' }}"
+            data-num="{{ r.card_number or '' }}"
+            data-qty="{{ r.quantity }}"
+            data-cond="{{ r.condition or '' }}"
+            data-print="{{ r.printing or '' }}"
+            data-lang="{{ r.language or '' }}"
+            data-price="{% if r.price_bought is not none %}{{ '%.2f'|format(r.price_bought) }}{% endif %}"
+            data-date="{{ r.date_bought or '' }}">
+          <td class="inv-cb"><input type="checkbox"></td>
+          <td>{{ card_icon(r.card_name, r.set_code) }}{{ r.card_name }}</td>
+          <td title="{{ r.set_name }}">{{ r.set_code }}</td>
+          <td>{{ r.card_number }}</td>
+          <td class="num">{{ r.quantity }}</td>
+          <td>{{ r.condition|condition_abbr }}</td>
+          <td>{{ r.printing }}</td>
+          <td>{{ r.language }}</td>
+          <td class="num">{% if r.price_bought is not none %}${{ '%.2f'|format(r.price_bought) }}{% else %}-{% endif %}</td>
+          <td class="col-date">{{ r.date_bought or "-" }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+
+  <nav class="pagination" aria-label="Pagination">
+    <span class="page-info">
+      {% set first_row = (params.page - 1) * params.per_page + 1 %}
+      {% set last_row  = [first_row + rows|length - 1, total]|min %}
+      Showing <strong>{{ first_row }}</strong>–<strong>{{ last_row }}</strong>
+      of <strong>{{ '{:,}'.format(total) }}</strong>
+    </span>
+
+    <div class="page-controls">
+      <a class="pg-btn{% if params.page <= 1 %} disabled{% endif %}"
+         href="{{ qs({'page': 1}) }}" aria-label="First page" data-page="1">«</a>
+      <a class="pg-btn{% if params.page <= 1 %} disabled{% endif %}"
+         href="{{ qs({'page': params.page - 1}) }}" aria-label="Previous page" data-page="{{ params.page - 1 }}">‹</a>
+      <span class="page-of">
+        Page
+        <input type="number" id="inv-page-input" min="1" max="{{ total_pages }}"
+               value="{{ params.page }}" inputmode="numeric">
+        of <strong>{{ total_pages }}</strong>
+      </span>
+      <a class="pg-btn{% if params.page >= total_pages %} disabled{% endif %}"
+         href="{{ qs({'page': params.page + 1}) }}" aria-label="Next page" data-page="{{ params.page + 1 }}">›</a>
+      <a class="pg-btn{% if params.page >= total_pages %} disabled{% endif %}"
+         href="{{ qs({'page': total_pages}) }}" aria-label="Last page" data-page="{{ total_pages }}">»</a>
+    </div>
+
+    <label class="per-page">
+      <span class="sr-only">Rows per page:</span>
+      <select id="inv-per-page">
+        {% for n in per_page_choices %}
+          <option value="{{ n }}"{% if n == params.per_page %} selected{% endif %}>{{ n }} / page</option>
+        {% endfor %}
+      </select>
+    </label>
+  </nav>
+{% else %}
+  <div class="empty">
+    {% if params.q or params.price_mode not in ('any', '') %}
+      No rows match these filters.
+      <a href="{{ url_for('inventory') }}">Clear filters</a>
+    {% else %}
+      No inventory yet. Add a card above, paste a decklist, or import a CSV.
+    {% endif %}
+  </div>
+{% endif %}
