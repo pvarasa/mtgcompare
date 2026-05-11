@@ -10,6 +10,7 @@
      rows, params, total, total_pages, per_page_choices, matched
 #}
 {% from "_macros.html" import card_icon %}
+{% from "_pagination.html" import pagination %}
 
 {% set sort = params.sort %}
 {% set dir  = params.direction %}
@@ -114,40 +115,16 @@
   </table>
   </div>
 
-  <nav class="pagination" aria-label="Pagination">
-    <span class="page-info">
-      {% set first_row = (params.page - 1) * params.per_page + 1 %}
-      {% set last_row  = [first_row + rows|length - 1, total]|min %}
-      Showing <strong>{{ first_row }}</strong>–<strong>{{ last_row }}</strong>
-      of <strong>{{ '{:,}'.format(total) }}</strong>
-    </span>
-
-    <div class="page-controls">
-      <a class="pg-btn{% if params.page <= 1 %} disabled{% endif %}"
-         href="{{ qs({'page': 1}) }}" aria-label="First page" data-page="1">«</a>
-      <a class="pg-btn{% if params.page <= 1 %} disabled{% endif %}"
-         href="{{ qs({'page': params.page - 1}) }}" aria-label="Previous page" data-page="{{ params.page - 1 }}">‹</a>
-      <span class="page-of">
-        Page
-        <input type="number" id="inv-page-input" min="1" max="{{ total_pages }}"
-               value="{{ params.page }}" inputmode="numeric">
-        of <strong>{{ total_pages }}</strong>
-      </span>
-      <a class="pg-btn{% if params.page >= total_pages %} disabled{% endif %}"
-         href="{{ qs({'page': params.page + 1}) }}" aria-label="Next page" data-page="{{ params.page + 1 }}">›</a>
-      <a class="pg-btn{% if params.page >= total_pages %} disabled{% endif %}"
-         href="{{ qs({'page': total_pages}) }}" aria-label="Last page" data-page="{{ total_pages }}">»</a>
-    </div>
-
-    <label class="per-page">
-      <span class="sr-only">Rows per page:</span>
-      <select id="inv-per-page">
-        {% for n in per_page_choices %}
-          <option value="{{ n }}"{% if n == params.per_page %} selected{% endif %}>{{ n }} / page</option>
-        {% endfor %}
-      </select>
-    </label>
-  </nav>
+  {{ pagination(
+       params=params, total=total, total_pages=total_pages,
+       per_page_choices=per_page_choices,
+       urls={
+         'first': qs({'page': 1}),
+         'prev':  qs({'page': params.page - 1}),
+         'next':  qs({'page': params.page + 1}),
+         'last':  qs({'page': total_pages}),
+       },
+       row_count=rows|length) }}
 {% else %}
   <div class="empty">
     {% if params.q or params.price_mode not in ('any', '') %}

@@ -571,6 +571,7 @@
       </div>
     </div>
 
+    <script src="{{ url_for('static', filename='paginatedtable.js') }}"></script>
     <script>
       (function () {
         const historyUrl = {{ url_for('market_history')|tojson }};
@@ -904,156 +905,16 @@
           });
         }
 
-        // --- Server-driven filter, sort, and pagination -------------------
-        // Filter typing debounces and fetches the table partial; sort
-        // headers and pagination links also fetch partials. URL stays in
-        // sync via replaceState/pushState so back/forward and copy-link
-        // both work.
+        // Chart clicks are delegated on the wrapper (above) so they
+        // survive partial swaps. Filter/sort/pagination is handled by
+        // the shared paginatedtable client.
         const mktForm = document.getElementById('mkt-filter-form');
-        if (mktForm && mktWrapper) {
-          const q          = mktForm.querySelector('#mkt-filter-input');
-          const priceMode  = mktForm.querySelector('#mkt-price-mode');
-          const priceValue = mktForm.querySelector('#mkt-price-value');
-          const sortInput  = mktForm.querySelector('input[name="sort"]');
-          const dirInput   = mktForm.querySelector('input[name="dir"]');
-          const pageInput  = mktForm.querySelector('input[name="page"]');
-          const perInput   = mktForm.querySelector('input[name="per_page"]');
-          const filterBtn  = mktForm.querySelector('.filter-actions');
-
-          if (filterBtn) filterBtn.style.display = 'none';
-
-          let mktInflight = null;
-          let mktDebounce = 0;
-
-          function syncPriceValueState() {
-            const needsValue = ['lte', 'gte', 'eq'].includes(priceMode.value);
-            priceValue.disabled = !needsValue;
-            if (!needsValue) priceValue.value = '';
-          }
-
-          function buildQuery(overrides = {}) {
-            const params = new URLSearchParams();
-            const fields = {
-              q: q.value.trim(),
-              price_mode: priceMode.value,
-              price_value: priceValue.value.trim(),
-              sort: sortInput.value,
-              dir:  dirInput.value,
-              page: pageInput.value,
-              per_page: perInput.value,
-            };
-            Object.assign(fields, overrides);
-            for (const [k, v] of Object.entries(fields)) {
-              if (v !== '' && v !== null && v !== undefined) params.set(k, v);
-            }
-            return params.toString();
-          }
-
-          async function fetchFragment(overrides, opts = {}) {
-            if (overrides.sort  !== undefined) sortInput.value = overrides.sort;
-            if (overrides.dir   !== undefined) dirInput.value  = overrides.dir;
-            if (overrides.page  !== undefined) pageInput.value = overrides.page;
-            if (overrides.per_page !== undefined) perInput.value = overrides.per_page;
-            const qs = buildQuery();
-            if (mktInflight) mktInflight.abort();
-            mktInflight = new AbortController();
-            mktWrapper.classList.add('is-loading');
-            try {
-              const res = await fetch(`${mktForm.action}?${qs}&partial=tbody`, { signal: mktInflight.signal });
-              if (!res.ok) throw new Error(`HTTP ${res.status}`);
-              const html = await res.text();
-              mktWrapper.innerHTML = `<span class="mkt-loading">Loading…</span>` + html;
-              attachMktTableHandlers();
-            } catch (err) {
-              if (err.name !== 'AbortError') console.error('market fetch failed', err);
-            } finally {
-              mktWrapper.classList.remove('is-loading');
-              mktInflight = null;
-            }
-            const navMode = opts.history || 'replace';
-            const fullPath = `${mktForm.action}?${qs}`;
-            if (navMode === 'push') {
-              history.pushState({ mkt: true, qs }, '', fullPath);
-            } else {
-              history.replaceState({ mkt: true, qs }, '', fullPath);
-            }
-          }
-
-          q.addEventListener('input', () => {
-            clearTimeout(mktDebounce);
-            mktDebounce = setTimeout(() => {
-              pageInput.value = '1';
-              fetchFragment({});
-            }, 250);
+        if (mktForm && mktWrapper && window.mtgcompare && window.mtgcompare.attachPaginatedTable) {
+          window.mtgcompare.attachPaginatedTable({
+            form: mktForm, wrapper: mktWrapper,
+            spinnerClass: 'mkt-loading',
+            defaults: { sort: 'pnl_usd', dir: 'desc', price_mode: 'any', per_page: '50' },
           });
-          priceMode.addEventListener('change', () => {
-            syncPriceValueState();
-            pageInput.value = '1';
-            fetchFragment({});
-          });
-          priceValue.addEventListener('input', () => {
-            clearTimeout(mktDebounce);
-            mktDebounce = setTimeout(() => {
-              pageInput.value = '1';
-              fetchFragment({});
-            }, 250);
-          });
-          mktForm.addEventListener('submit', (event) => {
-            event.preventDefault();
-            pageInput.value = '1';
-            fetchFragment({});
-          });
-
-          function attachMktTableHandlers() {
-            mktWrapper.querySelectorAll('th.sortable a.sort-link').forEach((a) => {
-              a.addEventListener('click', (event) => {
-                event.preventDefault();
-                fetchFragment({ sort: a.dataset.sort, dir: a.dataset.dir, page: 1 },
-                              { history: 'push' });
-              });
-            });
-            mktWrapper.querySelectorAll('a.pg-btn').forEach((a) => {
-              a.addEventListener('click', (event) => {
-                event.preventDefault();
-                if (a.classList.contains('disabled')) return;
-                fetchFragment({ page: a.dataset.page }, { history: 'push' });
-              });
-            });
-            const pgIn = mktWrapper.querySelector('#mkt-page-input');
-            if (pgIn) {
-              const commit = () => {
-                const n = Math.max(1, parseInt(pgIn.value, 10) || 1);
-                fetchFragment({ page: n }, { history: 'push' });
-              };
-              pgIn.addEventListener('change', commit);
-              pgIn.addEventListener('keydown', (event) => {
-                if (event.key === 'Enter') { event.preventDefault(); commit(); }
-              });
-            }
-            const perSel = mktWrapper.querySelector('#mkt-per-page');
-            if (perSel) {
-              perSel.addEventListener('change', () => {
-                fetchFragment({ per_page: perSel.value, page: 1 },
-                              { history: 'push' });
-              });
-            }
-          }
-
-          window.addEventListener('popstate', () => {
-            const usp = new URLSearchParams(window.location.search);
-            q.value          = usp.get('q') || '';
-            priceMode.value  = usp.get('price_mode') || 'any';
-            priceValue.value = usp.get('price_value') || '';
-            sortInput.value  = usp.get('sort') || 'pnl_usd';
-            dirInput.value   = usp.get('dir') || 'desc';
-            pageInput.value  = usp.get('page') || '1';
-            perInput.value   = usp.get('per_page') || '50';
-            syncPriceValueState();
-            fetchFragment({}, { history: 'replace' });
-          });
-
-          syncPriceValueState();
-          attachMktTableHandlers();
         }
       })();
     </script>

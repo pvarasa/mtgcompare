@@ -427,182 +427,46 @@
   {% endif %}
 
   <script src="{{ url_for('static', filename='inventoryadd.js') }}" defer></script>
-  <script>
+  <script src="{{ url_for('static', filename='paginatedtable.js') }}" defer></script>
+  <script defer>
+    // Inventory-specific glue on top of the shared paginated-table client:
+    // selection state, bulk delete (per-page and "all matching"), CSV /
+    // decklist export. The shared client handles filtering, sorting,
+    // pagination, fragment fetches, and URL sync.
     (function () {
       const wrapper = document.getElementById('inv-table-wrapper');
       const form    = document.getElementById('inv-filter-form');
       if (!wrapper || !form) return;
 
-      const q          = form.querySelector('#inv-filter-input');
-      const priceMode  = form.querySelector('#inv-price-mode');
-      const priceValue = form.querySelector('#inv-price-value');
-      const sortInput  = form.querySelector('input[name="sort"]');
-      const dirInput   = form.querySelector('input[name="dir"]');
-      const pageInput  = form.querySelector('input[name="page"]');
-      const perInput   = form.querySelector('input[name="per_page"]');
-      const filterBtn  = form.querySelector('.filter-actions');
+      const inventoryDeleteUrl = "{{ url_for('inventory_delete') }}";
 
-      // The page works without JS via the Search button. With JS we
-      // hide the button and intercept everything.
-      if (filterBtn) filterBtn.style.display = 'none';
-
-      let inflight = null;
-      let debounce = 0;
-
-      function syncPriceValueState() {
-        const needsValue = ['lte', 'gte', 'eq'].includes(priceMode.value);
-        priceValue.disabled = !needsValue;
-        if (!needsValue) priceValue.value = '';
+      function download(filename, content, mime) {
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(new Blob([content], { type: mime }));
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(a.href);
+      }
+      function csvCell(v) {
+        const s = v === null || v === undefined ? '' : String(v);
+        return s.includes(',') || s.includes('"') || s.includes('\n')
+          ? `"${s.replace(/"/g, '""')}"` : s;
+      }
+      function csrfToken() {
+        return document.querySelector('meta[name="csrf-token"]')?.content || '';
       }
 
-      function buildQuery(overrides = {}) {
-        const params = new URLSearchParams();
-        const fields = {
-          q: q.value.trim(),
-          price_mode: priceMode.value,
-          price_value: priceValue.value.trim(),
-          sort: sortInput.value,
-          dir:  dirInput.value,
-          page: pageInput.value,
-          per_page: perInput.value,
-        };
-        Object.assign(fields, overrides);
-        for (const [k, v] of Object.entries(fields)) {
-          if (v !== '' && v !== null && v !== undefined) params.set(k, v);
-        }
-        return params.toString();
-      }
-
-      async function fetchFragment(overrides, opts = {}) {
-        // Always apply overrides to the form state BEFORE building the
-        // URL — that way the resulting URL stays in sync with what the
-        // form would submit on a non-JS reload.
-        if (overrides.sort  !== undefined) sortInput.value = overrides.sort;
-        if (overrides.dir   !== undefined) dirInput.value  = overrides.dir;
-        if (overrides.page  !== undefined) pageInput.value = overrides.page;
-        if (overrides.per_page !== undefined) perInput.value = overrides.per_page;
-
-        const qs = buildQuery();
-        const url = `${form.action}?${qs}`;
-
-        // Cancel any pending request — last filter wins.
-        if (inflight) inflight.abort();
-        inflight = new AbortController();
-
-        wrapper.classList.add('is-loading');
-        try {
-          const res = await fetch(`${url}&partial=tbody`, { signal: inflight.signal });
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          const html = await res.text();
-          // Strip the script-loading wrapper and re-render the table.
-          wrapper.innerHTML = `<span class="inv-loading">Loading…</span>` + html;
-          // Re-attach handlers on the freshly rendered subtree.
-          attachTableHandlers();
-        } catch (err) {
-          if (err.name !== 'AbortError') {
-            console.error('inventory fetch failed', err);
-          }
-        } finally {
-          wrapper.classList.remove('is-loading');
-          inflight = null;
-        }
-
-        // Keep the address bar in sync. push for explicit navigation
-        // (page/sort), replace for ambient state changes (typing).
-        const navMode = opts.history || 'replace';
-        const fullPath = `${form.action}?${qs}`;
-        if (navMode === 'push') {
-          history.pushState({ inv: true, qs }, '', fullPath);
-        } else {
-          history.replaceState({ inv: true, qs }, '', fullPath);
-        }
-      }
-
-      // --- Event wiring (debounced typing + immediate selects) --------
-      q.addEventListener('input', () => {
-        clearTimeout(debounce);
-        debounce = setTimeout(() => {
-          pageInput.value = '1';  // any filter change → back to page 1
-          fetchFragment({});
-        }, 250);
-      });
-      priceMode.addEventListener('change', () => {
-        syncPriceValueState();
-        pageInput.value = '1';
-        fetchFragment({});
-      });
-      priceValue.addEventListener('input', () => {
-        clearTimeout(debounce);
-        debounce = setTimeout(() => {
-          pageInput.value = '1';
-          fetchFragment({});
-        }, 250);
-      });
-      form.addEventListener('submit', (event) => {
-        // Non-JS path also works; with JS we intercept.
-        event.preventDefault();
-        pageInput.value = '1';
-        fetchFragment({});
-      });
-
-      // --- Table-area handlers (re-attached after each partial swap) --
-      function attachTableHandlers() {
-        // Sort headers.
-        wrapper.querySelectorAll('th.sortable a.sort-link').forEach((a) => {
-          a.addEventListener('click', (event) => {
-            event.preventDefault();
-            const col = a.dataset.sort;
-            const dir = a.dataset.dir;
-            fetchFragment({ sort: col, dir: dir, page: 1 }, { history: 'push' });
-          });
-        });
-
-        // Pagination links.
-        wrapper.querySelectorAll('a.pg-btn').forEach((a) => {
-          a.addEventListener('click', (event) => {
-            event.preventDefault();
-            if (a.classList.contains('disabled')) return;
-            fetchFragment({ page: a.dataset.page }, { history: 'push' });
-          });
-        });
-
-        // Page number input (Enter / blur).
-        const pgIn = wrapper.querySelector('#inv-page-input');
-        if (pgIn) {
-          const commit = () => {
-            const n = Math.max(1, parseInt(pgIn.value, 10) || 1);
-            fetchFragment({ page: n }, { history: 'push' });
-          };
-          pgIn.addEventListener('change', commit);
-          pgIn.addEventListener('keydown', (event) => {
-            if (event.key === 'Enter') { event.preventDefault(); commit(); }
-          });
-        }
-
-        // Per-page select.
-        const perSel = wrapper.querySelector('#inv-per-page');
-        if (perSel) {
-          perSel.addEventListener('change', () => {
-            fetchFragment({ per_page: perSel.value, page: 1 }, { history: 'push' });
-          });
-        }
-
-        // Selection / bulk actions.
-        attachSelectionHandlers();
-      }
-
-      // --- Selection: page-scoped, with "select all matching" banner --
-      function attachSelectionHandlers() {
-        const checkAll = wrapper.querySelector('#inv-check-all');
-        const banner   = wrapper.querySelector('#inv-select-banner');
-        const btnDeck  = wrapper.querySelector('#inv-export-deck');
-        const btnCsv   = wrapper.querySelector('#inv-export-csv');
-        const btnDel   = wrapper.querySelector('#inv-delete');
-        const selBtn   = wrapper.querySelector('#inv-select-all-matching');
-        const selSpan  = wrapper.querySelector('#inv-sel-count');
+      function attachSelectionHandlers(scope) {
+        const checkAll = scope.querySelector('#inv-check-all');
+        const banner   = scope.querySelector('#inv-select-banner');
+        const btnDeck  = scope.querySelector('#inv-export-deck');
+        const btnCsv   = scope.querySelector('#inv-export-csv');
+        const btnDel   = scope.querySelector('#inv-delete');
+        const selBtn   = scope.querySelector('#inv-select-all-matching');
+        const selSpan  = scope.querySelector('#inv-sel-count');
         if (!selSpan) return;
-        const rowCbs = () => Array.from(wrapper.querySelectorAll('#inv-table tbody tr input[type=checkbox]'));
-        const checkedTrs = () => Array.from(wrapper.querySelectorAll('#inv-table tbody tr'))
+        const rowCbs = () => Array.from(scope.querySelectorAll('#inv-table tbody tr input[type=checkbox]'));
+        const checkedTrs = () => Array.from(scope.querySelectorAll('#inv-table tbody tr'))
           .filter(tr => tr.querySelector('input[type=checkbox]:checked'));
 
         function updateState() {
@@ -620,7 +484,7 @@
           if (banner) {
             const cbs = rowCbs();
             const all = cbs.length > 0 && cbs.every(cb => cb.checked);
-            const totalMatching = parseInt(wrapper.querySelector('.result-summary')?.dataset.total || '0', 10);
+            const totalMatching = parseInt(scope.querySelector('.result-summary')?.dataset.total || '0', 10);
             banner.hidden = !(all && totalMatching > cbs.length);
           }
         }
@@ -662,10 +526,9 @@
             const ids = targets.map(tr => parseInt(tr.dataset.id, 10)).filter(Number.isFinite);
             btnDel.disabled = true;
             try {
-              const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
-              const response = await fetch("{{ url_for('inventory_delete') }}", {
+              const response = await fetch(inventoryDeleteUrl, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrf },
+                headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrfToken() },
                 body: JSON.stringify({ ids }),
               });
               if (!response.ok) {
@@ -686,22 +549,21 @@
 
         if (selBtn) {
           selBtn.addEventListener('click', async () => {
-            const totalMatching = parseInt(wrapper.querySelector('.result-summary')?.dataset.total || '0', 10);
+            const totalMatching = parseInt(scope.querySelector('.result-summary')?.dataset.total || '0', 10);
             if (!window.confirm(
               `Delete ALL ${totalMatching.toLocaleString()} matching rows across all pages?\n\n` +
               `This cannot be undone.`
             )) return;
             selBtn.disabled = true;
             try {
-              const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
-              const response = await fetch("{{ url_for('inventory_delete') }}", {
+              const response = await fetch(inventoryDeleteUrl, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrf },
+                headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrfToken() },
                 body: JSON.stringify({
                   match: {
-                    q: q.value.trim(),
-                    price_mode: priceMode.value,
-                    price_value: priceValue.value.trim(),
+                    q: form.querySelector('input[name="q"]').value.trim(),
+                    price_mode: form.querySelector('select[name="price_mode"]').value,
+                    price_value: form.querySelector('input[name="price_value"]').value.trim(),
                   },
                 }),
               });
@@ -722,35 +584,16 @@
         updateState();
       }
 
-      function download(filename, content, mime) {
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(new Blob([content], { type: mime }));
-        a.download = filename;
-        a.click();
-        URL.revokeObjectURL(a.href);
-      }
-      function csvCell(v) {
-        const s = v === null || v === undefined ? '' : String(v);
-        return s.includes(',') || s.includes('"') || s.includes('\n')
-          ? `"${s.replace(/"/g, '""')}"` : s;
-      }
-
-      window.addEventListener('popstate', () => {
-        // Re-sync the form from the URL and refetch.
-        const usp = new URLSearchParams(window.location.search);
-        q.value          = usp.get('q') || '';
-        priceMode.value  = usp.get('price_mode') || 'any';
-        priceValue.value = usp.get('price_value') || '';
-        sortInput.value  = usp.get('sort') || 'card_name';
-        dirInput.value   = usp.get('dir') || 'asc';
-        pageInput.value  = usp.get('page') || '1';
-        perInput.value   = usp.get('per_page') || '50';
-        syncPriceValueState();
-        fetchFragment({}, { history: 'replace' });
+      // The shared client loads with `defer`; this script also runs with
+      // `defer`, but the ordering between two deferred scripts is the
+      // order they appear in the document — so paginatedtable.js is
+      // guaranteed to have run before this line.
+      window.mtgcompare.attachPaginatedTable({
+        form, wrapper,
+        spinnerClass: 'inv-loading',
+        defaults: { sort: 'card_name', dir: 'asc', price_mode: 'any', per_page: '50' },
+        onAfterSwap: attachSelectionHandlers,
       });
-
-      syncPriceValueState();
-      attachTableHandlers();
     })();
   </script>
 {% endblock %}

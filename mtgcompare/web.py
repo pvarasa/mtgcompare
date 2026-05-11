@@ -1211,38 +1211,6 @@ _MKT_SORT_CHOICES = (
 )
 
 
-def _parse_market_query(args) -> dict:
-    """Mirror of _parse_inventory_query for the /market page.
-
-    Same filter shape (q + price_mode/value) so users can carry context
-    from the inventory page; the sort whitelist is wider to cover the
-    derived columns (PnL, market value) computed in Python.
-    """
-    per_page = _clamp_int(args.get("per_page"), default=50, lo=1, hi=200)
-    if per_page not in _PER_PAGE_CHOICES:
-        per_page = 50
-    page = _clamp_int(args.get("page"), default=1, lo=1, hi=10_000)
-
-    sort = args.get("sort") or "pnl_usd"
-    if sort not in _MKT_SORT_CHOICES:
-        sort = "pnl_usd"
-    direction = args.get("dir", "desc" if sort == "pnl_usd" else "asc").lower()
-    if direction not in ("asc", "desc"):
-        direction = "asc"
-
-    q = (args.get("q") or "").strip()
-    price_mode = args.get("price_mode") or "any"
-    if price_mode not in {"any", "empty", "has", "lte", "gte", "eq"}:
-        price_mode = "any"
-    price_value = _opt_float(args.get("price_value"))
-
-    return {
-        "q": q, "sort": sort, "direction": direction,
-        "page": page, "per_page": per_page,
-        "price_mode": price_mode, "price_value": price_value,
-    }
-
-
 def _sort_key_market(col: str, descending: bool):
     """Return a `key=` callable for sorting the priced rows list.
 
@@ -1255,10 +1223,7 @@ def _sort_key_market(col: str, descending: bool):
         # second element is the sort value with sign-flip for descending.
         if v is None:
             return (1, 0)
-        if isinstance(v, str):
-            v_cmp = v.lower()
-        else:
-            v_cmp = -float(v) if descending else float(v)
+        v_cmp = v.lower() if isinstance(v, str) else (-float(v) if descending else float(v))
         return (0, v_cmp)
     return key
 
@@ -1267,7 +1232,11 @@ def _sort_key_market(col: str, descending: bool):
 def market():
     inv.init_schema()
     user_id = _get_user_id()
-    params = _parse_market_query(request.args)
+    params = _parse_table_query(
+        request.args,
+        sort_choices=_MKT_SORT_CHOICES,
+        default_sort="pnl_usd", default_dir="desc",
+    )
 
     inventory_rows = inv.list_filtered_for_market(
         user_id,
@@ -1531,38 +1500,43 @@ def market_history():
 _PER_PAGE_CHOICES = (25, 50, 100, 200)
 _INV_SORT_CHOICES = ("card_name", "set_code", "quantity", "price_bought",
                      "condition", "printing", "date_bought")
+_PRICE_MODES = frozenset({"any", "empty", "has", "lte", "gte", "eq"})
 
 
 def _clamp_int(value: str | None, *, default: int, lo: int, hi: int) -> int:
     """Tolerate junk in URL params — never 500 on a malformed ?page=foo."""
+    if value is None:
+        return default
     try:
         n = int(value)
-    except (TypeError, ValueError):
+    except ValueError:
         return default
     return max(lo, min(hi, n))
 
 
-def _parse_inventory_query(args) -> dict:
-    """Pull pagination/filter/sort params out of request.args, with defaults.
+def _parse_table_query(args, *, sort_choices: tuple[str, ...],
+                       default_sort: str, default_dir: str) -> dict:
+    """Shared filter/sort/pagination parser for /inventory and /market.
 
-    Used by both `/inventory` and `/inventory/delete-matching` so the same
-    URL the user is staring at matches the rows they're about to act on.
+    Caller supplies the page-specific sort whitelist and defaults. The
+    filter shape (q + price_mode/price_value) is identical across pages
+    so users can carry filter context between them.
     """
     per_page = _clamp_int(args.get("per_page"), default=50, lo=1, hi=200)
     if per_page not in _PER_PAGE_CHOICES:
         per_page = 50
     page = _clamp_int(args.get("page"), default=1, lo=1, hi=10_000)
 
-    sort = args.get("sort") or "card_name"
-    if sort not in _INV_SORT_CHOICES:
-        sort = "card_name"
-    direction = args.get("dir", "asc").lower()
+    sort = args.get("sort") or default_sort
+    if sort not in sort_choices:
+        sort = default_sort
+    direction = (args.get("dir") or default_dir).lower()
     if direction not in ("asc", "desc"):
-        direction = "asc"
+        direction = default_dir
 
     q = (args.get("q") or "").strip()
     price_mode = args.get("price_mode") or "any"
-    if price_mode not in {"any", "empty", "has", "lte", "gte", "eq"}:
+    if price_mode not in _PRICE_MODES:
         price_mode = "any"
     price_value = _opt_float(args.get("price_value"))
 
@@ -1577,7 +1551,11 @@ def _parse_inventory_query(args) -> dict:
 def inventory():
     inv.init_schema()
     user_id = _get_user_id()
-    params = _parse_inventory_query(request.args)
+    params = _parse_table_query(
+        request.args,
+        sort_choices=_INV_SORT_CHOICES,
+        default_sort="card_name", default_dir="asc",
+    )
 
     total = inv.count_matching(
         user_id,
