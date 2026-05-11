@@ -35,7 +35,6 @@ from jwt import PyJWKClient
 from sqlalchemy import text
 
 from . import db
-from . import inventory as inv
 
 WORKOS_API_KEY        = os.environ.get("WORKOS_API_KEY", "")
 WORKOS_CLIENT_ID      = os.environ.get("WORKOS_CLIENT_ID", "")
@@ -393,7 +392,6 @@ def callback():
         flash(f"Login failed: {exc}")
         return redirect(url_for("auth.login"))
 
-    inv.init_schema()
     _upsert_user(session["user"])
     g.user_id = session["user"]["id"]
     current_app.logger.info("event=auth_callback_ok")
@@ -456,7 +454,6 @@ def webhook():
         )
         return jsonify({"ok": False, "error": "signature verification failed"}), 401
 
-    inv.init_schema()
     # WorkOS's event union includes EventSchemaUnknown for events the SDK
     # doesn't model. Use getattr so we silently no-op on those instead of
     # crashing on attribute access.

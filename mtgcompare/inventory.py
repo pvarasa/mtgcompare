@@ -266,6 +266,79 @@ def _order_by_sort(sort: str | None, direction: str | None) -> str:
     return f"{col} {dir_norm}, {tail}"
 
 
+def page_with_aggregates(
+    user_id: str,
+    *,
+    q: str | None = None,
+    sort: str | None = "card_name",
+    direction: str | None = "asc",
+    page: int = 1,
+    per_page: int = 50,
+    price_mode: str | None = None,
+    price_value: float | None = None,
+) -> tuple[list[dict], dict, dict]:
+    """Return (page_rows, matched_aggregates, unfiltered_stats) in 2 queries
+    on a single connection.
+
+    Replaces the four-call dance of `count_matching` + `list_paginated`
+    + `aggregate_inventory` + `stats` that /inventory used to issue per
+    request. The aggregate CTE computes both filtered and unfiltered
+    sums in one round-trip; the page is a separate paginated SELECT but
+    on the same connection, so total wire cost is two server round-trips
+    instead of four.
+    """
+    where_sql, binds = _user_where(user_id, q=q,
+                                   price_mode=price_mode, price_value=price_value)
+
+    # The unfiltered "total inventory at a glance" stats live in their
+    # own CTE; bind the user_id separately so it doesn't clash with the
+    # filtered `:uid` in `where_sql`.
+    agg_binds = {**binds, "stats_uid": user_id}
+    agg_sql = text(f"""
+        WITH matched AS (
+          SELECT COUNT(*) AS matched_count,
+                 COALESCE(SUM(quantity), 0) AS matched_copies,
+                 COALESCE(SUM(quantity * COALESCE(price_bought, 0)), 0.0) AS matched_cost
+          FROM inventory
+          WHERE {where_sql}
+        ),
+        unfiltered AS (
+          SELECT COUNT(*) AS total_printings,
+                 COALESCE(SUM(quantity), 0) AS total_copies,
+                 COALESCE(SUM(quantity * COALESCE(price_bought, 0)), 0.0) AS total_cost
+          FROM inventory
+          WHERE user_id = :stats_uid
+        )
+        SELECT m.matched_count, m.matched_copies, m.matched_cost,
+               u.total_printings, u.total_copies, u.total_cost
+        FROM matched m, unfiltered u
+    """)  # noqa: S608
+
+    order_sql = _order_by_sort(sort, direction)
+    page_binds = {**binds, "lim": per_page, "off": (page - 1) * per_page}
+    page_sql = text(
+        f"SELECT {_SELECT_COLUMNS} FROM inventory "  # noqa: S608
+        f"WHERE {where_sql} ORDER BY {order_sql} LIMIT :lim OFFSET :off"
+    )
+
+    with get_conn() as conn:
+        agg_row = conn.execute(agg_sql, agg_binds).mappings().first()
+        page_rows = conn.execute(page_sql, page_binds).mappings().all()
+
+    agg = row_to_dict(agg_row)
+    matched = {
+        "printings":    int(agg["matched_count"]),
+        "total_copies": int(agg["matched_copies"]),
+        "total_cost":   round(float(agg["matched_cost"]), 2),
+    }
+    stats = {
+        "printings":    int(agg["total_printings"]),
+        "total_copies": int(agg["total_copies"]),
+        "total_cost":   round(float(agg["total_cost"]), 2),
+    }
+    return [row_to_dict(r) for r in page_rows], matched, stats
+
+
 def list_paginated(
     user_id: str,
     *,

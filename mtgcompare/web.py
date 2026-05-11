@@ -170,6 +170,14 @@ if db.IS_POSTGRES and not _CRON_SECRET:
     )
 
 
+# Run the schema setup + migrations once at worker boot, not per-request.
+# Each gunicorn worker imports this module on startup so this fires once
+# per worker. Earlier versions called inv.init_schema() from every route
+# handler that touched the DB, which cost ~10–15 ms per request issuing
+# redundant information_schema queries.
+inv.init_schema()
+
+
 def _get_user_id() -> str:
     """Return the stable user identity used as a DB key.
 
@@ -556,7 +564,6 @@ def _load_inventory_qty_map(use_inventory: bool) -> dict[str, int]:
     """
     if not use_inventory:
         return {}
-    inv.init_schema()
     user_id = _get_user_id()
     inv_map: dict[str, int] = {}
     for row in inv.list_all(user_id):
@@ -1239,6 +1246,21 @@ _market_data_cache: TTLCache = TTLCache(  # keys = tuples, values = template ctx
 )
 _market_data_cache_lock = Lock()
 
+# Process-wide price cache. Earlier versions ran `SELECT * FROM market_prices`
+# on every /market cache-miss request — ~3 000 rows × `row_to_dict` ≈ 10-15 ms
+# of work that doesn't change between price-update cron runs. The dict here
+# is built once per worker on first need, invalidated by market_cache_clear()
+# (called by the cron right after the import). A 1-hour soft TTL provides a
+# safety net so a missed clear doesn't strand the cache forever.
+_PRICE_CACHE_MAX_AGE_S = 3600
+_price_cache_state: dict = {
+    "dict": None,                    # {(card_name_lower, set_code_lower, is_foil): price_usd}
+    "last_fetched_at": None,
+    "mtgjson_downloaded_at": None,
+    "built_at_mono": 0.0,
+}
+_price_cache_lock = Lock()
+
 
 def _market_cache_get(key):
     if not _MARKET_CACHE_ENABLED:
@@ -1255,13 +1277,59 @@ def _market_cache_set(key, value):
 
 
 def market_cache_clear() -> None:
-    """Flush the /market computation cache.
+    """Flush the /market computation cache + the in-memory price dict.
 
     Called by the price-update cron once new prices land so users don't
-    keep seeing stale PnL for up to a TTL.
+    keep seeing stale PnL for up to a TTL, and so the next /market
+    request triggers a fresh `SELECT * FROM market_prices` rebuild.
     """
     with _market_data_cache_lock:
         _market_data_cache.clear()
+    with _price_cache_lock:
+        _price_cache_state["dict"] = None
+        _price_cache_state["last_fetched_at"] = None
+        _price_cache_state["mtgjson_downloaded_at"] = None
+        _price_cache_state["built_at_mono"] = 0.0
+
+
+def _get_price_cache() -> tuple[dict, str | None, str | None]:
+    """Return (price_dict, last_fetched_at, mtgjson_downloaded_at).
+
+    Lazily built per worker process on first /market request after a boot
+    or cache clear. The price dict maps
+    `(card_name_lower, set_code_lower, is_foil) -> price_usd`. Two
+    threads can race to rebuild on expiry — that's benign (last writer
+    wins, same data either way), but we don't hold the lock during the
+    DB query so reader latency isn't gated on the rebuild.
+    """
+    now = monotonic()
+    with _price_cache_lock:
+        snap = _price_cache_state
+        if snap["dict"] is not None and now - snap["built_at_mono"] < _PRICE_CACHE_MAX_AGE_S:
+            return snap["dict"], snap["last_fetched_at"], snap["mtgjson_downloaded_at"]
+
+    # Build outside the lock — readers concurrently can still serve from
+    # a stale snapshot via the early return above until we publish.
+    with db.get_conn() as conn:
+        cache_rows = [db.row_to_dict(r) for r in conn.execute(
+            text("SELECT card_name, set_code, is_foil, price_usd, fetched_at FROM market_prices")
+        ).mappings().all()]
+        mtgjson_downloaded_at = _read_meta(conn, "mtgjson_history_downloaded_at")
+
+    price_dict: dict[tuple, float | None] = {}
+    last_fetched_at: str | None = None
+    for cr in cache_rows:
+        key = (cr["card_name"].lower(), cr["set_code"].lower(), cr["is_foil"])
+        price_dict[key] = cr["price_usd"]
+        if last_fetched_at is None or cr["fetched_at"] > last_fetched_at:
+            last_fetched_at = cr["fetched_at"]
+
+    with _price_cache_lock:
+        _price_cache_state["dict"] = price_dict
+        _price_cache_state["last_fetched_at"] = last_fetched_at
+        _price_cache_state["mtgjson_downloaded_at"] = mtgjson_downloaded_at
+        _price_cache_state["built_at_mono"] = monotonic()
+    return price_dict, last_fetched_at, mtgjson_downloaded_at
 
 
 def _sort_key_market(col: str, descending: bool):
@@ -1296,21 +1364,10 @@ def _compute_market_ctx(user_id: str, params: dict) -> dict:
         price_value=params["price_value"],
     )
 
-    # Load cached prices — no live fetch on GET.
-    with db.get_conn() as conn:
-        cache_rows = [db.row_to_dict(r) for r in conn.execute(
-            text("SELECT card_name, set_code, is_foil, price_usd, fetched_at FROM market_prices")
-        ).mappings().all()]
-        mtgjson_downloaded_at = _read_meta(conn, "mtgjson_history_downloaded_at")
-
-    price_cache: dict[tuple, float | None] = {}
-    last_fetched_at: str | None = None
-    for cr in cache_rows:
-        key = (cr["card_name"].lower(), cr["set_code"].lower(), cr["is_foil"])
-        price_cache[key] = cr["price_usd"]
-        if last_fetched_at is None or cr["fetched_at"] > last_fetched_at:
-            last_fetched_at = cr["fetched_at"]
-
+    # Process-wide cached price dict. The lazy rebuild on first call/
+    # invalidation handles freshness; on the hot path this is an in-RAM
+    # dict lookup, not a `SELECT * FROM market_prices`.
+    price_cache, last_fetched_at, mtgjson_downloaded_at = _get_price_cache()
     has_cache = bool(price_cache)
     last_refreshed = _format_ago(last_fetched_at)
     history_db_exists = _has_price_history()
@@ -1418,7 +1475,6 @@ def _compute_market_ctx(user_id: str, params: dict) -> dict:
 
 @app.route("/market")
 def market():
-    inv.init_schema()
     user_id = _get_user_id()
     params = _parse_table_query(
         request.args,
@@ -1448,7 +1504,6 @@ def market():
 
 @app.route("/market/history/download", methods=["POST"])
 def market_history_download():
-    inv.init_schema()
     # Use global inventory so all users' cards get UUID-mapped and priced.
     inventory_rows = inv.list_all_global()
 
@@ -1514,7 +1569,6 @@ def market_history():
     if not card_name or not set_code:
         return jsonify({"ok": False, "error": "card_name and set_code are required"}), 400
 
-    inv.init_schema()
     with db.get_conn() as conn:
         downloaded_at = _read_meta(conn, "mtgjson_history_downloaded_at")
         mapped = conn.execute(
@@ -1622,7 +1676,6 @@ def _parse_table_query(args, *, sort_choices: tuple[str, ...],
 
 @app.route("/inventory")
 def inventory():
-    inv.init_schema()
     user_id = _get_user_id()
     params = _parse_table_query(
         request.args,
@@ -1630,37 +1683,31 @@ def inventory():
         default_sort="card_name", default_dir="asc",
     )
 
-    total = inv.count_matching(
-        user_id,
-        q=params["q"] or None,
-        price_mode=params["price_mode"],
-        price_value=params["price_value"],
-    )
-    total_pages = max(1, math.ceil(total / params["per_page"])) if total else 1
-    # If the user landed on a stale page (e.g. they were on page 5, then
-    # filtered down to 2 pages of results), pin them to the last real
-    # page rather than rendering an empty body.
-    if params["page"] > total_pages:
-        params["page"] = total_pages
-
-    rows = inv.list_paginated(
+    # Single round-trip for page rows + filtered aggregates + unfiltered
+    # stats. Previously this was 4 separate queries (count_matching,
+    # list_paginated, aggregate_inventory, stats).
+    rows, matched, stats = inv.page_with_aggregates(
         user_id,
         q=params["q"] or None,
         sort=params["sort"], direction=params["direction"],
         page=params["page"], per_page=params["per_page"],
         price_mode=params["price_mode"], price_value=params["price_value"],
     )
-
-    # Unconditional stats (no filter) so the stats line at the top stays
-    # an "inventory at a glance" — separate from the filtered subtotal
-    # shown in the result count.
-    stats = inv.stats(user_id)
-    matched = inv.aggregate_inventory(
-        user_id,
-        q=params["q"] or None,
-        price_mode=params["price_mode"],
-        price_value=params["price_value"],
-    )
+    total = matched["printings"]
+    total_pages = max(1, math.ceil(total / params["per_page"])) if total else 1
+    # If the user landed on a stale page (e.g. they were on page 5, then
+    # filtered down to 2 pages of results), pin them to the last real
+    # page and refetch the page rows. Aggregates remain correct (they're
+    # computed across the whole filtered set, not the page).
+    if params["page"] > total_pages:
+        params["page"] = total_pages
+        rows = inv.list_paginated(
+            user_id,
+            q=params["q"] or None,
+            sort=params["sort"], direction=params["direction"],
+            page=params["page"], per_page=params["per_page"],
+            price_mode=params["price_mode"], price_value=params["price_value"],
+        )
 
     ctx = {
         "rows": rows,
@@ -1908,7 +1955,6 @@ def cron_update_prices():
         if not hmac.compare_digest(provided, expected):
             return jsonify({"ok": False, "error": "Unauthorized"}), 401
 
-    inv.init_schema()
 
     with _download_jobs_lock:
         running = next((j for j in _download_jobs.values() if j["state"] == "running"), None)

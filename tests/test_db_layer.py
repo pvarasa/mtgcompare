@@ -4,7 +4,6 @@
 All tests use a temporary SQLite engine so they never touch inventory.db.
 """
 import textwrap
-from decimal import Decimal
 
 import pytest
 from sqlalchemy import create_engine, text
@@ -307,28 +306,35 @@ class TestInventoryUserScoping:
 
 
 # ---------------------------------------------------------------------------
-# db.row_to_dict — type normalisation contract
+# db.row_to_dict — Decimal handling lives at the engine layer now (a
+# psycopg2 type-cast registers `DECIMAL -> float` at engine create time),
+# so row_to_dict itself is a thin `dict(row)`. The behaviour we still
+# care about is end-to-end: rows fetched via SQLAlchemy come back as a
+# regular dict with native Python types.
 # ---------------------------------------------------------------------------
 
 class TestRowToDict:
-    def test_decimal_coerced_to_float(self):
-        from unittest.mock import MagicMock
-        row = MagicMock()
-        row.items.return_value = [("price_usd", Decimal("12.34")), ("card_name", "Sol Ring")]
-        result = db_module.row_to_dict(row)
-        assert result["price_usd"] == pytest.approx(12.34)
-        assert isinstance(result["price_usd"], float)
-
-    def test_none_stays_none(self):
-        from unittest.mock import MagicMock
-        row = MagicMock()
-        row.items.return_value = [("price_bought", None), ("quantity", 3)]
-        result = db_module.row_to_dict(row)
-        assert result["price_bought"] is None
-
-    def test_non_decimal_types_unchanged(self):
-        from unittest.mock import MagicMock
-        row = MagicMock()
-        row.items.return_value = [("quantity", 4), ("card_name", "Bolt"), ("is_foil", 0)]
-        result = db_module.row_to_dict(row)
-        assert result == {"quantity": 4, "card_name": "Bolt", "is_foil": 0}
+    def test_returns_plain_dict(self):
+        """Real SQLAlchemy row → plain dict, preserves values verbatim."""
+        db_module.init_schema()
+        from sqlalchemy import text as _text
+        with db_module.get_conn() as conn:
+            conn.execute(_text(
+                "INSERT INTO inventory "
+                "(user_id, card_name, set_code, quantity, price_bought) "
+                "VALUES ('rtd_test', 'Sol Ring', 'C21', 4, 1.25)"
+            ))
+            row = conn.execute(_text(
+                "SELECT card_name, quantity, price_bought "
+                "FROM inventory WHERE user_id = 'rtd_test'"
+            )).mappings().first()
+            try:
+                result = db_module.row_to_dict(row)
+                assert result["card_name"] == "Sol Ring"
+                assert result["quantity"] == 4
+                # Float, not Decimal, on both backends (SQLite is native;
+                # Postgres is via DEC2FLOAT registered at engine create).
+                assert isinstance(result["price_bought"], float)
+                assert result["price_bought"] == pytest.approx(1.25)
+            finally:
+                conn.execute(_text("DELETE FROM inventory WHERE user_id = 'rtd_test'"))

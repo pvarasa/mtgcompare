@@ -7,7 +7,6 @@ DATABASE_URL env var selects the backend:
 import os
 import sys
 from contextlib import contextmanager
-from decimal import Decimal
 from pathlib import Path
 
 from sqlalchemy import (
@@ -47,6 +46,23 @@ _DATABASE_URL = os.environ.get("DATABASE_URL")
 IS_POSTGRES = bool(_DATABASE_URL)
 
 if _DATABASE_URL:
+    # Register a global psycopg2 type cast that returns Python floats for
+    # NUMERIC columns instead of decimal.Decimal. Decimal arithmetic +
+    # the per-row Decimal -> float coercion in row_to_dict was the single
+    # hottest function in /market profiles (~30% of cache-miss request
+    # time). With this cast we get floats straight from the driver and
+    # row_to_dict becomes a plain dict() call.
+    #
+    # Trade-off: floats lose precision on very large monetary values.
+    # mtgcompare prices fit comfortably in float64 (USD prices stored to
+    # 4 decimal places, max value ~10^6). Anything currency-sensitive
+    # that needs exact decimals would have to cast back at the use site.
+    import psycopg2.extensions
+    psycopg2.extensions.register_type(psycopg2.extensions.new_type(
+        psycopg2.extensions.DECIMAL.values,
+        "DEC2FLOAT",
+        lambda v, _: float(v) if v is not None else None,
+    ))
     engine = create_engine(_DATABASE_URL, pool_pre_ping=True, pool_size=5, max_overflow=10)
     DB_PATH = None
 else:
@@ -185,12 +201,14 @@ _shop_query_log = Table(
 
 
 def row_to_dict(row) -> dict:
-    """Convert a SQLAlchemy RowMapping to a plain dict with uniform numeric types.
+    """Convert a SQLAlchemy RowMapping to a plain dict.
 
-    psycopg2 returns decimal.Decimal for NUMERIC columns; SQLite returns float.
-    Coercing Decimal→float here means callers never need backend-specific casts.
+    Postgres NUMERIC values arrive as Python floats — see the DEC2FLOAT
+    typecast registered at engine creation above. SQLite already returns
+    floats. So the dict() conversion is uniform across backends and the
+    per-cell isinstance(Decimal) check that used to live here is gone.
     """
-    return {k: float(v) if isinstance(v, Decimal) else v for k, v in row.items()}
+    return dict(row)
 
 
 @contextmanager
