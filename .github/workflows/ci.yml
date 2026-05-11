@@ -87,3 +87,36 @@ jobs:
       # can't ship a release built on a known-vulnerable dep.
       - name: Audit dependencies
         run: uv run --with pip-audit pip-audit --strict
+
+  e2e:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install dependencies
+        run: uv sync --group e2e
+
+      # Cache Playwright's browser binaries (~150 MB) keyed on the
+      # playwright version pinned in uv.lock. `--with-deps` below still
+      # runs apt-get for system libraries, but the browser download is
+      # skipped on cache hit.
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('uv.lock') }}
+
+      - name: Install Playwright browser + OS deps
+        run: uv run playwright install --with-deps chromium
+
+      - name: Run e2e tests
+        run: uv run pytest -m e2e

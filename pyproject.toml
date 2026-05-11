@@ -31,6 +31,9 @@ dev = [
     "pytest>=9.0",
     "ruff>=0.15.12",
 ]
+e2e = [
+    "pytest-playwright>=0.5",
+]
 desktop = [
     "pillow>=10.0",
     "pystray>=0.19",
@@ -70,9 +73,10 @@ reportMissingTypeStubs = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-m 'not live and not canary'"
+addopts = "-m 'not live and not canary and not e2e'"
 markers = [
     "live: hits real external sites; opt-in with `uv run pytest -m live`",
     "canary: smoke-tests all shop endpoints for API/structure changes; opt-in with `uv run pytest -m canary`",
     "pg: requires a real PostgreSQL instance (DATABASE_URL env var); opt-in with `uv run pytest -m pg`",
+    "e2e: Playwright-driven browser tests; opt-in with `uv run --group e2e pytest -m e2e`",
 ]

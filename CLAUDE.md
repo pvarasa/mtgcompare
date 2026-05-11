@@ -162,10 +162,18 @@ The `users` table is keyed on `workos_user_id`; inventory rows continue to key o
   Live scraper checks.
 - `DATABASE_URL=postgresql+psycopg2://... uv run pytest -m pg`
   PostgreSQL-specific tests (require a real Postgres instance).
+- `uv run --group e2e pytest -m e2e`
+  Playwright browser tests for inventory/market UI. First-time setup:
+  `uv run --group e2e playwright install chromium` plus, on Linux/WSL,
+  a one-time `sudo $(which uv) run --group e2e playwright install-deps chromium`
+  for the system libs (libnss3 / libnspr4 / libasound2t64 / etc.).
+  macOS and Windows don't need the apt step. CI installs both with
+  `playwright install --with-deps chromium` in the `e2e` job.
 - Tests import the package from repo root via `tests/conftest.py`, so `uv run pytest` should work without setting `PYTHONPATH`.
 - `.\.venv\Scripts\python -m pytest`
   Fallback if `uv` has cache or permission issues in this environment.
 - DB-layer tests use a per-test temporary SQLite engine via `monkeypatch` on `db.engine`/`db.DB_PATH`/`db.IS_POSTGRES` — they never touch `inventory.db`.
+- E2E tests run the Flask app in a background thread (werkzeug) against a temp SQLite DB; fixtures live in `tests/e2e/conftest.py`. Per-test isolation comes from truncating the `inventory` table between tests.
 
 ## Git workflow
 
