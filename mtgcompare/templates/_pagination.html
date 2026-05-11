@@ -1,0 +1,52 @@
+{# Shared pagination footer used by _inventory_table.html and _market_table.html.
+
+   Inputs:
+     params           — parsed query dict (page, per_page, ...).
+     total            — total rows matching the current filter.
+     total_pages      — derived from total / per_page, min 1.
+     per_page_choices — sequence of allowed per-page values (e.g. (25,50,100,200)).
+     urls             — dict {first, prev, next, last} of pre-built hrefs for
+                        the four pager links. Caller builds these because the
+                        URL-template (`qs(...)` macro) is page-specific.
+     row_count        — number of rows actually shown on this page (rows|length).
+
+   The page input and per-page select are class-tagged, not id-tagged, so the
+   shared paginatedtable.js can find them via the wrapper without naming
+   collisions between the /inventory and /market pages.
+#}
+{% macro pagination(params, total, total_pages, per_page_choices, urls, row_count) -%}
+<nav class="pagination" aria-label="Pagination">
+  <span class="page-info">
+    {% set first_row = (params.page - 1) * params.per_page + 1 %}
+    {% set last_row  = [first_row + row_count - 1, total]|min %}
+    Showing <strong>{{ first_row }}</strong>&ndash;<strong>{{ last_row }}</strong>
+    of <strong>{{ '{:,}'.format(total) }}</strong>
+  </span>
+
+  <div class="page-controls">
+    <a class="pg-btn{% if params.page <= 1 %} disabled{% endif %}"
+       href="{{ urls.first }}" aria-label="First page" data-page="1">&laquo;</a>
+    <a class="pg-btn{% if params.page <= 1 %} disabled{% endif %}"
+       href="{{ urls.prev }}" aria-label="Previous page" data-page="{{ params.page - 1 }}">&lsaquo;</a>
+    <span class="page-of">
+      Page
+      <input type="number" class="page-input" min="1" max="{{ total_pages }}"
+             value="{{ params.page }}" inputmode="numeric">
+      of <strong>{{ total_pages }}</strong>
+    </span>
+    <a class="pg-btn{% if params.page >= total_pages %} disabled{% endif %}"
+       href="{{ urls.next }}" aria-label="Next page" data-page="{{ params.page + 1 }}">&rsaquo;</a>
+    <a class="pg-btn{% if params.page >= total_pages %} disabled{% endif %}"
+       href="{{ urls.last }}" aria-label="Last page" data-page="{{ total_pages }}">&raquo;</a>
+  </div>
+
+  <label class="per-page">
+    <span class="sr-only">Rows per page:</span>
+    <select class="per-page-select">
+      {% for n in per_page_choices %}
+        <option value="{{ n }}"{% if n == params.per_page %} selected{% endif %}>{{ n }} / page</option>
+      {% endfor %}
+    </select>
+  </label>
+</nav>
+{%- endmacro %}

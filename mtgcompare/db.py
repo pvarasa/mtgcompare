@@ -236,10 +236,11 @@ def _migrate(conn) -> None:
                 "CREATE INDEX IF NOT EXISTS idx_inventory_user_card ON inventory (user_id, card_name)"
             ))
 
-        # Case-insensitive prefix-match index for the paginated /inventory
-        # and /market filter UI. Without it, an `ILIKE 'foo%'` filter on
-        # card_name scans the user's whole inventory; with it, the index
-        # converts the filter into a btree range scan.
+        # Case-insensitive index on (user_id, lower(card_name)). The
+        # filter UI uses substring match (`LIKE '%bolt%'`), which a btree
+        # cannot fully serve — but the index still accelerates equality
+        # lookups and `ORDER BY lower(card_name)`, and the user_id prefix
+        # keeps any sequential scan scoped to a single user's rows.
         conn.execute(text(
             "CREATE INDEX IF NOT EXISTS idx_inventory_user_card_name_lower "
             "ON inventory (user_id, lower(card_name))"
