@@ -6,10 +6,12 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "beautifulsoup4>=4.14",
+    "cachetools>=5.5",
     "duckdb>=1.2",
     "flask>=3.1",
     "flask-wtf>=1.2",
     "gunicorn>=23.0",
+    "orjson>=3.10",
     "psycopg2-binary>=2.9",
     "pyjwt[crypto]>=2.8",
     "requests>=2.33",

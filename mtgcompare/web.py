@@ -64,6 +64,20 @@ install_healthz_access_filter()
 
 app = Flask(__name__)
 
+# Swap Flask's stdlib JSON for orjson — 5-10x faster encoding, ~half the
+# memory. Affects /auth/me, /market/history, /inventory/add-bulk, and the
+# decklist preview endpoint. Drop-in: same .dumps()/.loads() shape.
+import orjson  # noqa: E402
+from flask.json.provider import JSONProvider  # noqa: E402
+class _OrjsonProvider(JSONProvider):
+    def dumps(self, obj, **_):
+        return orjson.dumps(obj).decode()
+    def loads(self, s, **_):
+        if isinstance(s, str):
+            s = s.encode()
+        return orjson.loads(s)
+app.json = _OrjsonProvider(app)
+
 # Production refuses to boot with the dev fallback secret key — it signs
 # CSRF tokens and flask sessions, and the fallback is in the public repo.
 _SECRET_KEY = os.environ.get("SECRET_KEY", "")
@@ -1211,6 +1225,37 @@ _MKT_SORT_CHOICES = (
 )
 
 
+# Cache the heavy per-request /market computation. Keyed on the full
+# filter+sort+page tuple per user. TTL of 60 s is trivially safe — prices
+# update daily via the cron, and the worst-case staleness on inventory
+# mutations is bounded by the TTL. Cleared explicitly after price update
+# runs to flush across users at once.
+from cachetools import TTLCache  # noqa: E402
+from threading import Lock as _CacheLock  # noqa: E402
+_market_data_cache: "TTLCache[tuple, dict]" = TTLCache(maxsize=512, ttl=60)
+_market_data_cache_lock = _CacheLock()
+
+
+def _market_cache_get(key):
+    with _market_data_cache_lock:
+        return _market_data_cache.get(key)
+
+
+def _market_cache_set(key, value):
+    with _market_data_cache_lock:
+        _market_data_cache[key] = value
+
+
+def market_cache_clear() -> None:
+    """Flush the /market computation cache.
+
+    Called by the price-update cron once new prices land so users don't
+    keep seeing stale PnL for up to a TTL.
+    """
+    with _market_data_cache_lock:
+        _market_data_cache.clear()
+
+
 def _sort_key_market(col: str, descending: bool):
     """Return a `key=` callable for sorting the priced rows list.
 
@@ -1228,16 +1273,14 @@ def _sort_key_market(col: str, descending: bool):
     return key
 
 
-@app.route("/market")
-def market():
-    inv.init_schema()
-    user_id = _get_user_id()
-    params = _parse_table_query(
-        request.args,
-        sort_choices=_MKT_SORT_CHOICES,
-        default_sort="pnl_usd", default_dir="desc",
-    )
+def _compute_market_ctx(user_id: str, params: dict) -> dict:
+    """All the expensive /market computation, factored out so the route
+    handler can cache the result.
 
+    Returns the full template context dict (whichever branch applied —
+    empty inventory, no-price-cache, or full). The handler picks the
+    template based on `partial=tbody` and renders.
+    """
     inventory_rows = inv.list_filtered_for_market(
         user_id,
         q=params["q"] or None,
@@ -1265,18 +1308,23 @@ def market():
     history_db_exists = _has_price_history()
     mtgjson_last_downloaded = _format_ago(mtgjson_downloaded_at) if history_db_exists else None
 
+    common = {
+        "last_refreshed": last_refreshed,
+        "mtgjson_last_downloaded": mtgjson_last_downloaded,
+        "history_db_exists": history_db_exists,
+        "allow_price_update": not db.IS_POSTGRES,
+        "active": "market",
+        "params": params,
+        "per_page_choices": _PER_PAGE_CHOICES,
+    }
+
     if not inventory_rows:
-        return render_template(
-            "market.html", rows=[], summary=None, fx=None, error=None,
-            has_cache=has_cache,
-            last_refreshed=last_refreshed,
-            mtgjson_last_downloaded=mtgjson_last_downloaded,
-            history_db_exists=history_db_exists,
-            allow_price_update=not db.IS_POSTGRES,
-            active="market",
-            params=params, total=0, total_pages=1,
-            per_page_choices=_PER_PAGE_CHOICES,
-        )
+        return {
+            "rows": [], "summary": None, "fx": None, "error": None,
+            "has_cache": has_cache,
+            "total": 0, "total_pages": 1,
+            **common,
+        }
 
     fx = _get_fx() if has_cache else None
 
@@ -1292,17 +1340,13 @@ def market():
         })
 
     if not has_cache:
-        return render_template(
-            "market.html", rows=priced, summary=None, fx=None, error=None,
-            has_cache=False,
-            last_refreshed=None,
-            mtgjson_last_downloaded=mtgjson_last_downloaded,
-            history_db_exists=history_db_exists,
-            allow_price_update=not db.IS_POSTGRES,
-            active="market",
-            params=params, total=len(priced), total_pages=1,
-            per_page_choices=_PER_PAGE_CHOICES,
-        )
+        return {
+            "rows": priced, "summary": None, "fx": None, "error": None,
+            "has_cache": False,
+            "last_refreshed": None,
+            "total": len(priced), "total_pages": 1,
+            **{k: v for k, v in common.items() if k != "last_refreshed"},
+        }
 
     for row in priced:
         pb  = row.get("price_bought")
@@ -1352,22 +1396,43 @@ def market():
     start = (params["page"] - 1) * params["per_page"]
     page_rows = priced[start:start + params["per_page"]]
 
-    ctx = {
+    return {
         "rows": page_rows,
         "summary": summary,
         "fx": fx,
         "error": None,
         "has_cache": True,
-        "last_refreshed": last_refreshed,
-        "mtgjson_last_downloaded": mtgjson_last_downloaded,
-        "history_db_exists": history_db_exists,
-        "allow_price_update": not db.IS_POSTGRES,
-        "active": "market",
-        "params": params,
         "total": total,
         "total_pages": total_pages,
-        "per_page_choices": _PER_PAGE_CHOICES,
+        **common,
     }
+
+
+@app.route("/market")
+def market():
+    inv.init_schema()
+    user_id = _get_user_id()
+    params = _parse_table_query(
+        request.args,
+        sort_choices=_MKT_SORT_CHOICES,
+        default_sort="pnl_usd", default_dir="desc",
+    )
+
+    # Server-side cache of the heavy computation. The rendered HTML
+    # carries a per-request CSRF token, so we cache the data dict and
+    # let render_template build a fresh response per call. Daily price
+    # update calls market_cache_clear() to flush.
+    cache_key = (
+        user_id,
+        params["q"], params["sort"], params["direction"],
+        params["page"], params["per_page"],
+        params["price_mode"], params["price_value"],
+    )
+    ctx = _market_cache_get(cache_key)
+    if ctx is None:
+        ctx = _compute_market_ctx(user_id, params)
+        _market_cache_set(cache_key, ctx)
+
     if request.args.get("partial") == "tbody":
         return render_template("_market_table.html", **ctx)
     return render_template("market.html", **ctx)
@@ -1812,6 +1877,9 @@ def _run_daily_price_update(
     today_xz.unlink(missing_ok=True)
 
     mapped_count, _ = _import_mtgjson_history(inventory_rows, progress_cb=_progress)
+    # New prices landed — flush the /market data cache so users don't
+    # keep seeing stale PnL for up to the TTL.
+    market_cache_clear()
     return mapped_count, rows_inserted, uuids_streamed, market_date
 
 
