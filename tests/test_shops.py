@@ -113,6 +113,58 @@ def test_collect_prices_filter_empty_returns_empty(monkeypatch):
     assert shops.collect_prices("Card", fx=150.0, enabled=set()) == []
 
 
+def test_collect_prices_drops_results_from_shops_that_exceed_timeout(monkeypatch, caplog):
+    """A slow scraper that exceeds SHOP_QUERY_TIMEOUT_S has its result
+    dropped and emits a timeout warning; fast scrapers still return."""
+    fast = _SleepyScraper("Fast", 0.0)
+    slow = _SleepyScraper("Slow", 0.6)
+    monkeypatch.setattr(shops, "build_scrapers", lambda fx, enabled=None: [fast, slow])
+    monkeypatch.setattr(shops, "SHOP_QUERY_TIMEOUT_S", 0.1)
+
+    logger = logging.getLogger("test_shops_timeout")
+    with caplog.at_level(logging.WARNING, logger="test_shops_timeout"):
+        t0 = time.perf_counter()
+        results = shops.collect_prices("Lightning Bolt", fx=150.0, logger=logger)
+        elapsed = time.perf_counter() - t0
+
+    # Caller returned promptly without waiting for the slow shop.
+    assert elapsed < 0.4, f"caller should not wait for stragglers, got {elapsed:.2f}s"
+    # Only the fast shop contributed results.
+    assert {r["shop"] for r in results} == {"Fast"}
+    # Timeout was logged with the slow shop's name.
+    assert any(
+        "shop_query_timeout" in rec.message and "Slow" in rec.message
+        for rec in caplog.records
+    )
+
+
+def test_collect_prices_populates_timeouts_out(monkeypatch):
+    """Caller-provided timeouts_out set is filled with the display names
+    of every shop that exceeded the per-shop timeout."""
+    fast = _SleepyScraper("Fast", 0.0)
+    slow_a = _SleepyScraper("SlowA", 0.6)
+    slow_b = _SleepyScraper("SlowB", 0.6)
+    monkeypatch.setattr(shops, "build_scrapers", lambda fx, enabled=None: [fast, slow_a, slow_b])
+    monkeypatch.setattr(shops, "SHOP_QUERY_TIMEOUT_S", 0.1)
+
+    timeouts: set[str] = set()
+    shops.collect_prices("Lightning Bolt", fx=150.0, timeouts_out=timeouts)
+
+    assert timeouts == {"SlowA", "SlowB"}
+
+
+def test_collect_prices_timeouts_out_empty_when_all_finish(monkeypatch):
+    """timeouts_out stays empty when every shop responds in time."""
+    monkeypatch.setattr(shops, "build_scrapers",
+                        lambda fx, enabled=None: [_SleepyScraper("Quick", 0.0)])
+    monkeypatch.setattr(shops, "SHOP_QUERY_TIMEOUT_S", 5.0)
+
+    timeouts: set[str] = set()
+    shops.collect_prices("Lightning Bolt", fx=150.0, timeouts_out=timeouts)
+
+    assert timeouts == set()
+
+
 def test_collect_prices_filter_none_runs_all(monkeypatch):
     """Default ``enabled=None`` means "all shops" — regression test that
     we didn't accidentally start dropping shops on the unspecified path."""

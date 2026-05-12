@@ -388,6 +388,41 @@ _DECK_LINE_RE = re.compile(
 # an attack to upstream sites and to lock up the worker pool.
 MAX_DECKLIST_CARDS = 100
 
+# Concurrency cap for the per-card fan-out in /decklist. The work is
+# I/O-bound (each task triggers a parallel shop scrape), so the right
+# number is "as many as we can dispatch without overloading the upstream
+# shops or our own worker pool". 12 keeps an 8-shop × ~37-name search
+# from queueing through more than ~3 batches, while leaving headroom
+# under the gunicorn thread limits. Overridable via env var for tuning.
+DECKLIST_FAN_OUT_WORKERS = int(os.environ.get("MTGCOMPARE_DECKLIST_FAN_OUT_WORKERS", "12"))
+
+# Basic lands are excluded from price searches: shops return hundreds of
+# near-identical printings (and Scryfall is by far the slowest of all
+# queries on those), and nobody actually price-shops basics across stores.
+_BASIC_LANDS = frozenset({
+    "plains", "island", "swamp", "mountain", "forest", "wastes",
+    "snow-covered plains", "snow-covered island", "snow-covered swamp",
+    "snow-covered mountain", "snow-covered forest",
+})
+
+
+def _is_basic_land(name: str) -> bool:
+    return name.strip().lower() in _BASIC_LANDS
+
+
+def _strip_basic_lands(
+    items: list[tuple[int, str]],
+) -> tuple[list[tuple[int, str]], int]:
+    """Drop basic-land entries and return (kept_items, skipped_copies)."""
+    kept: list[tuple[int, str]] = []
+    skipped_copies = 0
+    for qty, name in items:
+        if _is_basic_land(name):
+            skipped_copies += qty
+        else:
+            kept.append((qty, name))
+    return kept, skipped_copies
+
 
 def _parse_decklist(text: str) -> list[tuple[int, str]]:
     result = []
@@ -443,21 +478,26 @@ def _fetch_decklist_prices(
     name_canonical: dict[str, str],
     fx: float,
     enabled_shops: set[str] | None,
+    timeouts_out: set[str] | None = None,
 ) -> dict[str, list[dict]]:
     """Fan out one shop search per distinct name and collect price rows.
 
     Returns a mapping ``{lower_name: sorted_rows}``. Per-name failures are
     logged and produce an empty list rather than aborting the whole batch.
+    If ``timeouts_out`` is given, the union of shops that hit the per-shop
+    timeout across all names is added to it (one set, mutated in place).
     """
     prices_by_name: dict[str, list[dict]] = {n: [] for n in names_to_search}
     if not names_to_search:
         return prices_by_name
     shops_count = len(enabled_shops) if enabled_shops is not None else "all"
-    with ThreadPoolExecutor(max_workers=min(len(names_to_search), 6)) as executor:
+    workers = min(len(names_to_search), DECKLIST_FAN_OUT_WORKERS)
+    with ThreadPoolExecutor(max_workers=workers) as executor:
         future_to_name = {
             executor.submit(
                 collect_prices, name_canonical[n], fx,
                 enabled=enabled_shops, logger=app.logger,
+                timeouts_out=timeouts_out,
             ): n
             for n in names_to_search
         }
@@ -604,6 +644,8 @@ def decklist_search():
             shop_filter_config=shop_filter_cfg,
             shop_filter_active=shop_filter_active,
             use_inventory=use_inventory,
+            skipped_basics=0,
+            timed_out_shops=[],
         )
 
     card_items = _parse_decklist(text)
@@ -613,10 +655,19 @@ def decklist_search():
             reason="parse_empty",
         )
 
+    card_items, skipped_basics = _strip_basic_lands(card_items)
+    if not card_items:
+        return _early_return(
+            "Decklist contains only basic lands, which aren't searched. "
+            "Add non-basic cards and try again.",
+            reason="only_basics",
+        )
+
     total_cards = sum(qty for qty, _ in card_items)
     if total_cards > MAX_DECKLIST_CARDS:
         return _early_return(
-            f"Decklist is {total_cards} cards — the limit is {MAX_DECKLIST_CARDS}. "
+            f"Decklist is {total_cards} cards (after excluding basic lands) — "
+            f"the limit is {MAX_DECKLIST_CARDS}. "
             "Trim it or split into multiple searches.",
             reason="too_large",
         )
@@ -631,8 +682,12 @@ def decklist_search():
     if fx is None and names_to_search:
         return _early_return("Could not fetch FX rate; try again later.", reason="fx_unavailable")
 
+    timed_out_shops: set[str] = set()
     prices_by_name = (
-        _fetch_decklist_prices(names_to_search, name_canonical, fx, enabled_shops)
+        _fetch_decklist_prices(
+            names_to_search, name_canonical, fx, enabled_shops,
+            timeouts_out=timed_out_shops,
+        )
         if fx is not None else {n: [] for n in names_to_search}
     )
     # Names without unmet need still need an empty entry for the template.
@@ -643,13 +698,16 @@ def decklist_search():
     shop_list, totals = _compute_shop_totals(card_rows, shipping_overrides_jpy, fx)
 
     rows_with_match = sum(1 for r in card_rows if r["best"] is not None)
+    timed_out_sorted = sorted(timed_out_shops)
     app.logger.info(
         "event=decklist_search status=ok size=%d distinct_names=%d "
         "names_searched=%d inventory_hits=%d shops_enabled=%s use_inventory=%d "
-        "rows_with_match=%d duration_ms=%d",
+        "rows_with_match=%d skipped_basics=%d timed_out_shops=%s duration_ms=%d",
         total_cards, len(name_qty), len(names_to_search), inventory_hits,
         len(enabled_shops) if enabled_shops is not None else "all",
-        int(use_inventory), rows_with_match, int((monotonic() - t0) * 1000),
+        int(use_inventory), rows_with_match, skipped_basics,
+        ",".join(timed_out_sorted) or "none",
+        int((monotonic() - t0) * 1000),
     )
 
     return render_template(
@@ -665,6 +723,8 @@ def decklist_search():
         active="search",
         error=None,
         use_inventory=use_inventory,
+        skipped_basics=skipped_basics,
+        timed_out_shops=timed_out_sorted,
         **totals,
     )
 

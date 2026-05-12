@@ -15,12 +15,14 @@ from __future__ import annotations
 import socket
 import threading
 from collections.abc import Callable
+from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import create_engine, text
 from werkzeug.serving import make_server
 
 import mtgcompare.db as db_module
+import mtgcompare.web as web_module
 from mtgcompare import inventory as inv
 from mtgcompare.web import app as flask_app
 
@@ -67,10 +69,15 @@ def e2e_base_url(tmp_path_factory) -> str:
 
 @pytest.fixture()
 def clean_inventory(e2e_base_url):
-    """Truncate inventory before each test. Depends on the server fixture
-    only to ensure the schema is initialised."""
+    """Reset all per-user state before each test: inventory + market_prices.
+
+    Also clears the in-process market computation cache so the next /market
+    request rebuilds from the fresh DB rows.
+    """
     with db_module.get_conn() as conn:
         conn.execute(text("DELETE FROM inventory"))
+        conn.execute(text("DELETE FROM market_prices"))
+    web_module.market_cache_clear()
     yield
 
 
@@ -97,6 +104,55 @@ def seed_inventory(clean_inventory) -> Callable[[int], int]:
             })
         return count
     return _seed
+
+
+@pytest.fixture()
+def seed_market_data(clean_inventory, monkeypatch):
+    """Seed N inventory rows AND matching market_prices rows so the /market
+    page enters the `has_cache=True` branch (which renders the chart-trigger
+    JS and the modal).
+
+    Also pins _get_fx() to a constant so the page doesn't depend on Yahoo
+    Finance reachability.
+    """
+    monkeypatch.setattr(web_module, "_fx", 150.0)
+    monkeypatch.setattr(web_module, "_get_fx", lambda: 150.0)
+
+    def _seed(count: int = 1) -> int:
+        now_iso = datetime.now(UTC).isoformat(timespec="seconds")
+        for i in range(count):
+            inv.add_one({
+                "card_name":    f"Card {i:03d}",
+                "set_code":     "TST",
+                "set_name":     "Test Set",
+                "card_number":  str(i),
+                "quantity":     1,
+                "condition":    "NM",
+                "printing":     "Normal",
+                "language":     "English",
+                "price_bought": 1.00,
+                "date_bought":  "2026-01-01",
+            })
+        rows = [
+            {
+                "card_name":  f"Card {i:03d}",
+                "set_code":   "TST",
+                "is_foil":    0,
+                "price_usd":  2.50,
+                "fetched_at": now_iso,
+            }
+            for i in range(count)
+        ]
+        with db_module.get_conn() as conn:
+            db_module.upsert(
+                conn, "market_prices",
+                ["card_name", "set_code", "is_foil"],
+                rows,
+            )
+        web_module.market_cache_clear()
+        return count
+    yield _seed
+    web_module.market_cache_clear()
 
 
 # Playwright's default `browser_context_args` ignores HTTPS errors and sets

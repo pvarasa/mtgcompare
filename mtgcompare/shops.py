@@ -1,7 +1,7 @@
 import os
 import re
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, wait
 
 from .cache import DEFAULT_TTL, CachedScrapper
 from .scrapper import MtgScrapper
@@ -63,6 +63,16 @@ def shop_slug(name: str) -> str:
 
 CACHE_ENABLED = os.environ.get("MTGCOMPARE_CACHE_ENABLED", "1") not in ("0", "false", "False")
 
+# Per-shop wall-clock cap (seconds) for a single card query. Slow shops
+# would otherwise pin the per-card fan-out at their tail latency, and a
+# few bad apples (SingleStar, Cardshop Serra) routinely take 20–30s,
+# which compounds across a 100-card decklist and trips upstream
+# (Cloudflare) 524 timeouts. When a shop exceeds this, its results are
+# dropped for this query; the late thread is left to finish in the
+# background — if its result lands, the cache layer captures it so the
+# next request for the same card is a fast hit.
+SHOP_QUERY_TIMEOUT_S = float(os.environ.get("MTGCOMPARE_SHOP_QUERY_TIMEOUT_S", "30"))
+
 
 def build_scrapers(fx: float, enabled: set[str] | None = None) -> list:
     """Construct the configured scrapers, optionally filtered to ``enabled``.
@@ -87,6 +97,7 @@ def collect_prices(
     *,
     enabled: set[str] | None = None,
     logger=None,
+    timeouts_out: set[str] | None = None,
 ) -> list[dict]:
     """Fetch and concatenate all shop results for a single card.
 
@@ -94,14 +105,21 @@ def collect_prices(
     not the sum. Per-scraper exceptions are isolated so one failing shop
     doesn't drop results from the rest. If ``enabled`` is provided, only
     shops whose display name is in the set are scraped.
+
+    ``timeouts_out`` is an optional mutable set the caller can supply to
+    learn which shops exceeded ``SHOP_QUERY_TIMEOUT_S`` on this call —
+    display names are added in-place. Useful for surfacing partial-result
+    warnings in the UI.
     """
     scrapers = build_scrapers(fx, enabled=enabled)
     results: list[dict] = []
     if not scrapers:
         return results
-    with ThreadPoolExecutor(max_workers=len(scrapers)) as ex:
+    ex = ThreadPoolExecutor(max_workers=len(scrapers))
+    try:
         futures = {ex.submit(s.get_prices, card_name): s for s in scrapers}
-        for fut in as_completed(futures):
+        done, not_done = wait(futures, timeout=SHOP_QUERY_TIMEOUT_S)
+        for fut in done:
             scraper = futures[fut]
             try:
                 results.extend(fut.result())
@@ -113,4 +131,20 @@ def collect_prices(
                         card_name,
                         exc,
                     )
+        for fut in not_done:
+            scraper = futures[fut]
+            fut.cancel()
+            shop_label = getattr(scraper, "shop_name", scraper.__class__.__name__)
+            if timeouts_out is not None:
+                timeouts_out.add(shop_label)
+            if logger is not None:
+                logger.warning(
+                    "event=shop_query_timeout shop=%s card=%r timeout_s=%.1f",
+                    shop_label, card_name, SHOP_QUERY_TIMEOUT_S,
+                )
+    finally:
+        # Don't block the caller on stragglers — their threads finish in
+        # the background; the cache write at the end of get_prices still
+        # benefits the next request.
+        ex.shutdown(wait=False, cancel_futures=True)
     return results

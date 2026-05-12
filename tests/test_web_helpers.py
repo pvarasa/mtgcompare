@@ -101,6 +101,74 @@ def test_decklist_search_accepts_at_cap():
         web._get_fx = original
 
 
+def test_is_basic_land_recognizes_all_basics_case_insensitive():
+    for name in [
+        "Plains", "ISLAND", "swamp", "Mountain", "Forest", "Wastes",
+        "Snow-Covered Plains", "snow-covered forest",
+        "  Forest  ",
+    ]:
+        assert web._is_basic_land(name), name
+
+
+def test_is_basic_land_rejects_non_basics():
+    for name in [
+        "Sol Ring", "Misty Rainforest", "Wooded Foothills",
+        "Cavern of Souls", "Snow-Covered Wastes",  # not a real card
+        "Plainsrider",
+    ]:
+        assert not web._is_basic_land(name), name
+
+
+def test_strip_basic_lands_counts_skipped_copies():
+    items = [
+        (4, "Sol Ring"),
+        (10, "Forest"),
+        (2, "Lightning Bolt"),
+        (5, "Snow-Covered Island"),
+    ]
+    kept, skipped = web._strip_basic_lands(items)
+    assert kept == [(4, "Sol Ring"), (2, "Lightning Bolt")]
+    assert skipped == 15
+
+
+def test_strip_basic_lands_no_basics_is_passthrough():
+    items = [(4, "Sol Ring"), (1, "Force of Will")]
+    kept, skipped = web._strip_basic_lands(items)
+    assert kept == items
+    assert skipped == 0
+
+
+def test_decklist_search_rejects_only_basics():
+    """A list of pure basic lands should short-circuit with an explanatory
+    error — basics are excluded from the search fan-out."""
+    web.app.config["WTF_CSRF_ENABLED"] = False
+    body = "10 Forest\n5 Island\n3 Snow-Covered Plains\n"
+    with web.app.test_client() as client:
+        resp = client.post("/decklist", data={"decklist": body})
+    assert resp.status_code == 200
+    page = resp.data.decode()
+    assert "only basic lands" in page.lower()
+
+
+def test_decklist_search_oversize_check_runs_after_basics_stripped():
+    """A 99-non-basic + 50-basic list (149 total) should be accepted —
+    basics are stripped before the MAX_DECKLIST_CARDS check fires."""
+    web.app.config["WTF_CSRF_ENABLED"] = False
+    body = f"{web.MAX_DECKLIST_CARDS} Sol Ring\n50 Forest\n"
+    original = web._get_fx
+    web._get_fx = lambda: None  # short-circuit before scraping
+    try:
+        with web.app.test_client() as client:
+            resp = client.post("/decklist", data={"decklist": body})
+        assert resp.status_code == 200
+        page = resp.data.decode()
+        assert "limit is 100" not in page
+
+
+    finally:
+        web._get_fx = original
+
+
 def test_parse_decklist_skips_headers_and_comments():
     text = """
     // comment

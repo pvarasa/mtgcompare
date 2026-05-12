@@ -5,6 +5,16 @@
   .dl-meta { color: var(--muted); font-size: .9rem; margin-bottom: 1.2rem; }
   .dl-meta strong { color: var(--fg); font-weight: 600; }
   .dl-meta-note { font-size: .82em; color: var(--muted); }
+  .dl-timeout-warning {
+    background: var(--bg-alt);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--gold);
+    padding: .6rem .9rem;
+    margin-bottom: 1rem;
+    font-size: .88rem;
+    border-radius: 4px;
+  }
+  .dl-timeout-warning strong { color: var(--fg); }
 
   .dl-shops {
     display: flex;
@@ -144,6 +154,17 @@
   {% if error %}
     <div class="error">{{ error }}</div>
   {% else %}
+    {% if timed_out_shops %}
+      <div class="dl-timeout-warning">
+        <strong>Partial results:</strong>
+        {{ timed_out_shops|length }} shop{{ 's' if timed_out_shops|length != 1 else '' }}
+        timed out on at least one card —
+        {% for shop in timed_out_shops -%}
+          {{ shop_flags.get(shop, '') }} {{ shop }}{{ ', ' if not loop.last else '' }}
+        {%- endfor %}.
+        Re-run to retry.
+      </div>
+    {% endif %}
     {% set covered_rows  = card_rows | selectattr("qty_needed", "equalto", 0) | list %}
     {% set shop_found    = card_rows | selectattr("best") | list %}
     {# missing = needs buying but no shop result found; excludes inventory-covered cards #}
@@ -168,6 +189,9 @@
       {{ sourced_count }} of {{ card_rows|length }} card{{ 's' if card_rows|length != 1 else '' }} sourced
       {% if use_inventory and covered_rows %}
         &middot; <span style="color:#4db87a">{{ covered_rows|length }} in inventory</span>
+      {% endif %}
+      {% if skipped_basics %}
+        &middot; <span class="dl-meta-note">{{ skipped_basics }} basic land{{ 's' if skipped_basics != 1 else '' }} excluded</span>
       {% endif %}
       {% if fx %} &middot; FX ¥{{ '%.2f'|format(fx) }} per $1{% endif %}
     </p>
