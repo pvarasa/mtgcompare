@@ -280,12 +280,9 @@ def page_with_aggregates(
     """Return (page_rows, matched_aggregates, unfiltered_stats) in 2 queries
     on a single connection.
 
-    Replaces the four-call dance of `count_matching` + `list_paginated`
-    + `aggregate_inventory` + `stats` that /inventory used to issue per
-    request. The aggregate CTE computes both filtered and unfiltered
-    sums in one round-trip; the page is a separate paginated SELECT but
-    on the same connection, so total wire cost is two server round-trips
-    instead of four.
+    The aggregate CTE computes both filtered and unfiltered sums in one
+    round-trip; the page is a separate paginated SELECT on the same
+    connection, so total wire cost is two server round-trips.
     """
     where_sql, binds = _user_where(user_id, q=q,
                                    price_mode=price_mode, price_value=price_value)
@@ -367,50 +364,6 @@ def list_paginated(
             binds,
         ).mappings().all()
     return [row_to_dict(r) for r in rows]
-
-
-def count_matching(
-    user_id: str,
-    *,
-    q: str | None = None,
-    price_mode: str | None = None,
-    price_value: float | None = None,
-) -> int:
-    """Count inventory rows for the user that match the same filters as list_paginated."""
-    where_sql, binds = _user_where(user_id, q=q,
-                                   price_mode=price_mode, price_value=price_value)
-    with get_conn() as conn:
-        row = conn.execute(
-            text(f"SELECT count(*) FROM inventory WHERE {where_sql}"),  # noqa: S608
-            binds,
-        ).scalar()
-    return int(row or 0)
-
-
-def aggregate_inventory(
-    user_id: str,
-    *,
-    q: str | None = None,
-    price_mode: str | None = None,
-    price_value: float | None = None,
-) -> dict:
-    """Aggregate stats for the rows matching the filter (NOT just the current page)."""
-    where_sql, binds = _user_where(user_id, q=q,
-                                   price_mode=price_mode, price_value=price_value)
-    with get_conn() as conn:
-        row = conn.execute(
-            text("SELECT COUNT(*) AS printings, "  # noqa: S608
-                 "COALESCE(SUM(quantity), 0) AS total_copies, "
-                 "COALESCE(SUM(quantity * COALESCE(price_bought, 0)), 0.0) AS total_cost "
-                 f"FROM inventory WHERE {where_sql}"),
-            binds,
-        ).mappings().first()
-    row = row_to_dict(row)
-    return {
-        "printings":    int(row["printings"]),
-        "total_copies": int(row["total_copies"]),
-        "total_cost":   round(float(row["total_cost"]), 2),
-    }
 
 
 def delete_matching(

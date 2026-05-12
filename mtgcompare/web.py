@@ -761,16 +761,6 @@ def _history_cutoff(period: str, *, now: datetime | None = None) -> datetime | N
     return anchor - timedelta(days=days)
 
 
-def _slice_history(points: list[dict], period: str, *, now: datetime | None = None) -> list[dict]:
-    cutoff = _history_cutoff(period, now=now)
-    if cutoff is None:
-        return points
-    return [
-        point for point in points
-        if datetime.fromisoformat(point["fetched_at"].replace("Z", "+00:00")) >= cutoff
-    ]
-
-
 def _mtgjson_cache_dir() -> Path:
     if db.IS_POSTGRES:
         # Linux containers only; overridable via env var. CLAUDE.md documents the default.
@@ -1743,9 +1733,7 @@ def inventory():
         default_sort="card_name", default_dir="asc",
     )
 
-    # Single round-trip for page rows + filtered aggregates + unfiltered
-    # stats. Previously this was 4 separate queries (count_matching,
-    # list_paginated, aggregate_inventory, stats).
+    # Two server round-trips: aggregate CTE + paginated page query.
     rows, matched, stats = inv.page_with_aggregates(
         user_id,
         q=params["q"] or None,

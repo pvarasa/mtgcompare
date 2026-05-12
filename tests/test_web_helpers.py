@@ -276,18 +276,6 @@ def test_history_cutoff_for_known_period():
     assert web._history_cutoff("all", now=now) is None
 
 
-def test_slice_history_filters_by_period():
-    now = datetime(2026, 4, 22, tzinfo=UTC)
-    points = [
-        {"price_usd": 2.0, "fetched_at": "2026-03-01T00:00:00+00:00"},
-        {"price_usd": 3.0, "fetched_at": "2026-03-25T00:00:00+00:00"},
-        {"price_usd": 4.0, "fetched_at": "2026-04-20T00:00:00+00:00"},
-    ]
-
-    assert web._slice_history(points, "1m", now=now) == points[1:]
-    assert web._slice_history(points, "all", now=now) == points
-
-
 def test_densify_daily_points_fills_gaps():
     points = {
         "2026-04-20": 3.0,
