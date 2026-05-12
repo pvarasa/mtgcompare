@@ -27,8 +27,11 @@ EXPOSE 5000
 
 USER mtgc
 
-# Two workers so a long decklist search saturating one worker leaves the
-# other free for /healthz and other UI traffic. --timeout=120 covers the
-# realistic worst-case decklist (76s measured for a 32-card cold search);
-# the gunicorn default of 30s would silently kill those requests.
-CMD ["gunicorn", "--workers=2", "--threads=4", "--timeout=120", "--bind=0.0.0.0:5000", "--access-logfile=-", "--error-logfile=-", "mtgcompare.web:app"]
+# Four workers / eight threads each = up to 32 concurrent requests per
+# pod. The work is I/O-bound (parallel shop scrapes), so we trade more
+# RAM for substantially higher concurrent-search capacity. The pod's
+# CPU limit is sized accordingly in the k8s deployment.
+# --timeout=120 covers the realistic worst-case decklist (cold-cache
+# 100-card searches measured ~90s post-timeout-hardening); the
+# gunicorn default of 30s would silently kill those requests.
+CMD ["gunicorn", "--workers=4", "--threads=8", "--timeout=120", "--bind=0.0.0.0:5000", "--access-logfile=-", "--error-logfile=-", "mtgcompare.web:app"]
