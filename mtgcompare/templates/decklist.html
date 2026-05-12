@@ -153,6 +153,45 @@
 
   {% if error %}
     <div class="error">{{ error }}</div>
+  {% elif streaming_job_id %}
+    {# Streaming skeleton — `decklist-stream.js` fills these in as
+       the SSE EventSource at /decklist/jobs/<id>/stream emits events.
+       Containers stay empty until the first matching event arrives,
+       so the page doesn't flash partial state before the meta event. #}
+    <div id="dl-stream-root"
+         data-job-id="{{ streaming_job_id }}"
+         data-use-inventory="{{ '1' if use_inventory else '0' }}"
+         data-shop-flags='{{ shop_flags | tojson }}'></div>
+
+    <div id="dl-stream-timeout-warning"></div>
+    <p id="dl-stream-meta" class="dl-meta">
+      <span id="dl-stream-spinner" class="spinner" aria-hidden="true"></span>
+      Searching shops…
+    </p>
+    <div id="dl-stream-shops" class="dl-shops"></div>
+
+    <div class="table-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>Card</th>
+          <th class="num">Qty</th>
+          {% if use_inventory %}
+            <th class="num">Have</th>
+            <th class="num">Need</th>
+          {% endif %}
+          <th>Best shop</th>
+          <th>Set</th>
+          <th class="num">Unit ¥</th>
+          <th class="num">Total ¥</th>
+          <th class="num">USD</th>
+          <th>Cond.</th>
+          <th>Link</th>
+        </tr>
+      </thead>
+      <tbody id="dl-stream-tbody"></tbody>
+    </table>
+    </div>
   {% else %}
     {% if timed_out_shops %}
       <div class="dl-timeout-warning">
@@ -237,50 +276,7 @@
         </thead>
         <tbody>
           {% for row in card_rows %}
-            {% if row.qty_needed == 0 %}
-              <tr class="inv-covered">
-                <td>{{ row.name }}</td>
-                <td class="num">{{ row.qty }}</td>
-                {% if use_inventory %}
-                  <td class="num inv-have">{{ row.qty_inventory }}</td>
-                  <td class="num">0</td>
-                {% endif %}
-                <td colspan="7"><span class="inv-covered-badge">✓ in inventory</span></td>
-              </tr>
-            {% elif row.best %}
-              <tr>
-                <td>{{ card_icon(row.name, row.best.set) }}{{ row.name }}</td>
-                <td class="num">{{ row.qty }}</td>
-                {% if use_inventory %}
-                  <td class="num {% if row.qty_inventory > 0 %}inv-have{% endif %}">
-                    {{ row.qty_inventory if row.qty_inventory > 0 else '—' }}
-                  </td>
-                  <td class="num">{{ row.qty_needed }}</td>
-                {% endif %}
-                <td>
-                  <span class="flag">{{ shop_flags.get(row.best.shop, '') }}</span>
-                  {{ row.best.shop }}
-                </td>
-                <td>{{ row.best.set }}</td>
-                <td class="num">¥{{ '{:,.0f}'.format(row.best.price_jpy) }}</td>
-                <td class="num">¥{{ '{:,.0f}'.format(row.best.price_jpy * row.qty_needed) }}</td>
-                <td class="num">${{ '%.2f'|format(row.best.price_usd * row.qty_needed) }}</td>
-                <td>{{ row.best.condition }}</td>
-                <td><a href="{{ row.best.link }}" target="_blank" rel="noopener noreferrer">open</a></td>
-              </tr>
-            {% else %}
-              <tr class="not-found">
-                <td>{{ row.name }}</td>
-                <td class="num">{{ row.qty }}</td>
-                {% if use_inventory %}
-                  <td class="num {% if row.qty_inventory > 0 %}inv-have{% endif %}">
-                    {{ row.qty_inventory if row.qty_inventory > 0 else '—' }}
-                  </td>
-                  <td class="num">{{ row.qty_needed }}</td>
-                {% endif %}
-                <td colspan="7">not found</td>
-              </tr>
-            {% endif %}
+            {% include "_decklist_row.html" %}
           {% endfor %}
         </tbody>
       </table>
@@ -329,4 +325,7 @@
     </form>
   </div>
 
+  {% if streaming_job_id %}
+    <script src="{{ url_for('static', filename='decklist-stream.js') }}" defer></script>
+  {% endif %}
 {% endblock %}

@@ -10,12 +10,15 @@ import lzma
 import math
 import os
 import re
+import secrets
 import tempfile
-from collections.abc import Callable
+import time
+from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from threading import Lock, Thread
+from threading import Event, Lock, Thread
 from time import monotonic
 from uuid import uuid4
 
@@ -25,6 +28,7 @@ import requests
 from cachetools import TTLCache
 from flask import (
     Flask,
+    Response,
     abort,
     flash,
     g,
@@ -32,6 +36,7 @@ from flask import (
     redirect,
     render_template,
     request,
+    stream_with_context,
     url_for,
 )
 from flask.json.provider import JSONProvider
@@ -473,23 +478,29 @@ def _consolidate_decklist(
     return name_qty, name_canonical
 
 
-def _fetch_decklist_prices(
+def _iter_decklist_prices(
     names_to_search: list[str],
     name_canonical: dict[str, str],
     fx: float,
     enabled_shops: set[str] | None,
     timeouts_out: set[str] | None = None,
-) -> dict[str, list[dict]]:
-    """Fan out one shop search per distinct name and collect price rows.
+) -> Iterator[tuple[str, list[dict]]]:
+    """Stream per-card price results as each shop fan-out completes.
 
-    Returns a mapping ``{lower_name: sorted_rows}``. Per-name failures are
-    logged and produce an empty list rather than aborting the whole batch.
-    If ``timeouts_out`` is given, the union of shops that hit the per-shop
-    timeout across all names is added to it (one set, mutated in place).
+    Yields ``(lower_name, sorted_rows)`` one tuple per distinct name in
+    ``names_to_search``, in completion order (which is roughly fastest
+    cards first). Per-name failures are logged and produce a single
+    ``(name, [])`` yield rather than aborting the whole batch. If
+    ``timeouts_out`` is given, the union of shops that hit the per-shop
+    timeout across all names is added to it in place — usable as a
+    live "partial results" signal during streaming.
+
+    Powers both the synchronous ``_fetch_decklist_prices`` (which
+    materializes the whole dict) and the SSE-streamed /decklist/jobs
+    endpoint (which emits a ``row`` event per yield).
     """
-    prices_by_name: dict[str, list[dict]] = {n: [] for n in names_to_search}
     if not names_to_search:
-        return prices_by_name
+        return
     shops_count = len(enabled_shops) if enabled_shops is not None else "all"
     workers = min(len(names_to_search), DECKLIST_FAN_OUT_WORKERS)
     with ThreadPoolExecutor(max_workers=workers) as executor:
@@ -504,15 +515,65 @@ def _fetch_decklist_prices(
         for future in as_completed(future_to_name):
             n = future_to_name[future]
             try:
-                prices_by_name[n] = future.result()
+                rows = future.result()
             except Exception as exc:
                 app.logger.error(
                     "event=price_fetch_failed card=%r decklist_size=%d shops_enabled=%s detail=%s",
                     name_canonical[n], len(names_to_search), shops_count, exc,
                 )
-    for n in names_to_search:
-        prices_by_name[n].sort(key=lambda r: r["price_jpy"])
+                rows = []
+            rows.sort(key=lambda r: r["price_jpy"])
+            yield n, rows
+
+
+def _fetch_decklist_prices(
+    names_to_search: list[str],
+    name_canonical: dict[str, str],
+    fx: float,
+    enabled_shops: set[str] | None,
+    timeouts_out: set[str] | None = None,
+) -> dict[str, list[dict]]:
+    """Fan out one shop search per distinct name and collect price rows.
+
+    Backwards-compatible dict-returning wrapper around
+    ``_iter_decklist_prices``. Returns a mapping ``{lower_name: sorted_rows}``;
+    names with no matches still appear with an empty list. Per-name
+    failures are logged and produce an empty list rather than aborting
+    the whole batch. If ``timeouts_out`` is given, the union of shops
+    that hit the per-shop timeout across all names is added to it
+    (one set, mutated in place).
+    """
+    prices_by_name: dict[str, list[dict]] = {n: [] for n in names_to_search}
+    for n, rows in _iter_decklist_prices(
+        names_to_search, name_canonical, fx, enabled_shops, timeouts_out,
+    ):
+        prices_by_name[n] = rows
     return prices_by_name
+
+
+def _build_one_card_row(
+    n: str,
+    name_qty: dict[str, int],
+    name_canonical: dict[str, str],
+    name_inv_qty: dict[str, int],
+    name_needed: dict[str, int],
+    results: list[dict],
+) -> dict:
+    """Project a single name's state into the row shape the template expects.
+
+    Shared by the synchronous handler (which builds the full ``card_rows``
+    list at once) and the streaming handler (which emits one row event
+    per name as the fan-out resolves).
+    """
+    qty_needed = name_needed[n]
+    return {
+        "name": name_canonical[n],
+        "qty": name_qty[n],
+        "qty_inventory": name_inv_qty[n],
+        "qty_needed": qty_needed,
+        "best": results[0] if (results and qty_needed > 0) else None,
+        "all": results,
+    }
 
 
 def _build_card_rows(
@@ -523,19 +584,13 @@ def _build_card_rows(
     prices_by_name: dict[str, list[dict]],
 ) -> list[dict]:
     """Project the per-name state into the row shape the template expects."""
-    rows = []
-    for n in sorted(name_qty, key=lambda x: name_canonical[x].lower()):
-        results = prices_by_name.get(n, [])
-        qty_needed = name_needed[n]
-        rows.append({
-            "name": name_canonical[n],
-            "qty": name_qty[n],
-            "qty_inventory": name_inv_qty[n],
-            "qty_needed": qty_needed,
-            "best": results[0] if (results and qty_needed > 0) else None,
-            "all": results,
-        })
-    return rows
+    return [
+        _build_one_card_row(
+            n, name_qty, name_canonical, name_inv_qty, name_needed,
+            prices_by_name.get(n, []),
+        )
+        for n in sorted(name_qty, key=lambda x: name_canonical[x].lower())
+    ]
 
 
 def _compute_shop_totals(
@@ -612,16 +667,118 @@ def _load_inventory_qty_map(use_inventory: bool) -> dict[str, int]:
     return inv_map
 
 
+@dataclass
+class _DecklistPrep:
+    """Validated + inventory-deducted + FX-resolved state for a search.
+
+    The output of ``_prepare_decklist_search`` on the happy path. Both the
+    synchronous ``/decklist`` endpoint and the streaming ``/decklist/jobs``
+    flow consume one of these.
+    """
+    decklist_text: str
+    total_cards: int
+    skipped_basics: int
+    name_qty: dict[str, int]
+    name_canonical: dict[str, str]
+    name_inv_qty: dict[str, int]
+    name_needed: dict[str, int]
+    names_to_search: list[str]
+    inventory_hits: int
+    fx: float | None
+    enabled_shops: set[str] | None
+    shipping_overrides_jpy: dict[str, int]
+    use_inventory: bool
+
+
+@dataclass
+class _DecklistReject:
+    """A validation-stage rejection. Callers translate to either an error
+    page (sync endpoint) or a 400 JSON response (streaming endpoint)."""
+    reason: str
+    message: str
+
+
+def _prepare_decklist_search(form) -> _DecklistPrep | _DecklistReject:
+    """Parse / strip basics / consolidate / deduct inventory / fetch FX.
+
+    All pure logic — never touches Flask response context. Returns either
+    a fully-prepared ``_DecklistPrep`` or a ``_DecklistReject`` with the
+    same ``reason``/``message`` values the original handler emitted, so
+    log/dashboard parsers stay stable.
+    """
+    text = form.get("decklist", "").strip()
+    shipping_overrides_jpy = _parse_shipping_overrides(form)
+    use_inventory = form.get("use_inventory") == "1"
+    enabled_shops = _parse_enabled_shops(form)
+
+    card_items = _parse_decklist(text)
+    if not card_items:
+        return _DecklistReject(
+            reason="parse_empty",
+            message="No cards parsed. Use format: '1 Card Name' or '4x Card Name (SET)'",
+        )
+
+    card_items, skipped_basics = _strip_basic_lands(card_items)
+    if not card_items:
+        return _DecklistReject(
+            reason="only_basics",
+            message=(
+                "Decklist contains only basic lands, which aren't searched. "
+                "Add non-basic cards and try again."
+            ),
+        )
+
+    total_cards = sum(qty for qty, _ in card_items)
+    if total_cards > MAX_DECKLIST_CARDS:
+        return _DecklistReject(
+            reason="too_large",
+            message=(
+                f"Decklist is {total_cards} cards (after excluding basic lands) — "
+                f"the limit is {MAX_DECKLIST_CARDS}. "
+                "Trim it or split into multiple searches."
+            ),
+        )
+
+    name_qty, name_canonical = _consolidate_decklist(card_items)
+    inv_map = _load_inventory_qty_map(use_inventory)
+    name_inv_qty, name_needed = _deduct_inventory(name_qty, inv_map)
+    names_to_search = [n for n in name_qty if name_needed[n] > 0]
+    inventory_hits = sum(1 for n in name_qty if name_inv_qty[n] > 0)
+
+    fx = _get_fx()
+    if fx is None and names_to_search:
+        return _DecklistReject(
+            reason="fx_unavailable",
+            message="Could not fetch FX rate; try again later.",
+        )
+
+    return _DecklistPrep(
+        decklist_text=text,
+        total_cards=total_cards,
+        skipped_basics=skipped_basics,
+        name_qty=name_qty,
+        name_canonical=name_canonical,
+        name_inv_qty=name_inv_qty,
+        name_needed=name_needed,
+        names_to_search=names_to_search,
+        inventory_hits=inventory_hits,
+        fx=fx,
+        enabled_shops=enabled_shops,
+        shipping_overrides_jpy=shipping_overrides_jpy,
+        use_inventory=use_inventory,
+    )
+
+
 @app.route("/decklist", methods=["POST"])
 def decklist_search():
     t0 = monotonic()
-    text = request.form.get("decklist", "").strip()
     shipping_overrides_jpy = _parse_shipping_overrides(request.form)
     ship_cfg = _shipping_config(shipping_overrides_jpy)
     use_inventory = request.form.get("use_inventory") == "1"
     enabled_shops = _parse_enabled_shops(request.form)
     shop_filter_active = enabled_shops is not None
     shop_filter_cfg = _shop_filter_config(enabled_shops)
+    text_raw = request.form.get("decklist", "").strip()
 
     def _early_return(error_msg: str, fx_val=None, *, reason: str):
         app.logger.info(
@@ -633,7 +790,7 @@ def decklist_search():
         )
         return render_template(
             "decklist.html",
-            decklist=text,
+            decklist=text_raw,
             error=error_msg,
             card_rows=[], shop_list=[],
             grand_total_usd=0.0, grand_total_jpy=0.0,
@@ -648,39 +805,20 @@ def decklist_search():
             timed_out_shops=[],
         )
 
-    card_items = _parse_decklist(text)
-    if not card_items:
-        return _early_return(
-            "No cards parsed. Use format: '1 Card Name' or '4x Card Name (SET)'",
-            reason="parse_empty",
-        )
+    prep = _prepare_decklist_search(request.form)
+    if isinstance(prep, _DecklistReject):
+        return _early_return(prep.message, reason=prep.reason)
 
-    card_items, skipped_basics = _strip_basic_lands(card_items)
-    if not card_items:
-        return _early_return(
-            "Decklist contains only basic lands, which aren't searched. "
-            "Add non-basic cards and try again.",
-            reason="only_basics",
-        )
-
-    total_cards = sum(qty for qty, _ in card_items)
-    if total_cards > MAX_DECKLIST_CARDS:
-        return _early_return(
-            f"Decklist is {total_cards} cards (after excluding basic lands) — "
-            f"the limit is {MAX_DECKLIST_CARDS}. "
-            "Trim it or split into multiple searches.",
-            reason="too_large",
-        )
-
-    name_qty, name_canonical = _consolidate_decklist(card_items)
-    inv_map = _load_inventory_qty_map(use_inventory)
-    name_inv_qty, name_needed = _deduct_inventory(name_qty, inv_map)
-    names_to_search = [n for n in name_qty if name_needed[n] > 0]
-    inventory_hits = sum(1 for n in name_qty if name_inv_qty[n] > 0)
-
-    fx = _get_fx()
-    if fx is None and names_to_search:
-        return _early_return("Could not fetch FX rate; try again later.", reason="fx_unavailable")
+    text = prep.decklist_text
+    skipped_basics = prep.skipped_basics
+    total_cards = prep.total_cards
+    name_qty = prep.name_qty
+    name_canonical = prep.name_canonical
+    name_inv_qty = prep.name_inv_qty
+    name_needed = prep.name_needed
+    names_to_search = prep.names_to_search
+    inventory_hits = prep.inventory_hits
+    fx = prep.fx
 
     timed_out_shops: set[str] = set()
     prices_by_name = (
@@ -727,6 +865,344 @@ def decklist_search():
         timed_out_shops=timed_out_sorted,
         **totals,
     )
+
+
+# ---------------------------------------------------------------------------
+# Streaming /decklist via SSE
+#
+# The synchronous /decklist above renders the whole results page in one
+# Flask response, which sits behind Cloudflare's ~100 s edge timeout for
+# free/Pro/Business tunnels. Cold 100-card searches on rare cards can
+# legitimately exceed that, producing a 524 even when the backend would
+# eventually complete.
+#
+# The pair of endpoints below sidesteps that by:
+#   1. POST /decklist/jobs validates input synchronously and kicks off
+#      the search on a background daemon thread, returning {job_id} 202.
+#   2. GET  /decklist/jobs/<id>/stream opens a text/event-stream that
+#      emits typed events as the search progresses (meta → row* →
+#      shop_timeout* → totals* → done). The connection always has
+#      bytes flowing (events or 15 s keepalive pings), so CF doesn't 524.
+#
+# State lives in-process in ``_search_jobs`` — fine while replicas: 1.
+# If we ever scale out the user-facing pod, this becomes a Redis concern.
+# ---------------------------------------------------------------------------
+
+
+# Per-user cap on in-flight searches. The search workload is heavy
+# (memory + outbound HTTP fan-out); without this cap a user could
+# trigger an OOM by spamming POST /decklist/jobs.
+_MAX_JOBS_PER_USER = 3
+
+# How long to keep a finished job's events around for late stream
+# reconnects, before the cleanup thread evicts it.
+_JOB_TTL_S = 600.0
+
+
+@dataclass
+class _SearchJob:
+    """An in-flight or recently-finished decklist search.
+
+    The events list is the SSE write-ahead log; the streaming endpoint
+    walks it from cursor 0 and tails the new entries until the job
+    transitions to a terminal state.
+    """
+    id: str
+    user_id: str
+    prep: _DecklistPrep
+    state: str = "pending"  # pending | running | done | error
+    events: list[tuple[str, dict]] = field(default_factory=list)
+    cursor_event: Event = field(default_factory=Event)
+    created_at: float = field(default_factory=monotonic)
+    finished_at: float | None = None
+
+
+_search_jobs: dict[str, _SearchJob] = {}
+_jobs_lock = Lock()
+
+
+def _emit(job: _SearchJob, event_type: str, payload: dict) -> None:
+    """Append an SSE event to a job's log and wake stream readers.
+
+    Holding ``_jobs_lock`` while appending keeps the events list internally
+    consistent for concurrent stream readers. The ``cursor_event.set()``
+    wakes any reader blocked in ``_event_stream`` so it can flush the new
+    payload without polling.
+    """
+    with _jobs_lock:
+        job.events.append((event_type, payload))
+    job.cursor_event.set()
+
+
+def _event_stream(job: _SearchJob) -> Iterator[str]:
+    """SSE generator. Yields ``event:``/``data:`` blocks for each appended
+    event, plus a ``: keepalive`` comment every 15 s of silence to keep
+    Cloudflare and other intermediaries from idling the connection out.
+
+    Exits when the job transitions to ``done``/``error`` AND there's no
+    backlog of unread events left.
+    """
+    cursor = 0
+    while True:
+        with _jobs_lock:
+            new_events = list(job.events[cursor:])
+            cursor = len(job.events)
+            done = job.state in ("done", "error")
+        for evt_type, payload in new_events:
+            yield (
+                f"event: {evt_type}\n"
+                f"data: {orjson.dumps(payload).decode()}\n\n"
+            )
+        if done:
+            return
+        # Wait up to 15 s for a new event; emit a keepalive on timeout
+        # so the connection stays warm even during a stretch where every
+        # in-flight shop call is slow.
+        triggered = job.cursor_event.wait(timeout=15.0)
+        job.cursor_event.clear()
+        if not triggered:
+            yield ": keepalive\n\n"
+
+
+def _run_search_job(job: _SearchJob) -> None:
+    """Background-thread worker. Emits the SSE event stream for one job,
+    mirroring the synchronous /decklist behavior but as a chain of
+    incremental events instead of one final rendered page."""
+    t0 = monotonic()
+    p = job.prep
+    job.state = "running"
+    try:
+        _emit(job, "meta", {
+            "total_cards": p.total_cards,
+            "skipped_basics": p.skipped_basics,
+            "distinct_names": len(p.name_qty),
+            "inventory_hits": p.inventory_hits,
+            "names_to_search": len(p.names_to_search),
+            "use_inventory": p.use_inventory,
+            "fx": p.fx,
+            "shop_filter_active": p.enabled_shops is not None,
+        })
+
+        # Track per-name results incrementally so we can build running
+        # totals after each row.
+        prices_by_name: dict[str, list[dict]] = {n: [] for n in p.name_qty}
+        timed_out: set[str] = set()
+        timed_out_emitted: set[str] = set()
+        last_totals_emit = 0.0
+
+        if p.fx is not None:
+            for n, rows in _iter_decklist_prices(
+                p.names_to_search, p.name_canonical, p.fx, p.enabled_shops,
+                timeouts_out=timed_out,
+            ):
+                prices_by_name[n] = rows
+
+                row = _build_one_card_row(
+                    n, p.name_qty, p.name_canonical,
+                    p.name_inv_qty, p.name_needed, rows,
+                )
+                # Pre-render the <tr> server-side so the client can just
+                # innerHTML-append. We can't call ``render_template`` from
+                # the worker thread (no Flask app context), but the Jinja
+                # env is process-global and thread-safe to read from —
+                # template loading + render takes no Flask state.
+                row_html = app.jinja_env.get_template(
+                    "_decklist_row.html"
+                ).render(
+                    row=row,
+                    use_inventory=p.use_inventory,
+                    shop_flags=SHOP_FLAGS,
+                )
+                _emit(job, "row", {
+                    "key": n,
+                    "html": row_html,
+                    "qty_needed": row["qty_needed"],
+                    "has_best": row["best"] is not None,
+                })
+
+                # Surface newly-timed-out shops as soon as they're seen
+                # so the client's warning banner can populate live.
+                for shop in sorted(timed_out - timed_out_emitted):
+                    _emit(job, "shop_timeout", {"shop": shop})
+                    timed_out_emitted.add(shop)
+
+                # Debounce running totals to at most one emit per 500 ms;
+                # an explicit final emit happens below.
+                now = monotonic()
+                if now - last_totals_emit > 0.5:
+                    card_rows = _build_card_rows(
+                        p.name_qty, p.name_canonical, p.name_inv_qty,
+                        p.name_needed, prices_by_name,
+                    )
+                    shop_list, totals = _compute_shop_totals(
+                        card_rows, p.shipping_overrides_jpy, p.fx,
+                    )
+                    _emit(job, "totals", {"shop_list": shop_list, **totals})
+                    last_totals_emit = now
+
+        # Final totals + done.
+        card_rows = _build_card_rows(
+            p.name_qty, p.name_canonical, p.name_inv_qty,
+            p.name_needed, prices_by_name,
+        )
+        shop_list, totals = _compute_shop_totals(
+            card_rows, p.shipping_overrides_jpy, p.fx,
+        )
+        _emit(job, "totals", {"shop_list": shop_list, **totals})
+        rows_with_match = sum(1 for r in card_rows if r["best"] is not None)
+        duration_ms = int((monotonic() - t0) * 1000)
+        _emit(job, "done", {
+            "duration_ms": duration_ms,
+            "rows_with_match": rows_with_match,
+            "timed_out_shops": sorted(timed_out),
+        })
+        # Mirror the synchronous handler's success log so existing
+        # Grafana dashboards keep working unchanged. ``transport=sse``
+        # disambiguates the path.
+        app.logger.info(
+            "event=decklist_search status=ok size=%d distinct_names=%d "
+            "names_searched=%d inventory_hits=%d shops_enabled=%s use_inventory=%d "
+            "rows_with_match=%d skipped_basics=%d timed_out_shops=%s "
+            "transport=sse duration_ms=%d",
+            p.total_cards, len(p.name_qty), len(p.names_to_search), p.inventory_hits,
+            len(p.enabled_shops) if p.enabled_shops is not None else "all",
+            int(p.use_inventory), rows_with_match, p.skipped_basics,
+            ",".join(sorted(timed_out)) or "none",
+            duration_ms,
+        )
+        job.state = "done"
+    except Exception:
+        app.logger.exception("event=decklist_search_job_failed job_id=%s", job.id)
+        _emit(job, "error", {"message": "Internal error during search."})
+        job.state = "error"
+    finally:
+        job.finished_at = monotonic()
+        # One last wake so any waiting stream reader observes the
+        # terminal state and exits the generator.
+        job.cursor_event.set()
+
+
+@app.route("/decklist/jobs", methods=["POST"])
+def decklist_jobs_create():
+    """Kick off an SSE-streamed search. Validates synchronously, then
+    spawns a daemon thread to drive the fan-out. Returns 202 with
+    ``{job_id}`` on success, or 400 / 429 JSON on rejection."""
+    prep = _prepare_decklist_search(request.form)
+    if isinstance(prep, _DecklistReject):
+        return jsonify({"error": prep.message, "reason": prep.reason}), 400
+
+    user_id = _get_user_id()
+    with _jobs_lock:
+        active = sum(
+            1 for j in _search_jobs.values()
+            if j.user_id == user_id and j.state in ("pending", "running")
+        )
+        if active >= _MAX_JOBS_PER_USER:
+            return jsonify({
+                "error": (
+                    f"You already have {active} searches in flight. "
+                    "Wait for one to finish before starting another."
+                ),
+                "reason": "rate_limited",
+            }), 429
+        # secrets.token_urlsafe(16) → 22-char unguessable id; combined
+        # with the user-id check on stream open, this gives us
+        # bearer-token-like access control on the SSE endpoint.
+        job_id = secrets.token_urlsafe(16)
+        job = _SearchJob(id=job_id, user_id=user_id, prep=prep)
+        _search_jobs[job_id] = job
+    Thread(target=_run_search_job, args=(job,), daemon=True).start()
+    return jsonify({"job_id": job_id}), 202
+
+
+@app.route("/decklist/jobs/<job_id>", methods=["GET"])
+def decklist_jobs_view(job_id):
+    """Skeleton page that the JS submit handler navigates to after
+    POSTing to ``/decklist/jobs``. Renders decklist.html with the same
+    layout but no card_rows / shop_list / totals — the embedded
+    ``decklist-stream.js`` opens an EventSource on the matching
+    ``/stream`` endpoint and fills the page as events arrive.
+
+    A user landing here for a job they don't own (or that has been
+    cleaned up) gets the search form back with an explanatory error
+    rather than a 404 — refreshing after a search finished a while ago
+    is a believable user mistake."""
+    user_id = _get_user_id()
+    with _jobs_lock:
+        job = _search_jobs.get(job_id)
+    streamable = job is not None and job.user_id == user_id
+    return render_template(
+        "decklist.html",
+        decklist=job.prep.decklist_text if streamable else "",
+        streaming_job_id=job_id if streamable else None,
+        # Empty everything else — the JS handler populates as events
+        # arrive. ``error`` doubles as the "expired/unknown job" message.
+        error=None if streamable else (
+            "That search isn't available — it may have finished and expired. "
+            "Submit your decklist again."
+        ),
+        card_rows=[], shop_list=[],
+        grand_total_usd=0.0, grand_total_jpy=0.0,
+        grand_total_usd_with_shipping=0.0, grand_total_jpy_with_shipping=0.0,
+        shipping_total_jpy=0,
+        fx=job.prep.fx if streamable else None,
+        shop_flags=SHOP_FLAGS,
+        shipping_config=_shipping_config(job.prep.shipping_overrides_jpy if streamable else {}),
+        active="search",
+        shop_filter_config=_shop_filter_config(job.prep.enabled_shops if streamable else None),
+        shop_filter_active=streamable and job.prep.enabled_shops is not None,
+        use_inventory=streamable and job.prep.use_inventory,
+        skipped_basics=0,
+        timed_out_shops=[],
+    )
+
+
+@app.route("/decklist/jobs/<job_id>/stream")
+def decklist_jobs_stream(job_id):
+    """SSE stream of one job's events. Returns 404 if the job doesn't
+    exist or belongs to a different user — same response either way so
+    we don't leak job-id existence across users."""
+    user_id = _get_user_id()
+    with _jobs_lock:
+        job = _search_jobs.get(job_id)
+    if job is None or job.user_id != user_id:
+        abort(404)
+    return Response(
+        stream_with_context(_event_stream(job)),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            # Defence-in-depth in case any intermediate proxy is configured
+            # to buffer; nginx and cloudflared both honour this hint.
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+def _jobs_cleanup_loop() -> None:
+    """Daemon-thread sweeper: every 60 s, evict finished jobs older than
+    ``_JOB_TTL_S``. Survives transient exceptions so a single bad job
+    doesn't kill the sweeper."""
+    while True:
+        time.sleep(60)
+        try:
+            cutoff = monotonic() - _JOB_TTL_S
+            with _jobs_lock:
+                victims = [
+                    jid for jid, j in _search_jobs.items()
+                    if j.state in ("done", "error")
+                    and j.finished_at is not None
+                    and j.finished_at < cutoff
+                ]
+                for jid in victims:
+                    del _search_jobs[jid]
+        except Exception:
+            app.logger.exception("event=jobs_cleanup_failed")
+
+
+# Each gunicorn worker process spawns its own sweeper. Threads are
+# daemon=True so test runs (and worker process restarts) don't hang.
+Thread(target=_jobs_cleanup_loop, daemon=True, name="jobs-cleanup").start()
 
 
 def _format_ago(iso: str | None) -> str | None:

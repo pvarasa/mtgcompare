@@ -101,6 +101,229 @@ def test_decklist_search_accepts_at_cap():
         web._get_fx = original
 
 
+def test_iter_decklist_prices_yields_one_per_name(monkeypatch):
+    """The generator emits one tuple per requested name, even on failure,
+    and rows are sorted ascending by price_jpy."""
+    def fake_collect(name, fx, *, enabled, logger, timeouts_out):
+        # name here is the canonical form (e.g. "Boom"), not the lowercased key.
+        if name.lower() == "boom":
+            raise RuntimeError("simulated")
+        # Return descending so we can verify the sort.
+        return [
+            {"price_jpy": 300, "shop": "B", "card": name, "set": "X",
+             "price_usd": 2.0, "stock": 1, "condition": "NM", "link": ""},
+            {"price_jpy": 100, "shop": "A", "card": name, "set": "X",
+             "price_usd": 0.7, "stock": 1, "condition": "NM", "link": ""},
+        ]
+    monkeypatch.setattr(web, "collect_prices", fake_collect)
+
+    names = ["sol ring", "boom", "force of will"]
+    canonical = {n: n.title() for n in names}
+    out = dict(web._iter_decklist_prices(names, canonical, fx=150.0, enabled_shops=None))
+
+    assert set(out) == set(names)
+    # Failed name yields an empty list, not raises.
+    assert out["boom"] == []
+    # Successful names have rows sorted ascending by JPY.
+    for n in ("sol ring", "force of will"):
+        prices = [r["price_jpy"] for r in out[n]]
+        assert prices == sorted(prices)
+
+
+def test_iter_decklist_prices_empty_input_is_empty_iter(monkeypatch):
+    """Edge case — caller passed no names; generator yields nothing
+    and never spawns a thread pool."""
+    monkeypatch.setattr(web, "collect_prices",
+                        lambda *a, **kw: pytest.fail("should not be called"))
+    assert list(web._iter_decklist_prices([], {}, fx=150.0, enabled_shops=None)) == []
+
+
+def test_iter_decklist_prices_populates_timeouts_out(monkeypatch):
+    """Caller-supplied timeouts_out set is forwarded into collect_prices
+    so streaming consumers can build the live timeout-warning list."""
+    captured = []
+    def fake_collect(name, fx, *, enabled, logger, timeouts_out):
+        captured.append(timeouts_out)
+        if timeouts_out is not None:
+            timeouts_out.add("Slow Shop")
+        return []
+    monkeypatch.setattr(web, "collect_prices", fake_collect)
+
+    timeouts: set[str] = set()
+    list(web._iter_decklist_prices(
+        ["x"], {"x": "X"}, fx=150.0, enabled_shops=None, timeouts_out=timeouts,
+    ))
+    assert "Slow Shop" in timeouts
+    assert captured[0] is timeouts
+
+
+# ---------------------------------------------------------------------------
+# SSE /decklist/jobs flow
+# ---------------------------------------------------------------------------
+
+def _drain_sse(iter_encoded, timeout=10.0):
+    """Read SSE chunks until a ``done`` or ``error`` event arrives.
+
+    Returns the parsed event list. ``: keepalive`` comments are skipped.
+    Raises ``AssertionError`` if the stream closes without a terminal
+    event or the loop runs past ``timeout`` seconds.
+    """
+    import json as _json
+    import time as _time
+    deadline = _time.monotonic() + timeout
+    buf = b""
+    events: list[tuple[str, dict]] = []
+    for chunk in iter_encoded:
+        buf += chunk
+        # SSE events are separated by blank lines.
+        while b"\n\n" in buf:
+            block, buf = buf.split(b"\n\n", 1)
+            text = block.decode()
+            if text.startswith(":"):
+                continue  # keepalive comment
+            evt_type = ""
+            data = ""
+            for line in text.splitlines():
+                if line.startswith("event: "):
+                    evt_type = line[7:]
+                elif line.startswith("data: "):
+                    data = line[6:]
+            events.append((evt_type, _json.loads(data) if data else {}))
+            if evt_type in ("done", "error"):
+                return events
+        if _time.monotonic() > deadline:
+            raise AssertionError(f"SSE drain timed out; got {len(events)} events")
+    raise AssertionError(f"SSE stream closed without terminal event; got {events}")
+
+
+@pytest.fixture
+def _clean_search_jobs():
+    """Reset the in-process search-jobs store around each test."""
+    web._search_jobs.clear()
+    yield
+    web._search_jobs.clear()
+
+
+def test_decklist_jobs_happy_path_streams_meta_rows_totals_done(monkeypatch, _clean_search_jobs):
+    """End-to-end: POST creates a job, GET stream emits the expected
+    event sequence (meta → row × N → totals → done)."""
+    web.app.config["WTF_CSRF_ENABLED"] = False
+    monkeypatch.setattr(web, "_get_fx", lambda: 150.0)
+
+    def fake_collect(name, fx, *, enabled, logger, timeouts_out):
+        return [{
+            "shop": "Hareruya", "card": name, "set": "TST",
+            "price_jpy": 100.0, "price_usd": 0.67, "stock": 1,
+            "condition": "NM", "link": f"https://example.com/{name}",
+        }]
+    monkeypatch.setattr(web, "collect_prices", fake_collect)
+
+    with web.app.test_client() as client:
+        post = client.post("/decklist/jobs",
+                           data={"decklist": "1 Sol Ring\n1 Mana Drain"})
+        assert post.status_code == 202, post.data
+        job_id = post.get_json()["job_id"]
+        assert len(job_id) >= 20
+
+        resp = client.get(f"/decklist/jobs/{job_id}/stream", buffered=False)
+        assert resp.status_code == 200
+        assert resp.headers["Content-Type"].startswith("text/event-stream")
+        events = _drain_sse(resp.response, timeout=10.0)
+
+    types = [t for t, _ in events]
+    assert types[0] == "meta"
+    assert types.count("row") == 2
+    assert "totals" in types
+    assert types[-1] == "done"
+
+    # meta carries the inventory/basics breakdown the client paints first.
+    meta = next(d for t, d in events if t == "meta")
+    assert meta["distinct_names"] == 2
+    assert meta["names_to_search"] == 2
+
+    # Each row carries pre-rendered HTML + a key + a couple of summary
+    # flags. The HTML must contain the shop name (we know the fake
+    # collect_prices returned Hareruya).
+    for t, d in events:
+        if t == "row":
+            assert {"key", "html", "qty_needed", "has_best"} <= d.keys()
+            assert "Hareruya" in d["html"]
+            assert d["has_best"] is True
+
+
+def test_decklist_jobs_rejects_validation_failures_with_json_400(monkeypatch, _clean_search_jobs):
+    """An only-basics decklist gets a 400 + ``reason`` so the client can
+    show the same error message the synchronous handler shows, without
+    opening a stream that would only carry a single ``error`` event."""
+    web.app.config["WTF_CSRF_ENABLED"] = False
+    with web.app.test_client() as client:
+        resp = client.post("/decklist/jobs",
+                           data={"decklist": "10 Forest\n5 Island"})
+    assert resp.status_code == 400
+    body = resp.get_json()
+    assert body["reason"] == "only_basics"
+    assert "only basic lands" in body["error"].lower()
+
+
+def test_decklist_jobs_caps_per_user_with_429(monkeypatch, _clean_search_jobs):
+    """Pre-populating the jobs store with the per-user max forces the
+    next POST to 429 — the cap is the OOM guard from the earlier
+    analysis (~1 GB peak per concurrent search)."""
+    web.app.config["WTF_CSRF_ENABLED"] = False
+    monkeypatch.setattr(web, "_get_fx", lambda: 150.0)
+    monkeypatch.setattr(web, "collect_prices",
+                        lambda *a, **kw: [])
+    # Simulate _MAX_JOBS_PER_USER in-flight jobs for "local".
+    for i in range(web._MAX_JOBS_PER_USER):
+        web._search_jobs[f"sim-{i}"] = web._SearchJob(
+            id=f"sim-{i}", user_id="local",
+            prep=web._DecklistPrep(
+                decklist_text="", total_cards=0, skipped_basics=0,
+                name_qty={}, name_canonical={}, name_inv_qty={},
+                name_needed={}, names_to_search=[], inventory_hits=0,
+                fx=150.0, enabled_shops=None,
+                shipping_overrides_jpy={}, use_inventory=False,
+            ),
+            state="running",
+        )
+    with web.app.test_client() as client:
+        resp = client.post("/decklist/jobs", data={"decklist": "1 Sol Ring"})
+    assert resp.status_code == 429
+    assert resp.get_json()["reason"] == "rate_limited"
+
+
+def test_decklist_jobs_stream_404s_for_other_user(monkeypatch, _clean_search_jobs):
+    """Job ID belongs to alice; bob's GET must 404, not 403 — we don't
+    want to leak existence of job IDs across the user boundary."""
+    web._search_jobs["alice-job"] = web._SearchJob(
+        id="alice-job", user_id="alice",
+        prep=web._DecklistPrep(
+            decklist_text="", total_cards=0, skipped_basics=0,
+            name_qty={}, name_canonical={}, name_inv_qty={},
+            name_needed={}, names_to_search=[], inventory_hits=0,
+            fx=150.0, enabled_shops=None,
+            shipping_overrides_jpy={}, use_inventory=False,
+        ),
+        state="done",
+        finished_at=__import__("time").monotonic(),
+    )
+    # Run in Postgres-mode-without-WorkOS so the user_id is read from
+    # the configured header instead of defaulting to "local".
+    monkeypatch.setattr(db_module, "IS_POSTGRES", True)
+    monkeypatch.setattr(auth_module, "WORKOS_ENABLED", False)
+    monkeypatch.setattr(web, "_USER_ID_HEADER", "X-UID")
+    with web.app.test_client() as client:
+        resp = client.get("/decklist/jobs/alice-job/stream",
+                          headers={"X-UID": "bob"})
+    assert resp.status_code == 404
+
+
+def test_decklist_jobs_stream_404s_for_unknown_id(monkeypatch, _clean_search_jobs):
+    with web.app.test_client() as client:
+        resp = client.get("/decklist/jobs/no-such-id/stream")
+    assert resp.status_code == 404
+
+
 def test_is_basic_land_recognizes_all_basics_case_insensitive():
     for name in [
         "Plains", "ISLAND", "swamp", "Mountain", "Forest", "Wastes",

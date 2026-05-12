@@ -230,7 +230,7 @@
   </div>
 
   <div id="panel-decklist" style="display:none">
-    <form method="post" action="{{ url_for('decklist_search') }}">
+    <form id="decklist-form" method="post" action="{{ url_for('decklist_search') }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <textarea name="decklist"
                 placeholder="1 Sol Ring&#10;4x Force of Will (FEM)&#10;1 Rhystic Study (C21) 79&#10;..."></textarea>
@@ -325,6 +325,7 @@
   {% endif %}
 
   <script src="{{ url_for('static', filename='searchautocomplete.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='decklist-stream.js') }}" defer></script>
   <script>
     (function () {
       // --- mode toggle ---

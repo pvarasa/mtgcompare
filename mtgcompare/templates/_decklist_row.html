@@ -1,0 +1,59 @@
+{# One <tr> for the decklist results table.
+
+   Shared by the synchronous decklist.html render path and the SSE
+   streaming path (mtgcompare/web.py::_run_search_job). Self-contained:
+   imports its own macros so it can be rendered standalone via
+   ``render_template("_decklist_row.html", row=..., use_inventory=...,
+   shop_flags=...)`` without a wrapper template.
+
+   Context required:
+     row             — output of _build_one_card_row
+     use_inventory   — bool; controls the Have / Need columns
+     shop_flags      — dict; the streaming caller passes this explicitly,
+                       the sync caller inherits from context_processor.
+#}
+{% from "_macros.html" import card_icon %}
+{% if row.qty_needed == 0 %}
+  <tr class="inv-covered">
+    <td>{{ row.name }}</td>
+    <td class="num">{{ row.qty }}</td>
+    {% if use_inventory %}
+      <td class="num inv-have">{{ row.qty_inventory }}</td>
+      <td class="num">0</td>
+    {% endif %}
+    <td colspan="7"><span class="inv-covered-badge">✓ in inventory</span></td>
+  </tr>
+{% elif row.best %}
+  <tr>
+    <td>{{ card_icon(row.name, row.best.set) }}{{ row.name }}</td>
+    <td class="num">{{ row.qty }}</td>
+    {% if use_inventory %}
+      <td class="num {% if row.qty_inventory > 0 %}inv-have{% endif %}">
+        {{ row.qty_inventory if row.qty_inventory > 0 else '—' }}
+      </td>
+      <td class="num">{{ row.qty_needed }}</td>
+    {% endif %}
+    <td>
+      <span class="flag">{{ shop_flags.get(row.best.shop, '') }}</span>
+      {{ row.best.shop }}
+    </td>
+    <td>{{ row.best.set }}</td>
+    <td class="num">¥{{ '{:,.0f}'.format(row.best.price_jpy) }}</td>
+    <td class="num">¥{{ '{:,.0f}'.format(row.best.price_jpy * row.qty_needed) }}</td>
+    <td class="num">${{ '%.2f'|format(row.best.price_usd * row.qty_needed) }}</td>
+    <td>{{ row.best.condition }}</td>
+    <td><a href="{{ row.best.link }}" target="_blank" rel="noopener noreferrer">open</a></td>
+  </tr>
+{% else %}
+  <tr class="not-found">
+    <td>{{ row.name }}</td>
+    <td class="num">{{ row.qty }}</td>
+    {% if use_inventory %}
+      <td class="num {% if row.qty_inventory > 0 %}inv-have{% endif %}">
+        {{ row.qty_inventory if row.qty_inventory > 0 else '—' }}
+      </td>
+      <td class="num">{{ row.qty_needed }}</td>
+    {% endif %}
+    <td colspan="7">not found</td>
+  </tr>
+{% endif %}
