@@ -251,6 +251,51 @@ def test_decklist_jobs_happy_path_streams_meta_rows_totals_done(monkeypatch, _cl
             assert d["has_best"] is True
 
 
+def test_decklist_jobs_streams_inventory_rows_before_searched_rows(monkeypatch, _clean_search_jobs):
+    """Cards covered by inventory get row events up-front (qty_needed=0,
+    has_best=False), before any shop fan-out runs. Without this, the
+    streamed table would be shorter than the synchronous one — missing
+    the ✓-in-inventory rows the user expects to see."""
+    web.app.config["WTF_CSRF_ENABLED"] = False
+    monkeypatch.setattr(web, "_get_fx", lambda: 150.0)
+
+    # Pretend "Sol Ring" is in inventory but "Mana Drain" isn't.
+    def fake_load_inventory(use_inventory):
+        return {"sol ring": 1} if use_inventory else {}
+    monkeypatch.setattr(web, "_load_inventory_qty_map", fake_load_inventory)
+
+    def fake_collect(name, fx, *, enabled, logger, timeouts_out):
+        return [{
+            "shop": "Hareruya", "card": name, "set": "TST",
+            "price_jpy": 200.0, "price_usd": 1.33, "stock": 1,
+            "condition": "NM", "link": "https://example.com",
+        }]
+    monkeypatch.setattr(web, "collect_prices", fake_collect)
+
+    with web.app.test_client() as client:
+        post = client.post("/decklist/jobs", data={
+            "decklist": "1 Sol Ring\n1 Mana Drain",
+            "use_inventory": "1",
+        })
+        assert post.status_code == 202, post.data
+        job_id = post.get_json()["job_id"]
+
+        resp = client.get(f"/decklist/jobs/{job_id}/stream", buffered=False)
+        events = _drain_sse(resp.response, timeout=10.0)
+
+    row_events = [d for t, d in events if t == "row"]
+    # Two distinct names → two row events total.
+    assert len(row_events) == 2
+    # The inventory-covered row arrives first, marked qty_needed=0.
+    assert row_events[0]["qty_needed"] == 0
+    assert row_events[0]["has_best"] is False
+    assert "Sol Ring" in row_events[0]["html"]
+    assert "in inventory" in row_events[0]["html"]
+    # The shop-searched row arrives after.
+    assert row_events[1]["has_best"] is True
+    assert "Mana Drain" in row_events[1]["html"]
+
+
 def test_decklist_jobs_rejects_validation_failures_with_json_400(monkeypatch, _clean_search_jobs):
     """An only-basics decklist gets a 400 + ``reason`` so the client can
     show the same error message the synchronous handler shows, without

@@ -986,6 +986,37 @@ def _run_search_job(job: _SearchJob) -> None:
         # Track per-name results incrementally so we can build running
         # totals after each row.
         prices_by_name: dict[str, list[dict]] = {n: [] for n in p.name_qty}
+
+        # Emit row events for inventory-covered cards up-front. They
+        # don't need any fan-out work — qty_needed is 0, so the row is
+        # the "✓ in inventory" badge variant. Without this the streamed
+        # table would silently drop cards the user already owns, while
+        # the synchronous /decklist path shows them. Emit in canonical
+        # alphabetical order so the inventory section of the table is
+        # readable from the first paint.
+        searched_set = set(p.names_to_search)
+        inventory_only = sorted(
+            (n for n in p.name_qty if n not in searched_set),
+            key=lambda x: p.name_canonical[x].lower(),
+        )
+        for n in inventory_only:
+            row = _build_one_card_row(
+                n, p.name_qty, p.name_canonical,
+                p.name_inv_qty, p.name_needed, [],
+            )
+            row_html = app.jinja_env.get_template(
+                "_decklist_row.html"
+            ).render(
+                row=row,
+                use_inventory=p.use_inventory,
+                shop_flags=SHOP_FLAGS,
+            )
+            _emit(job, "row", {
+                "key": n,
+                "html": row_html,
+                "qty_needed": 0,
+                "has_best": False,
+            })
         timed_out: set[str] = set()
         timed_out_emitted: set[str] = set()
         last_totals_emit = 0.0

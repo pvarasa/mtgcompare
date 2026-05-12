@@ -148,6 +148,138 @@
     font-weight: 500;
   }
   .inv-have { color: var(--green); font-weight: 500; }
+
+  /* Streaming status bar (only shown on the SSE skeleton page).
+     Three distinct visual states — the user should NEVER be unsure
+     whether the search is still running or has finished.
+
+       searching   gold border + gold pulse background + spinning
+                   spinner + gold progress fill + "Searching · …"
+       complete    green border + bright green background + ✓ icon
+                   + green progress fill at 100% + "Search complete"
+       error       red border + red icon + red progress fill +
+                   error label
+
+     Sticky-positioned so it stays visible while the user scrolls the
+     results table down. */
+  .dl-stream-status {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    gap: .9rem;
+    margin: .8rem 0 1rem;
+    padding: .7rem 1rem;
+    background: var(--bg-alt);
+    border: 1px solid rgba(201, 168, 76, .35);
+    border-left: 4px solid var(--gold);
+    border-radius: 4px;
+    font-size: .92rem;
+    /* Searching pulse — very subtle gold tint cycle. */
+    animation: dl-status-pulse 1.8s ease-in-out infinite;
+  }
+  .dl-stream-status.complete {
+    animation: none;
+    background: rgba(77, 184, 122, .14);
+    border-color: rgba(77, 184, 122, .55);
+    border-left-color: var(--green);
+  }
+  .dl-stream-status.error {
+    animation: none;
+    background: rgba(217, 79, 79, .12);
+    border-color: rgba(217, 79, 79, .55);
+    border-left-color: #d94f4f;
+  }
+  .dl-stream-status-icon {
+    width: 1.3rem;
+    height: 1.3rem;
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.05rem;
+  }
+  .dl-stream-status .spinner {
+    width: 1.1rem; height: 1.1rem;
+    border: 2.5px solid var(--gold-dim);
+    border-top-color: var(--gold);
+    border-radius: 50%;
+    animation: search-spin .8s linear infinite;
+  }
+  .dl-stream-status.complete .spinner,
+  .dl-stream-status.error    .spinner { display: none; }
+  .dl-stream-status.complete .dl-stream-status-icon::before {
+    content: "✓"; color: var(--green); font-weight: 800;
+  }
+  .dl-stream-status.error .dl-stream-status-icon::before {
+    content: "!"; color: #d94f4f; font-weight: 800;
+  }
+  .dl-stream-status-label {
+    flex: 0 0 auto;
+    min-width: 11rem;
+    color: var(--fg);
+    font-weight: 600;
+  }
+  .dl-stream-status.complete .dl-stream-status-label { color: var(--green); }
+  .dl-stream-status.error    .dl-stream-status-label { color: #d94f4f; }
+  .dl-stream-progress {
+    flex: 1;
+    height: 10px;
+    background: rgba(255,255,255,.07);
+    border-radius: 5px;
+    overflow: hidden;
+    position: relative;
+  }
+  .dl-stream-progress-fill {
+    height: 100%;
+    width: 0;
+    background: var(--gold);
+    transition: width .35s ease;
+    border-radius: 5px;
+  }
+  /* Striped overlay on the *fill* while searching — gives an obvious
+     "still working" affordance even when no rows have arrived yet
+     (e.g. all shops are slow on the first batch). Removed on complete
+     so the bar is a solid green strip. */
+  .dl-stream-status .dl-stream-progress-fill::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background-image: linear-gradient(
+      45deg,
+      rgba(255,255,255,.18) 25%, transparent 25%,
+      transparent 50%, rgba(255,255,255,.18) 50%,
+      rgba(255,255,255,.18) 75%, transparent 75%, transparent
+    );
+    background-size: 16px 16px;
+    animation: dl-progress-stripe 1s linear infinite;
+  }
+  .dl-stream-status.complete .dl-stream-progress-fill::after,
+  .dl-stream-status.error    .dl-stream-progress-fill::after { display: none; }
+  .dl-stream-status.complete .dl-stream-progress-fill { background: var(--green); }
+  .dl-stream-status.error    .dl-stream-progress-fill { background: #d94f4f; }
+  .dl-stream-status-detail {
+    flex: 0 0 auto;
+    color: var(--muted);
+    font-size: .82rem;
+    white-space: nowrap;
+  }
+  .dl-stream-status.complete .dl-stream-status-detail { color: var(--green); }
+  @keyframes search-spin { to { transform: rotate(360deg); } }
+  @keyframes dl-status-pulse {
+    0%, 100% { background: var(--bg-alt); }
+    50%      { background: rgba(201, 168, 76, .10); }
+  }
+  @keyframes dl-progress-stripe {
+    to { background-position: 16px 0; }
+  }
+  /* Respect users who prefer reduced motion. */
+  @media (prefers-reduced-motion: reduce) {
+    .dl-stream-status { animation: none; }
+    .dl-stream-status .dl-stream-progress-fill::after { animation: none; }
+    .dl-stream-status .spinner { animation: search-spin 2s linear infinite; }
+  }
 {% endblock %}
 {% block content %}
 
@@ -163,11 +295,26 @@
          data-use-inventory="{{ '1' if use_inventory else '0' }}"
          data-shop-flags='{{ shop_flags | tojson }}'></div>
 
+    {# Streaming status block. Starts in "connecting" state; flips to
+       "searching" on the first `meta` event, to "complete" on `done`,
+       to "error" on `error`. The label, progress fill, and right-side
+       detail are all driven by decklist-stream.js. #}
+    <div id="dl-stream-status" class="dl-stream-status"
+         role="status" aria-live="polite">
+      <span class="dl-stream-status-icon" aria-hidden="true">
+        <span class="spinner"></span>
+      </span>
+      <span id="dl-stream-status-label"
+            class="dl-stream-status-label">Connecting…</span>
+      <span class="dl-stream-progress"
+            aria-hidden="true"><span id="dl-stream-progress-fill"
+                                     class="dl-stream-progress-fill"></span></span>
+      <span id="dl-stream-status-detail"
+            class="dl-stream-status-detail"></span>
+    </div>
+
     <div id="dl-stream-timeout-warning"></div>
-    <p id="dl-stream-meta" class="dl-meta">
-      <span id="dl-stream-spinner" class="spinner" aria-hidden="true"></span>
-      Searching shops…
-    </p>
+    <p id="dl-stream-meta" class="dl-meta"></p>
     <div id="dl-stream-shops" class="dl-shops"></div>
 
     <div class="table-scroll">
