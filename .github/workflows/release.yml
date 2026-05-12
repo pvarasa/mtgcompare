@@ -67,7 +67,12 @@ jobs:
         run: uv run pytest
 
       - name: Build
-        run: uv run pyinstaller mtgcompare.spec --clean --noconfirm
+        # MTGCOMPARE_VERSION drives the .app bundle's CFBundleShortVersionString
+        # via mtgcompare.spec. ${{ github.ref_name }} is e.g. "v1.6.9"; strip
+        # the leading "v" for Apple plist convention.
+        run: |
+          export MTGCOMPARE_VERSION="${GITHUB_REF_NAME#v}"
+          uv run pyinstaller mtgcompare.spec --clean --noconfirm
 
       - name: Zip
         run: cd dist && zip -r mtgcompare-macos.zip "MTG Compare.app"

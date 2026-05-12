@@ -29,7 +29,7 @@ from ._base import RateLimitedError, ScraperFetchError
 SEARCH_URL = "https://api.scryfall.com/cards/search"
 
 # Scryfall asks clients to identify themselves.
-USER_AGENT = "mtgcompare/0.1 (+https://github.com/pablovarasa/mtgcompare)"
+USER_AGENT = "mtgcompare/0.1 (+https://github.com/pvarasa/mtgcompare)"
 
 _SLEEP_BETWEEN_PAGES_S = 0.1
 
