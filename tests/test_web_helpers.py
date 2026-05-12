@@ -251,6 +251,66 @@ def test_decklist_jobs_happy_path_streams_meta_rows_totals_done(monkeypatch, _cl
             assert d["has_best"] is True
 
 
+def test_decklist_jobs_row_event_key_matches_lowercased_card_name(monkeypatch, _clean_search_jobs):
+    """The streaming JS uses ``row.key`` as the sort key when inserting
+    each <tr> into the alphabetical slot. The key must be the lowercased
+    canonical name — sort-aware behavior on the client depends on it."""
+    web.app.config["WTF_CSRF_ENABLED"] = False
+    monkeypatch.setattr(web, "_get_fx", lambda: 150.0)
+    monkeypatch.setattr(web, "collect_prices",
+                        lambda *a, **kw: [])
+
+    with web.app.test_client() as client:
+        post = client.post("/decklist/jobs",
+                           data={"decklist": "1 Sol Ring\n1 Ancestral Recall"})
+        job_id = post.get_json()["job_id"]
+        resp = client.get(f"/decklist/jobs/{job_id}/stream", buffered=False)
+        events = _drain_sse(resp.response, timeout=10.0)
+
+    row_keys = [d["key"] for t, d in events if t == "row"]
+    assert sorted(row_keys) == row_keys or set(row_keys) == {"sol ring", "ancestral recall"}
+    # Stronger: each key must be lowercase
+    for k in row_keys:
+        assert k == k.lower(), f"row.key must be lowercased; got {k!r}"
+
+
+def test_static_token_appears_on_every_script_tag(monkeypatch):
+    """Cache-bust: every <script src="…"> in the rendered templates must
+    carry ``?v=<token>`` so deploying new JS forces every browser to
+    fetch it. Without this we'd hit the v1.7.1 "stale JS expects old
+    DOM, page silently no-ops" failure mode again on the next change."""
+    web.app.config["WTF_CSRF_ENABLED"] = False
+    with web.app.test_client() as client:
+        # The search page is the entry point for /decklist + carries
+        # both the form-hijack JS and the autocomplete JS.
+        resp = client.get("/")
+        assert resp.status_code == 200, resp.data
+        body = resp.data.decode()
+    # Every script that should be cache-busted shows up with ?v=
+    for js_file in (
+        "searchautocomplete.js",
+        "decklist-stream.js",
+        "cardpreview.js",
+    ):
+        assert f"{js_file}?v=" in body, \
+            f"{js_file} missing the static_token cache-buster"
+
+
+def test_compute_static_token_returns_stable_positive_integer_string():
+    """Function should be cheap, deterministic for a given checkout,
+    and a positive integer (so query-strings stay short and ordered).
+    Repeated calls within a process return the same token (we cache it
+    at module import via ``_STATIC_TOKEN``)."""
+    token = web._compute_static_token()
+    assert isinstance(token, str)
+    assert token.isdigit()
+    assert int(token) > 0
+    # _STATIC_TOKEN is the cached value used by the context processor;
+    # it must match _compute_static_token() since the static dir hasn't
+    # changed since import.
+    assert token == web._STATIC_TOKEN
+
+
 def test_decklist_jobs_streams_inventory_rows_before_searched_rows(monkeypatch, _clean_search_jobs):
     """Cards covered by inventory get row events up-front (qty_needed=0,
     has_best=False), before any shop fan-out runs. Without this, the

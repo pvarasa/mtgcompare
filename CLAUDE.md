@@ -145,6 +145,39 @@ The `users` table is keyed on `workos_user_id`; inventory rows continue to key o
 - Use `scripts/start.sh`, `scripts/stop.sh`, `scripts/start.ps1`, and `scripts/stop.ps1`.
 - On Windows, the shell scripts delegate to the PowerShell scripts.
 - The scripts should start the app via `python -m mtgcompare.web`.
+- `scripts/dev-push.sh` is the fast-iteration path for the stg deployment
+  (see below). Skips the GitHub release pipeline entirely.
+
+## Dev / staging deployment
+
+- **URL**: https://mtg-stg.vpablo.dev. Behind the Cloudflare Access
+  admin perimeter (terraform config: `apps.mtgcompare_stg` in
+  `../server_admin/terraform/cloudflare/variables.tf`) so only the
+  admin-group emails reach the cluster.
+- **Image**: floating tag `ghcr.io/pvarasa/mtgcompare:dev` with
+  `imagePullPolicy: Always`. No digest pinning, no GitHub release
+  pipeline. The deployment manifest lives at
+  `../server_admin/k8s/apps/mtgcompare-stg/02-deployment.yml`.
+- **Database**: same Postgres as prod. Same `mtgcompare-secret` and
+  `mtgcompare-workos` secrets — so the WorkOS identity (and therefore
+  inventory ownership) is identical between stg and prod. Stg is
+  literally "prod with your latest local code, running on a different
+  hostname behind a stricter gate."
+- **Workflow**:
+  ```sh
+  # Make local changes, then:
+  ./scripts/dev-push.sh
+  # → ~30 s build + ~10 s push + ~10 s rollout
+  # → https://mtg-stg.vpablo.dev now runs your code
+  ```
+- **First-time setup**:
+  1. Docker engine reachable from this shell (`docker info` works).
+  2. GHCR push login: `echo $GHCR_PAT | docker login ghcr.io -u pvarasa --password-stdin`
+     (PAT needs `write:packages`).
+  3. WorkOS dashboard: register `https://mtg-stg.vpablo.dev/auth/callback`
+     as an allowed redirect URI alongside the prod one. One-time.
+  4. From server_admin: apply the terraform + the k8s manifests
+     (see `../server_admin/k8s/apps/mtgcompare-stg/`).
 
 ## Packaging (Windows desktop app)
 
@@ -178,6 +211,13 @@ The `users` table is keyed on `workos_user_id`; inventory rows continue to key o
 ## Git workflow
 
 - Always ask for confirmation before running `git commit` or `git push`.
+- **Always run static analysis and tests locally before every commit
+  and every push** — don't rely on CI to catch what `ruff` and
+  `pytest` would catch on this machine in a few seconds. Concretely:
+  `uv run pytest -q` (must pass) and `uv run ruff check` (must be
+  clean). CI is the safety net, not the first detector — a failed CI
+  run after push wastes a release cycle and forces a re-tag if a tag
+  has already been pushed.
 
 ## What "ship" means
 

@@ -571,7 +571,7 @@
       </div>
     </div>
 
-    <script src="{{ url_for('static', filename='paginatedtable.js') }}"></script>
+    <script src="{{ url_for('static', filename='paginatedtable.js') }}?v={{ static_token }}"></script>
     <script>
       (function () {
         const historyUrl = {{ url_for('market_history')|tojson }};

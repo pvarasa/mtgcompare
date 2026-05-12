@@ -265,6 +265,23 @@
         </span>
       </div>
 
+      {# Per-shop shipping overrides on the initial search form. Same
+         markup as the "Refine search" form on decklist.html — collapsed
+         by default since most users go with the per-shop defaults from
+         shops.SHIPPING_JPY. Submitting any value sends `ship_<slug>`
+         POST fields which _parse_shipping_overrides clamps + falls back
+         on for empty values. #}
+      <details class="ship-details">
+        <summary>Shipping costs (¥ per order)</summary>
+        <div class="ship-cfg">
+          {% for s in shipping_config %}
+            <label>{{ shop_flags.get(s.shop, '') }} {{ s.shop }}
+              <input type="number" step="1" min="0" name="ship_{{ s.slug }}" value="{{ s.cost_jpy }}">
+            </label>
+          {% endfor %}
+        </div>
+      </details>
+
       <div class="search-loading" id="search-loading-decklist" aria-live="polite">
         <span class="spinner" aria-hidden="true"></span>
         <span>Pricing decklist across shops…</span>
@@ -324,8 +341,8 @@
     {% endif %}
   {% endif %}
 
-  <script src="{{ url_for('static', filename='searchautocomplete.js') }}" defer></script>
-  <script src="{{ url_for('static', filename='decklist-stream.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='searchautocomplete.js') }}?v={{ static_token }}" defer></script>
+  <script src="{{ url_for('static', filename='decklist-stream.js') }}?v={{ static_token }}" defer></script>
   <script>
     (function () {
       // --- mode toggle ---

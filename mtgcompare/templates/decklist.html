@@ -473,6 +473,6 @@
   </div>
 
   {% if streaming_job_id %}
-    <script src="{{ url_for('static', filename='decklist-stream.js') }}" defer></script>
+    <script src="{{ url_for('static', filename='decklist-stream.js') }}?v={{ static_token }}" defer></script>
   {% endif %}
 {% endblock %}

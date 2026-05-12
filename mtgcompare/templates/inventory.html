@@ -427,8 +427,8 @@
     </div>
   {% endif %}
 
-  <script src="{{ url_for('static', filename='inventoryadd.js') }}"></script>
-  <script src="{{ url_for('static', filename='paginatedtable.js') }}"></script>
+  <script src="{{ url_for('static', filename='inventoryadd.js') }}?v={{ static_token }}"></script>
+  <script src="{{ url_for('static', filename='paginatedtable.js') }}?v={{ static_token }}"></script>
   <script>
     // Inventory-specific glue on top of the shared paginated-table client:
     // selection state, bulk delete (per-page and "all matching"), CSV /

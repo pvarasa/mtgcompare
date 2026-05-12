@@ -31,6 +31,11 @@
   if (submitForm && window.EventSource && window.fetch) {
     submitForm.addEventListener('submit', async (e) => {
       e.preventDefault();
+      // Record the submit time so the skeleton page can compute true
+      // end-to-end wall-clock (form-submit → "Search complete") instead
+      // of just the server-side fan-out duration. sessionStorage keyed
+      // by job_id lets the next page find this without URL pollution.
+      const submitEpochMs = Date.now();
       const fd = new FormData(submitForm);
       let resp;
       try {
@@ -41,6 +46,9 @@
       }
       if (resp.status === 202) {
         const { job_id } = await resp.json();
+        try {
+          sessionStorage.setItem(`dl-start-${job_id}`, String(submitEpochMs));
+        } catch { /* private mode or quota; the skeleton has a fallback */ }
         window.location.href = `/decklist/jobs/${encodeURIComponent(job_id)}`;
       } else if (resp.status === 400) {
         // Validation error — fall back to the synchronous endpoint
@@ -74,12 +82,25 @@
   const metaBox     = document.getElementById('dl-stream-meta');
   const timeoutBox  = document.getElementById('dl-stream-timeout-warning');
 
+  // Wall-clock origin for the "front-to-back" elapsed display. Prefer
+  // the form-submit time recorded by the submit hijack above (which
+  // covers the POST + nav + skeleton render); fall back to
+  // performance.timeOrigin (page-load) if sessionStorage is empty.
+  let frontToBackOriginMs;
+  try {
+    const saved = sessionStorage.getItem(`dl-start-${jobId}`);
+    frontToBackOriginMs = saved ? parseInt(saved, 10) : Date.now();
+  } catch {
+    frontToBackOriginMs = Date.now();
+  }
+
   // Live state for the dl-meta line + progress.
   const state = {
     distinct: 0,            // total rows we expect to render
-    namesToSearch: 0,       // non-inventory rows; for "searching N/M"
-    rowsReceived: 0,        // any row event (covers both inv + shop rows)
-    sourcedCount: 0,        // inventory-covered OR has-best
+    namesToSearch: 0,       // shop-searched cards (the "work" the bar tracks)
+    rowsReceived: 0,        // every row event (inventory + shop)
+    shopRowsReceived: 0,    // only shop-searched rows; drives the progress bar
+    sourcedCount: 0,        // inventory-covered OR has-best (for meta line)
     invCovered: 0,
     skippedBasics: 0,
     fx: null,
@@ -89,7 +110,6 @@
     grandTotalJpyWithShipping: 0,
     shippingTotalJpy: 0,
     timedOutShops: new Set(),
-    started: performance.now(),
   };
 
   const yenFmt = (n) => '¥' + Math.round(n).toLocaleString('en-US');
@@ -117,19 +137,32 @@
   }
 
   function updateProgress() {
-    if (!state.distinct) {
+    // Bar tracks shop-searches-done / shop-searches-total. The
+    // up-front inventory burst (could be 63 of 81 cards arriving in
+    // one second) shouldn't make the bar jump to 78% — that was
+    // misleading. Now the bar reflects the actual long-running work
+    // (the shop fan-out) and the meta line shows the total card
+    // count separately.
+    if (state.namesToSearch === 0) {
+      // Either all-inventory or before meta arrives. Either way, no
+      // shop work to do; bar stays at 0 until done flips it to 100.
       progressFill.style.width = '0%';
-      return;
+    } else {
+      const pct = Math.min(100, Math.round(100 * state.shopRowsReceived / state.namesToSearch));
+      progressFill.style.width = pct + '%';
     }
-    const pct = Math.min(100, Math.round(100 * state.rowsReceived / state.distinct));
-    progressFill.style.width = pct + '%';
     if (!statusBox.classList.contains('complete') && !statusBox.classList.contains('error')) {
-      const detail = state.namesToSearch
-        ? `${Math.max(0, state.rowsReceived - state.invCovered)} of ${state.namesToSearch} shop searches`
-        : '';
-      setStatus('searching',
-                `Searching · ${state.rowsReceived} of ${state.distinct} cards`,
-                detail);
+      if (state.namesToSearch === 0 && state.distinct > 0) {
+        setStatus('searching',
+                  'All cards covered by inventory',
+                  `${state.distinct} cards`);
+      } else if (state.namesToSearch > 0) {
+        setStatus('searching',
+                  `Searching shops · ${state.shopRowsReceived} of ${state.namesToSearch}`,
+                  state.distinct
+                    ? `${state.rowsReceived} of ${state.distinct} cards rendered`
+                    : '');
+      }
     }
   }
 
@@ -218,16 +251,45 @@
 
   es.addEventListener('row', (evt) => {
     const d = JSON.parse(evt.data);
-    // Server pre-rendered the <tr> via the same Jinja partial the
-    // synchronous handler uses — just append the HTML.
-    tbody.insertAdjacentHTML('beforeend', d.html);
+    insertRowSorted(d.html, d.key);
     state.rowsReceived += 1;
-    // qty_needed === 0 cards count as "sourced" via inventory.
-    // has_best cards count as "sourced" from a shop.
-    if (d.qty_needed === 0 || d.has_best) state.sourcedCount += 1;
+    // Server emits inventory-covered rows (qty_needed=0) up-front, then
+    // shop-searched rows from the fan-out as they complete. Track them
+    // separately so the progress bar reflects shop work, not the
+    // inventory burst.
+    if (d.qty_needed === 0) {
+      state.sourcedCount += 1;
+    } else {
+      state.shopRowsReceived += 1;
+      if (d.has_best) state.sourcedCount += 1;
+    }
     renderMetaLine();
     updateProgress();
   });
+
+  // Server emits inventory rows up-front in alphabetical order, then
+  // streams non-inventory rows in completion order. To match the
+  // synchronous /decklist's "all rows sorted by canonical name" layout
+  // we have to insert each arriving row at its sorted slot instead of
+  // just appending. `key` is the lowercase canonical name; a
+  // data-sort-key attribute on the inserted <tr> lets us find the
+  // right neighbour in O(N) without re-sorting the whole tbody.
+  function insertRowSorted(html, key) {
+    const tmp = document.createElement('tbody');
+    tmp.innerHTML = html.trim();
+    const tr = tmp.querySelector('tr');
+    if (!tr) return;
+    tr.dataset.sortKey = key;
+    const existing = tbody.children;
+    for (let i = 0; i < existing.length; i++) {
+      const k = existing[i].dataset.sortKey;
+      if (k && k > key) {
+        tbody.insertBefore(tr, existing[i]);
+        return;
+      }
+    }
+    tbody.appendChild(tr);
+  }
 
   es.addEventListener('shop_timeout', (evt) => {
     const d = JSON.parse(evt.data);
@@ -248,16 +310,31 @@
 
   es.addEventListener('done', (evt) => {
     const d = evt.data ? JSON.parse(evt.data) : {};
-    const elapsed = ((d.duration_ms || (performance.now() - state.started)) / 1000).toFixed(1);
-    const timedOut = (d.timed_out_shops || []).length;
-    const detail = timedOut
-      ? `${state.distinct} cards · ${elapsed}s · ${timedOut} shop${timedOut === 1 ? '' : 's'} timed out`
-      : `${state.distinct} cards · ${elapsed}s`;
-    // Force the progress bar to 100% even if a `row` arrived late
-    // after `done` was already in the buffer (shouldn't happen, but
-    // belt-and-suspenders for visual consistency).
+    // "Front to back" wall-clock from form submit to done — this is
+    // what the user perceives. The server's d.duration_ms only covers
+    // the fan-out itself (no POST overhead, no page navigation), so
+    // it's typically 100-500ms shorter than the wall-clock the user
+    // saw. Show the front-to-back figure prominently and the
+    // server-side number as a parenthetical for debugging.
+    const elapsedSec = ((Date.now() - frontToBackOriginMs) / 1000).toFixed(1);
+    const serverSec  = d.duration_ms != null ? (d.duration_ms / 1000).toFixed(1) : null;
+    const timedOut   = (d.timed_out_shops || []).length;
+
+    const parts = [`${state.distinct} card${state.distinct === 1 ? '' : 's'}`];
+    if (state.invCovered) parts.push(`${state.invCovered} from inventory`);
+    if (state.shopRowsReceived) parts.push(`${state.shopRowsReceived} shop search${state.shopRowsReceived === 1 ? '' : 'es'}`);
+    if (timedOut) parts.push(`${timedOut} shop${timedOut === 1 ? '' : 's'} timed out`);
+    const detail = parts.join(' · ');
+
     progressFill.style.width = '100%';
-    setStatus('complete', 'Search complete', detail);
+    const labelTime = serverSec && serverSec !== elapsedSec
+      ? `Done in ${elapsedSec}s  (search ${serverSec}s)`
+      : `Done in ${elapsedSec}s`;
+    setStatus('complete', labelTime, detail);
+
+    // Clear the sessionStorage marker so a future fresh page load
+    // doesn't anchor the "front-to-back" timer to a long-stale value.
+    try { sessionStorage.removeItem(`dl-start-${jobId}`); } catch { /* ignore */ }
     es.close();
   });
 

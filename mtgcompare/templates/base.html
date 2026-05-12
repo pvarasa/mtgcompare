@@ -319,6 +319,6 @@
 
   {% block content %}{% endblock %}
 
-  <script src="{{ url_for('static', filename='cardpreview.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='cardpreview.js') }}?v={{ static_token }}" defer></script>
 </body>
 </html>

@@ -19,9 +19,12 @@ _JP_FLAG = "\U0001F1EF\U0001F1F5"
 _US_FLAG = "\U0001F1FA\U0001F1F8"
 
 # JP shops: domestic tracked rates (ネコポス / クリックポスト equivalent, ~¥385).
-# TCGPlayer: international to Japan via USPS First-Class Intl (~$8 ≈ ¥1,200).
+# TCGPlayer: international from US to JP. Realistic landed cost via the
+# typical TCG Direct multi-seller bundle + USPS First-Class Intl is now
+# closer to ~¥2,000 (carrier fuel surcharges + handling). ¥1,200 was
+# the 2024 estimate and was understating the shipping line item.
 _DEFAULT_JP_SHIPPING = 385
-_DEFAULT_INTL_SHIPPING = 1200
+_DEFAULT_INTL_SHIPPING = 2000
 
 
 # Single source of truth: every known shop with its display flag, default

@@ -234,6 +234,32 @@ def _inject_current_user():
     }
 
 
+def _compute_static_token() -> str:
+    """Cache-bust token for ``<script src=".../foo.js?v=TOKEN">`` URLs.
+
+    Without this, browsers happily keep serving the old JS across deploys
+    and users end up running stale code against a new server. We saw it
+    bite in v1.7.1: stale JS expected the old DOM and silently no-op'd
+    on the new status block. Token is the max mtime of any file under
+    ``mtgcompare/static`` — coarse but stable within a deploy (one image
+    rebuild bumps every file's mtime) and zero-cost at template time."""
+    static_dir = Path(__file__).resolve().parent / "static"
+    try:
+        return str(int(max(
+            p.stat().st_mtime for p in static_dir.rglob("*") if p.is_file()
+        )))
+    except (FileNotFoundError, ValueError):
+        return "0"
+
+
+_STATIC_TOKEN = _compute_static_token()
+
+
+@app.context_processor
+def _inject_static_token():
+    return {"static_token": _STATIC_TOKEN}
+
+
 @app.route("/healthz")
 def healthz():
     return {"ok": True}, 200
