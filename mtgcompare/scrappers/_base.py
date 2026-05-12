@@ -31,6 +31,7 @@ from time import monotonic
 from typing import ClassVar
 
 import requests
+from requests.adapters import HTTPAdapter
 
 from ..scrapper import MtgScrapper
 from ..utils import get_fx
@@ -66,6 +67,12 @@ def make_session(extra_headers: dict | None = None) -> requests.Session:
     s.headers.update({"User-Agent": USER_AGENT})
     if extra_headers:
         s.headers.update(extra_headers)
+    # Each scraper makes one or two requests per card before the instance
+    # is discarded — requests' default pool of 10 idle connections is
+    # wasteful when many scrapers spin up per /decklist fan-out.
+    adapter = HTTPAdapter(pool_connections=2, pool_maxsize=2)
+    s.mount("https://", adapter)
+    s.mount("http://", adapter)
     return s
 
 
