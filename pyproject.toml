@@ -7,6 +7,7 @@ requires-python = ">=3.12"
 dependencies = [
     "beautifulsoup4>=4.14",
     "cachetools>=5.5",
+    "selectolax>=0.3.21",
     "duckdb>=1.2",
     "flask>=3.1",
     "flask-wtf>=1.2",

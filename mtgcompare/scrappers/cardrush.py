@@ -18,7 +18,7 @@ The ``parse_search_html`` function is pure and is what tests exercise.
 """
 import re
 
-from bs4 import BeautifulSoup
+from selectolax.parser import HTMLParser
 
 from ._base import HtmlSearchScrapper
 
@@ -57,24 +57,24 @@ _NM_CONDITIONS = {None, "NM", "NM-"}
 def _goods_name_text(goods_name_el) -> str:
     """Concatenate text content of the goods_name span.
 
-    BeautifulSoup's get_text() handles the nested ``<b>`` / ``<wbr/>`` /
-    ``<span class="result_emphasis">`` tags automatically; this helper just
+    selectolax's ``.text(deep=True)`` walks nested ``<b>`` / ``<wbr/>`` /
+    ``<span class="result_emphasis">`` children in C; this helper just
     centralises whitespace-collapsing for predictable matching.
     """
-    return re.sub(r"\s+", " ", goods_name_el.get_text(" ", strip=True)).strip()
+    return re.sub(r"\s+", " ", goods_name_el.text(deep=True, separator=" ", strip=True)).strip()
 
 
-def parse_search_html(html: str, card_name: str, fx_jpy_per_usd: float) -> list[dict]:
+def parse_search_html(html: str | bytes, card_name: str, fx_jpy_per_usd: float) -> list[dict]:
     """Extract NM English price records for ``card_name`` from a Card Rush page."""
-    soup = BeautifulSoup(html, "html.parser")
+    tree = HTMLParser(html)
     target = card_name.strip().lower()
     records: list[dict] = []
 
-    for cell in soup.select("li.list_item_cell"):
-        name_el = cell.select_one("span.goods_name")
-        price_el = cell.select_one("span.figure")
-        stock_el = cell.select_one("p.stock")
-        link_el = cell.select_one("a.item_data_link")
+    for cell in tree.css("li.list_item_cell"):
+        name_el = cell.css_first("span.goods_name")
+        price_el = cell.css_first("span.figure")
+        stock_el = cell.css_first("p.stock")
+        link_el = cell.css_first("a.item_data_link")
         if not (name_el and price_el and stock_el and link_el):
             continue
 
@@ -92,23 +92,23 @@ def parse_search_html(html: str, card_name: str, fx_jpy_per_usd: float) -> list[
         if en_name.lower() != target:
             continue
 
-        stock_classes = stock_el.get("class") or []
-        if "soldout" in stock_classes:
+        stock_class_attr = stock_el.attributes.get("class") or ""
+        if "soldout" in stock_class_attr.split():
             continue
-        stock_match = _STOCK_RE.search(stock_el.get_text())
+        stock_match = _STOCK_RE.search(stock_el.text(deep=True, separator=" ", strip=True))
         if not stock_match:
             continue
         stock = int(stock_match.group(1))
         if stock <= 0:
             continue
 
-        price_match = _PRICE_RE.search(price_el.get_text())
+        price_match = _PRICE_RE.search(price_el.text(deep=True, separator=" ", strip=True))
         if not price_match:
             continue
         price_jpy = float(price_match.group(1).replace(",", ""))
         price_usd = round(price_jpy / fx_jpy_per_usd, 2)
 
-        href = str(link_el.get("href") or "").strip()
+        href = (link_el.attributes.get("href") or "").strip()
         link = href if href.startswith("http") else f"{BASE_URL}{href}"
 
         records.append({
@@ -129,5 +129,5 @@ class CardRushScrapper(HtmlSearchScrapper):
     SEARCH_URL = SEARCH_URL
     LOGGER_NAME = "mtgcompare.scrappers.cardrush"
 
-    def parse_html(self, html: str, card_name: str) -> list[dict]:
+    def parse_html(self, html: str | bytes, card_name: str) -> list[dict]:
         return parse_search_html(html, card_name, self.fx)

@@ -26,7 +26,7 @@ The ``parse_search_html`` function is pure and is what tests exercise.
 import re
 
 import requests
-from bs4 import BeautifulSoup
+from selectolax.parser import HTMLParser
 
 from ._base import HtmlSearchScrapper
 
@@ -48,29 +48,29 @@ _NAME_RE = re.compile(
 _VARIANT_BRACKETS = ("[ボーダーレス]", "[旧枠]", "[日本画]", "[拡張枠]", "[フレームレス]")
 
 
-def parse_search_html(html: str, card_name: str, fx_jpy_per_usd: float) -> list[dict]:
+def parse_search_html(html: str | bytes, card_name: str, fx_jpy_per_usd: float) -> list[dict]:
     """Extract NM English non-foil non-variant rows for ``card_name`` from a BLACK FROG page."""
-    soup = BeautifulSoup(html, "html.parser")
+    tree = HTMLParser(html)
     target = card_name.strip().lower()
     records: list[dict] = []
 
-    items_root = soup.select_one("ul.innerList")
-    if items_root is None:
-        return records
-
-    for li in items_root.find_all("li", recursive=False):
-        name_el = li.select_one("p.name a")
-        price_el = li.select_one("p.price")
+    # `> li` restricts to direct children — the listing is one level deep,
+    # nested ``<li>`` (e.g. inside a side-cart) shouldn't be picked up.
+    for li in tree.css("ul.innerList > li"):
+        name_el = li.css_first("p.name a")
+        price_el = li.css_first("p.price")
         if not (name_el and price_el):
             continue
 
         # In stock = a "basket.html" link is rendered. Out-of-stock items
         # render only the detail link with no add-to-cart button.
-        in_stock = li.find("a", href=lambda h: bool(h) and "basket.html" in h) is not None
-        if not in_stock:
+        if li.css_first('a[href*="basket.html"]') is None:
             continue
 
-        name = re.sub(r"\s+", " ", name_el.get_text(" ", strip=True)).strip()
+        name = re.sub(
+            r"\s+", " ",
+            name_el.text(deep=True, separator=" ", strip=True),
+        ).strip()
 
         # Filter NM only — the shop encodes condition as 状態XX in a leading
         # ★...★ flag. NM listings have no such flag.
@@ -93,14 +93,14 @@ def parse_search_html(html: str, card_name: str, fx_jpy_per_usd: float) -> list[
         if en.lower() != target:
             continue
 
-        price_match = _PRICE_RE.search(price_el.get_text())
+        price_match = _PRICE_RE.search(price_el.text(deep=True, separator=" ", strip=True))
         if not price_match:
             continue
         price_jpy = float(price_match.group(1).replace(",", ""))
         if price_jpy <= 0:
             continue
 
-        href = str(name_el.get("href") or "").strip()
+        href = (name_el.attributes.get("href") or "").strip()
         link = href if href.startswith("http") else f"{BASE_URL}{href}"
 
         records.append({
@@ -122,7 +122,7 @@ class BlackFrogScrapper(HtmlSearchScrapper):
     LOGGER_NAME = "mtgcompare.scrappers.blackfrog"
     SEARCH_PARAM_NAME = "search"
 
-    def parse_html(self, html: str, card_name: str) -> list[dict]:
+    def parse_html(self, html: str | bytes, card_name: str) -> list[dict]:
         return parse_search_html(html, card_name, self.fx)
 
     def decode_response(self, resp: requests.Response) -> str:

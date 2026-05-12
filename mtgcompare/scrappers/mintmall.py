@@ -19,7 +19,7 @@ price displayed on the page).
 import json
 import re
 
-from bs4 import BeautifulSoup
+from selectolax.parser import HTMLParser
 
 from ._base import HtmlSearchScrapper
 
@@ -56,46 +56,63 @@ _VARIANT_SUFFIXES = (
 _TAX_MULTIPLIER = 1.10
 
 
-def _stock_map(html: str) -> dict[str, dict]:
-    """Return spec_id → {stock, price_jpy} from the page's JS const."""
-    m = _STOCK_JSON_RE.search(html)
-    if not m:
-        return {}
-    try:
-        raw = json.loads(m.group(1))
-    except json.JSONDecodeError:
-        return {}
-    out: dict[str, dict] = {}
-    for spec_id, vals in raw.items():
-        if not isinstance(vals, list) or len(vals) < 4:
+def _stock_map(html: str | bytes) -> dict[str, dict]:
+    """Public-ish wrapper: parse once and extract the stock map.
+
+    Retained as a top-level helper because the test suite imports it.
+    """
+    return _stock_map_from_tree(HTMLParser(html))
+
+
+def _stock_map_from_tree(tree: HTMLParser) -> dict[str, dict]:
+    """Return spec_id → {stock, price_jpy} from the page's inline JS const.
+
+    Finds the script tag containing ``specificationTreeSearchProductsTree``
+    and regexes its text content — avoids a regex-on-full-HTML pass.
+    """
+    for script in tree.css("script"):
+        body = script.text(deep=False)
+        if "specificationTreeSearchProductsTree" not in body:
+            continue
+        m = _STOCK_JSON_RE.search(body)
+        if not m:
             continue
         try:
-            stock = int(vals[0])
-            base_price = float(vals[3])
-        except (TypeError, ValueError):
-            continue
-        out[str(spec_id)] = {
-            "stock": stock,
-            "price_jpy": round(base_price * _TAX_MULTIPLIER, 2),
-        }
-    return out
+            raw = json.loads(m.group(1))
+        except json.JSONDecodeError:
+            return {}
+        out: dict[str, dict] = {}
+        for spec_id, vals in raw.items():
+            if not isinstance(vals, list) or len(vals) < 4:
+                continue
+            try:
+                stock = int(vals[0])
+                base_price = float(vals[3])
+            except (TypeError, ValueError):
+                continue
+            out[str(spec_id)] = {
+                "stock": stock,
+                "price_jpy": round(base_price * _TAX_MULTIPLIER, 2),
+            }
+        return out
+    return {}
 
 
-def parse_search_html(html: str, card_name: str, fx_jpy_per_usd: float) -> list[dict]:
+def parse_search_html(html: str | bytes, card_name: str, fx_jpy_per_usd: float) -> list[dict]:
     """Extract NM English non-foil non-variant in-stock rows for ``card_name``."""
-    soup = BeautifulSoup(html, "html.parser")
+    tree = HTMLParser(html)
     target = card_name.strip().lower()
-    stock = _stock_map(html)
+    stock = _stock_map_from_tree(tree)
     records: list[dict] = []
 
-    for area in soup.select("div.list_area"):
-        title_el = area.select_one("h4.recommend-title")
-        link_el = area.select_one("a.thumbnail")
-        select_el = area.select_one('select[name="specification"]')
+    for area in tree.css("div.list_area"):
+        title_el = area.css_first("h4.recommend-title")
+        link_el = area.css_first("a.thumbnail")
+        select_el = area.css_first('select[name="specification"]')
         if not (title_el and select_el):
             continue
 
-        title = re.sub(r"\s+", " ", title_el.get_text(" ", strip=True)).strip()
+        title = re.sub(r"\s+", " ", title_el.text(deep=True, separator=" ", strip=True)).strip()
 
         # Skip foils and special foils.
         if "【Foil】" in title or "Foil】" in title.split("》", 1)[0] + "》":
@@ -114,9 +131,9 @@ def parse_search_html(html: str, card_name: str, fx_jpy_per_usd: float) -> list[
             continue
 
         # Each in-stock NM option contributes a record.
-        for option in select_el.select("option"):
-            spec_id = str(option.get("value") or "").strip()
-            cond_text = option.get_text(" ", strip=True)
+        for option in select_el.css("option"):
+            spec_id = (option.attributes.get("value") or "").strip()
+            cond_text = option.text(deep=True, separator=" ", strip=True)
             if not spec_id:
                 continue
             # Accept "NM" and "NM〜NM-" (the shop's near-mint range bucket).
@@ -126,7 +143,7 @@ def parse_search_html(html: str, card_name: str, fx_jpy_per_usd: float) -> list[
             if entry is None or entry["stock"] <= 0:
                 continue
 
-            href = str((link_el.get("href") if link_el else "") or "").strip()
+            href = ((link_el.attributes.get("href") if link_el else "") or "").strip()
             link = href if href.startswith("http") else f"{BASE_URL}{href}"
 
             records.append({
@@ -148,5 +165,5 @@ class MintMallScrapper(HtmlSearchScrapper):
     LOGGER_NAME = "mtgcompare.scrappers.mintmall"
     SEARCH_PARAM_NAME = "name"
 
-    def parse_html(self, html: str, card_name: str) -> list[dict]:
+    def parse_html(self, html: str | bytes, card_name: str) -> list[dict]:
         return parse_search_html(html, card_name, self.fx)

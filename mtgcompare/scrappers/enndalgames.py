@@ -17,7 +17,7 @@ match the unembellished printings from other shops.
 """
 import re
 
-from bs4 import BeautifulSoup
+from selectolax.parser import HTMLParser
 
 from ._base import HtmlSearchScrapper
 
@@ -39,18 +39,18 @@ _PRICE_RE = re.compile(r"([\d,]+)\s*yen")
 _QTY_RE = re.compile(r"\((\d+)\)")
 
 
-def parse_search_html(html: str, card_name: str, fx_jpy_per_usd: float) -> list[dict]:
+def parse_search_html(html: str | bytes, card_name: str, fx_jpy_per_usd: float) -> list[dict]:
     """Extract English-NM in-stock rows for ``card_name`` from an ENNDAL page."""
-    soup = BeautifulSoup(html, "html.parser")
+    tree = HTMLParser(html)
     target = card_name.strip().lower()
     records: list[dict] = []
 
-    for wrapper in soup.select("div.product_detail_wrapper"):
-        name_el = wrapper.select_one("a.product_name")
+    for wrapper in tree.css("div.product_detail_wrapper"):
+        name_el = wrapper.css_first("a.product_name")
         if name_el is None:
             continue
 
-        title = name_el.get_text(strip=True)
+        title = name_el.text(deep=True, strip=True)
         # Variant prefixes (Foil, 日本画, 旧枠, PSA10, ...) — skip; we only want
         # the canonical printing.
         if title.startswith("【"):
@@ -64,35 +64,35 @@ def parse_search_html(html: str, card_name: str, fx_jpy_per_usd: float) -> list[
         if en.lower() != target:
             continue
 
-        link = str(name_el.get("href") or "").strip()
+        link = (name_el.attributes.get("href") or "").strip()
         if link and not link.startswith("http"):
             link = f"{BASE_URL}{link}"
 
-        table = wrapper.select_one("table.item_stock_table")
+        table = wrapper.css_first("table.item_stock_table")
         if table is None:
             continue
 
-        for row in table.select("tr"):
-            th = row.select_one("th")
-            td = row.select_one("td")
+        for row in table.css("tr"):
+            th = row.css_first("th")
+            td = row.css_first("td")
             if not (th and td):
                 continue
-            if th.get_text(strip=True) != "English NM":
+            if th.text(deep=True, strip=True) != "English NM":
                 continue
 
-            price_el = td.select_one("span.price")
-            qty_el = td.select_one("span.quantity")
+            price_el = td.css_first("span.price")
+            qty_el = td.css_first("span.quantity")
             if not (price_el and qty_el):
                 continue
 
-            qty_match = _QTY_RE.search(qty_el.get_text())
+            qty_match = _QTY_RE.search(qty_el.text(deep=True, separator=" ", strip=True))
             if not qty_match:
                 continue
             stock = int(qty_match.group(1))
             if stock <= 0:
                 continue
 
-            price_match = _PRICE_RE.search(price_el.get_text())
+            price_match = _PRICE_RE.search(price_el.text(deep=True, separator=" ", strip=True))
             if not price_match:
                 continue
             price_jpy = float(price_match.group(1).replace(",", ""))
@@ -117,7 +117,7 @@ class EnndalGamesScrapper(HtmlSearchScrapper):
     SEARCH_URL = SEARCH_URL
     LOGGER_NAME = "mtgcompare.scrappers.enndalgames"
 
-    def parse_html(self, html: str, card_name: str) -> list[dict]:
+    def parse_html(self, html: str | bytes, card_name: str) -> list[dict]:
         return parse_search_html(html, card_name, self.fx)
 
     def search_params(self, card_name: str) -> dict:

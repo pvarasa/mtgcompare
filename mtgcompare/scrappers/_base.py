@@ -96,16 +96,24 @@ class HtmlSearchScrapper(MtgScrapper):
 
     # --- subclasses customise these ---
 
-    def parse_html(self, html: str, card_name: str) -> list[dict]:
+    def parse_html(self, html: str | bytes, card_name: str) -> list[dict]:
         """Return parsed records. Typically delegates to a module-level
-        ``parse_search_html(html, card_name, fx)`` pure function."""
+        ``parse_search_html(html, card_name, fx)`` pure function. The
+        parser (selectolax) accepts bytes directly and reads the HTML
+        meta-charset, so subclasses don't need to decode unless the
+        encoding can't be sniffed (BLACK FROG / EUC-JP)."""
         raise NotImplementedError
 
     def search_params(self, card_name: str) -> dict:
         return {self.SEARCH_PARAM_NAME: card_name}
 
-    def decode_response(self, resp: requests.Response) -> str:
-        return resp.text
+    def decode_response(self, resp: requests.Response) -> str | bytes:
+        """Default: return the raw response bytes, skipping the
+        ``resp.text`` decode (which would allocate a second copy of the
+        body as a Python str). Subclasses can override to return ``str``
+        when the encoding has to be forced (e.g. BLACK FROG / EUC-JP).
+        Either is fine for the selectolax parser."""
+        return resp.content
 
     # --- shared scaffolding ---
 
@@ -114,8 +122,8 @@ class HtmlSearchScrapper(MtgScrapper):
         # so the cache layer can distinguish "shop has no listings"
         # (cacheable) from "we couldn't reach the shop" (don't cache).
         t0 = monotonic()
-        html = self._fetch_search_html(card_name)
-        records = self.parse_html(html, card_name)
+        body = self._fetch_search_html(card_name)
+        records = self.parse_html(body, card_name)
         self.logger.info(
             "event=shop_query shop=%r card=%r rows=%d duration_ms=%d",
             self.SHOP_NAME, card_name, len(records),
@@ -123,7 +131,7 @@ class HtmlSearchScrapper(MtgScrapper):
         )
         return records
 
-    def _fetch_search_html(self, card_name: str) -> str:
+    def _fetch_search_html(self, card_name: str) -> str | bytes:
         try:
             resp = self.session.get(
                 self.SEARCH_URL,

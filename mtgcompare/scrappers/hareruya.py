@@ -13,7 +13,7 @@ import re
 from time import monotonic
 
 import requests
-from bs4 import BeautifulSoup
+from selectolax.parser import HTMLParser
 
 from ..scrapper import MtgScrapper
 from ..utils import get_fx
@@ -33,25 +33,27 @@ def make_session() -> requests.Session:
     return _make_session({"X-Requested-With": "XMLHttpRequest"})
 
 
-def parse_lazy_html(html: str, card_name: str, fx_jpy_per_usd: float) -> list[dict]:
+def parse_lazy_html(html: str | bytes, card_name: str, fx_jpy_per_usd: float) -> list[dict]:
     """Extract price records from the HTML returned by /unisearch/lazy.
 
     fx_jpy_per_usd: JPY per 1 USD (yfinance "JPY=X" previousClose).
     """
-    soup = BeautifulSoup(html, "html.parser")
+    tree = HTMLParser(html)
     target = card_name.strip().lower()
     records: list[dict] = []
 
-    for item_data in soup.find_all("div", class_="itemData"):
-        name_el = item_data.find(class_="itemName")
-        price_el = item_data.find(class_="itemDetail__price")
-        stock_el = item_data.find(class_="itemDetail__stock")
+    for item_data in tree.css("div.itemData"):
+        name_el = item_data.css_first(".itemName")
+        price_el = item_data.css_first(".itemDetail__price")
+        stock_el = item_data.css_first(".itemDetail__stock")
         if not (name_el and price_el and stock_el):
             continue
 
-        name_match = _NAME_SET_RE.search(name_el.get_text())
-        stock_match = _STOCK_RE.search(stock_el.get_text())
-        price_match = _PRICE_RE.search(price_el.get_text().replace("¥", ""))
+        name_match = _NAME_SET_RE.search(name_el.text(deep=True, separator=" ", strip=True))
+        stock_match = _STOCK_RE.search(stock_el.text(deep=True, separator=" ", strip=True))
+        price_match = _PRICE_RE.search(
+            price_el.text(deep=True, separator=" ", strip=True).replace("¥", ""),
+        )
         if not (name_match and stock_match and price_match):
             continue
 
@@ -67,7 +69,7 @@ def parse_lazy_html(html: str, card_name: str, fx_jpy_per_usd: float) -> list[di
         price_jpy = float(price_match.group(1).replace(",", ""))
         price_usd = round(price_jpy / fx_jpy_per_usd, 2)
 
-        href = str(name_el.get("href") or "").strip()
+        href = (name_el.attributes.get("href") or "").strip()
         link = f"{BASE_URL}{href}" if href.startswith("/") else href
 
         records.append({
@@ -105,8 +107,8 @@ class HareruyaScrapper(MtgScrapper):
                 card_name, int((monotonic() - t0) * 1000),
             )
             return []
-        html = self._fetch_lazy_html(docs)
-        records = parse_lazy_html(html, card_name, self.fx)
+        body = self._fetch_lazy_html(docs)
+        records = parse_lazy_html(body, card_name, self.fx)
         self.logger.info(
             "event=shop_query shop='Hareruya' card=%r rows=%d duration_ms=%d",
             card_name, len(records), int((monotonic() - t0) * 1000),
@@ -136,7 +138,7 @@ class HareruyaScrapper(MtgScrapper):
         except ValueError as e:
             raise ScraperFetchError(f"Hareruya unisearch_api JSON decode failed: {e}") from e
 
-    def _fetch_lazy_html(self, docs: list[dict]) -> str:
+    def _fetch_lazy_html(self, docs: list[dict]) -> bytes:
         payload: list[tuple[str, str]] = [("css", "itemList")]
         for i, d in enumerate(docs):
             for key, val in d.items():
@@ -149,4 +151,4 @@ class HareruyaScrapper(MtgScrapper):
             raise RateLimitedError("Hareruya unisearch/lazy returned 429")
         if resp.status_code >= 400:
             raise ScraperFetchError(f"Hareruya unisearch/lazy HTTP {resp.status_code}")
-        return resp.text
+        return resp.content
