@@ -176,7 +176,7 @@ DATABASE_URL=postgresql+psycopg2://... uv run pytest -m pg # PostgreSQL bulk-loa
 Produces `dist/mtgcompare-windows.zip`. To publish a release, push a version tag:
 
 ```bash
-git tag v1.6.0 && git push --tags
+git tag v1.7.0 && git push --tags
 ```
 
 GitHub Actions builds and attaches the zip to the GitHub Release automatically.

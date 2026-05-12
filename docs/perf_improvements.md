@@ -1,178 +1,155 @@
 # mtgcompare — Performance improvement backlog
 
-Captured 2026-05-04 from the analysis of a 32-unique-card / 76-card
-Legacy decklist search that took **76.5 s wall-clock** (cold cache),
-peaked at **+480 MB transient RSS**, and was causing K8s liveness probes
-to flap on the single-worker gunicorn config.
+Originally captured 2026-05-04 from a 32-card / 76 s decklist search
+that was flapping K8s liveness probes. The list below tracks what's
+shipped, what's still open, and why — in priority order for the open
+items.
 
-v1.5.11 already shipped #1 and #2 (gunicorn `--workers=2 --timeout=120`)
-to fix the immediate liveness-probe problem. Items below are the next
-levels of optimisation, ranked roughly by ROI.
+Reconciled with shipped code at **v1.6.9**.
 
 ---
 
-## #3 — Stream results to the browser as cards complete *(highest UX win)*
+## Done
 
-**Problem.** With 76 s end-to-end decklist time, the user sees a blank
-loading spinner for ~76 s. Total time is fundamentally bounded by the
-slowest shop on the slowest card, so we can't reduce wall-clock easily.
-But we *can* dramatically reduce **perceived** time.
+### gunicorn workers + timeout *(v1.5.11)*
+`--workers=4 --threads=8 --timeout=120` in the Dockerfile (raised from
+the original `--workers=2 --threads=4` in v1.6.7). Up to 32 concurrent
+requests per pod; long decklist requests no longer trip gunicorn's
+default 30s worker timeout.
 
-**Idea.** Replace the final `render_template("decklist.html", ...)` with
-a streaming response that emits HTML fragments (or JSON-Lines events)
-as each card's `as_completed()` future resolves. The browser renders
-each row as it arrives — first card visible in ~3 s instead of 76 s.
+### Per-shop wall-clock cap *(v1.6.7)*
+`SHOP_QUERY_TIMEOUT_S` (default 30s) bounds the slowest shop's
+contribution to any single `(card × shop)` query inside `collect_prices`.
+Stragglers keep running in the background so their result lands in the
+cache for next time, but the caller is unblocked at the cap. Surfaced
+in the UI via the `Partial results: ... timed out` warning banner.
 
-**Implementation sketch.**
+### Basic-land filter *(v1.6.7)*
+`/decklist` strips Plains/Island/Swamp/Mountain/Forest/Wastes (and
+Snow-Covered variants) before the fan-out. Avoids the multi-page
+Scryfall responses for popular lands and the ~600-row noise from JP
+shops that would otherwise inflate the per-card scrape time.
 
-- New endpoint `POST /decklist/stream` that returns
-  `Content-Type: text/event-stream`.
-- Generator function:
-  ```python
-  def stream_decklist(text, fx, enabled, ...):
-      # ... existing parsing/inventory deduction ...
-      with ThreadPoolExecutor(max_workers=6) as ex:
-          futs = {ex.submit(_fetch_card_prices, n, fx, enabled): n for n in names}
-          for fut in as_completed(futs):
-              row = build_row(fut.result(), ...)
-              yield f"event: card\ndata: {json.dumps(row)}\n\n"
-      yield f"event: complete\ndata: {json.dumps(grand_totals)}\n\n"
-  ```
-- Frontend uses `EventSource` (or fetch+ReadableStream for POSTed
-  bodies) to inject rows as they arrive.
-- Keep the existing non-streaming endpoint as a fallback for clients
-  that don't speak SSE (and for the canary).
+### Per-card fan-out cap *(v1.6.7)*
+`DECKLIST_FAN_OUT_WORKERS` (default 12, configmap-tuned to 18) caps
+the outer fan-out. 30 was tried and OOM'd; 18 is the empirical ceiling
+at the current pod memory budget (2 GiB).
 
-**Effort.** ~80 lines of code + a small frontend rework. ~4 hours.
+### Replace bs4+html.parser with selectolax + bytes *(v1.6.8)*
+The single biggest per-fetch memory win. All 7 HTML scrapers now parse
+with selectolax (Modest engine, C-backed) directly from `resp.content`,
+skipping the `resp.text` Python str copy. Measured on a 3-deck cold
+probe:
 
-**Watch out for.** SSE keeps the gunicorn worker thread busy for the
-duration; with 2 workers and 4 threads each (8 total) plus health
-probes, we still have plenty of headroom for normal traffic. If the
-service grows, revisit whether async (#6) is worth it.
+| | v1.6.7 (bs4) | v1.6.8 |
+|---|---|---|
+| Kenrith 78-name | 277 s, 6 shops timed out | 103 s, 0 timeouts |
+| Edgar 91-name | 328 s, 5 shops timed out | 124 s, 0 timeouts |
+| Atraxa 90-name | 320 s, 5 shops timed out | 106 s, 0 timeouts |
+| Peak memory (3-deck run) | 1.98 GiB | 1.48 GiB |
 
----
+This is what the original "#5 lxml + iterparse" entry recommended.
+We landed on selectolax instead — same parsing model (C tree, drop
+after extraction), better CSS selector ergonomics, no iterparse
+hand-rolling per shop.
 
-## #4 — Cap inner concurrency to halve peak memory
-
-**Problem.** Today: 6 cards × 8 shops = **48 concurrent HTTPS
-connections** in one process. Peak memory ~480 MB during BeautifulSoup
-parsing of overlapping responses.
-
-**Idea.** Reduce one of the two fan-out levels:
-
-| Card-level | Shop-level | Peak inflight | Wall-clock impact |
-|---|---|---|---|
-| 6 | 8 (today) | 48 | baseline |
-| 3 | 8 | 24 | +30 % wall-clock |
-| 6 | 4 | 24 | +25 % wall-clock |
-| 3 | 4 | 12 | +50 % wall-clock |
-
-**Implementation.** Two-line change:
-- `web.py`: `max_workers=min(len(names_to_search), 6)` → `3`
-- `shops.py`: `max_workers=len(scrapers)` → `min(len(scrapers), 4)`
-
-**Effort.** 5 min. Might be worth doing pre-emptively before traffic
-grows; halves memory peak with manageable latency cost.
-
-**Skip if** #3 (streaming) lands first — the latency increase is more
-forgiving when results arrive incrementally.
+### Scryfall page-by-page + orjson + smaller session pools *(v1.6.9)*
+Scryfall's `_iter_pages` is a generator now; each page is parsed and
+dropped. JSON parse via `orjson` from bytes. `HTTPAdapter(pool_maxsize=2)`
+on every shop session — was 10, which mattered when many scraper
+instances spin up per /decklist. Measured impact on top of v1.6.8 is
+within run-to-run variance; the change is mostly code hygiene against
+the rare popular-card-with-many-printings case.
 
 ---
 
-## #5 — lxml + iterparse for the heavyweight HTML shops
+## Open
 
-**Problem.** Cardshop Serra returns a 2.5 MB HTML page per card.
-BeautifulSoup builds the full DOM (~25 MB of Python objects) and holds
-the GIL for hundreds of ms while doing it. With 6 such parses
-overlapping, the GIL is contested almost continuously, which is the
-proximate reason `/healthz` slows down during searches.
+### Stream results to the browser (SSE) *(highest remaining UX win)*
 
-**Idea.** For the largest-response shops (Cardshop Serra, MINT MALL,
-SingleStar — all >1 MB), parse with `lxml.etree.iterparse`. It
-streams the document, fires events on tag-close, and lets us free
-nodes as we go. Memory drops ~70 %, GIL holds shorten to single-digit
-ms each.
+**Problem.** Cold-cache 100-card commander searches still take
+~100–125 s and one of the three test decks (Edgar Markov, 91 names)
+slips past Cloudflare's ~100 s edge timeout, returning a 524 even
+though the backend eventually completes successfully. The wall-clock
+floor is bounded by `ceil(distinct_names / fan_out_workers) ×
+per_shop_timeout` and can't realistically drop further without
+either a much bigger pod or accepting upstream rate-limit pushback.
 
-**Implementation.** Per shop, replace `BeautifulSoup(html)` and
-`soup.select(...)` with an `iterparse(io.BytesIO(html), events=("end",), tag="li")`-style loop. The pure parser functions are well-isolated;
-each scraper rewrite is ~30–50 lines. Tests stay fixture-driven so
-the behaviour is verifiable.
+**Idea.** Bytes-flowing connections don't 524. Replace the synchronous
+`render_template("decklist.html", ...)` with an SSE-driven flow:
 
-**Effort.** 1–2 hours per shop. Three shops to do = half a day total.
+- `POST /decklist` creates an in-process `Job`, returns `{job_id}` + 202.
+- `GET /decklist/{job_id}/stream` opens a `text/event-stream` connection
+  that emits typed events as the search runs:
+  - `started` → skeleton (total cards, basics_skipped, names_to_search)
+  - `row` → one per card as `_fetch_decklist_prices` yields
+  - `totals` → running shop/grand totals (debounced, e.g. every 1 s)
+  - `shop_timeout` → live warning-banner updates
+  - `done` → final aggregated state
+  - `error` → fatal failure
+- Browser uses `EventSource` to append rows and update totals live.
 
-**Worth it when.** Memory or GIL becomes a pain on a more crowded host
-(more workers, more concurrent users), or before the bulk-crawl path
-in the cache plan lands.
+**Why the structural pieces are mostly in place.** `_fetch_decklist_prices`
+already uses `as_completed`; converting it to a generator that yields
+`(name, prices)` per completion is small. Job state can be an in-process
+dict while `replicas: 1` — Redis is a scale-out concern, not a today
+concern. Auth on the SSE endpoint piggybacks on the existing WorkOS
+session check.
 
----
+**Effort.** ~1 focused day:
+- ~30 min: `_fetch_decklist_prices` → generator
+- ~30 min: `Job` dataclass + `_jobs: dict` + cleanup TTL
+- ~1 h: SSE endpoint (auth + cleanup)
+- ~1 h: tests
+- ~2 h: split `decklist.html` into form + skeleton + JS handler
+- buffer: live running-totals math on the client
 
-## #6 — Async I/O via httpx + asyncio *(largest refactor, eliminates GIL contention)*
+**Also fixes the concurrent-users OOM angle.** The SSE plan creates a
+natural place to plug a process-level semaphore that queues
+concurrent `/decklist` requests instead of letting them stampede into
+the 2 GiB memory ceiling.
 
-**Problem.** Threads × Python = GIL serialization on CPU-bound work
-(parsing). Adding more threads doesn't actually run more parsers
-simultaneously — it just adds context-switch overhead.
+### Process-level concurrency cap *(small standalone change)*
 
-**Idea.** Replace ThreadPoolExecutor with `asyncio.gather()` over
-`httpx.AsyncClient`. Single-threaded cooperative I/O; one parse at a
-time but 8+ HTTPS calls in flight. Memory drops further (no thread
-stacks). gunicorn still uses sync workers but the inside of each
-request is async.
+If SSE is too big to land soon, a 20-line `threading.Semaphore` (or
+`pg_try_advisory_lock` for cross-worker coordination) around the
+fan-out gives concurrent users a clean "you're queued" path instead of
+the current OOM-prone stampede. See the per-fetch memory analysis
+session of 2026-05-12 for the full breakdown.
 
-**Implementation sketch.**
+### Bump pod memory + DECKLIST_FAN_OUT_WORKERS *(brute-force interim)*
 
-- New scraper base: `AsyncMtgScrapper` with `async def get_prices(...)`.
-- All 7 HTML scrapers reimplemented with `httpx.AsyncClient` + the
-  same `parse_search_html` pure functions.
-- Cache layer becomes `async`-aware (singleflight via
-  `asyncio.Future`).
-- `collect_prices` becomes `async def` with `asyncio.gather`.
-- `web.py` runs the async coroutine via `asyncio.run()` or, better,
-  switches to `gunicorn -k uvicorn.workers.UvicornWorker` and
-  declares the search routes `async`.
-
-**Effort.** ~2 days. Cache layer is the trickiest piece because it
-currently uses sync SQLAlchemy.
-
-**Watch out for.** Mixing sync (SQLAlchemy, Flask routing) with async
-(scrapers, httpx) is surprisingly easy to get wrong. If pursued, do
-it as a clean migration to FastAPI + AsyncEngine, not a hybrid.
-
----
-
-## #7 — Bump probe tolerances *(band-aid, last resort)*
-
-```yaml
-livenessProbe:
-  periodSeconds: 60
-  timeoutSeconds: 10
-  failureThreshold: 5
-```
-
-Doesn't fix anything; just makes the symptom less visible. Only use
-this if 1, 2, and one of 3/4/5 are insufficient. Currently NOT needed
-after v1.5.11.
+2 GiB → 3 GiB on the pod limit + workers 18 → 26–30 would put the
+Edgar cold-cache case under 100 s on raw fan-out alone, without the
+SSE rewrite. Trade-off: more concurrent shop HTTPS requests means a
+higher chance of upstream rate-limit pushback (Scryfall starts 429ing
+above ~20 concurrent in our measurements). Worth doing only if SSE
+slips and Edgar's 124 s 524 becomes a recurring user complaint.
 
 ---
 
-## What NOT to do
+## What NOT to do (decisions worth preserving)
 
-- **Don't add a Redis cache layer.** The local SQLite/Postgres cache
-  is already serving sub-millisecond hot reads; Redis would add a
-  network hop and ops surface for no real win.
-- **Don't pre-warm the cache by crawling all of Hareruya nightly.**
-  See `docs/shop_integration_plan.md` for the full discussion of why
-  bulk indexing is a bigger project than it appears (and why it's the
-  right move once we hit ~15+ shops, but premature today).
-- **Don't switch to BeautifulSoup's `lxml` builder without iterparse.**
-  Just changing the parser backend is a 5–15 % win; the big savings
-  come from streaming, which requires a structural rewrite.
+- **Don't add a Redis cache layer.** The Postgres `shop_query_log` /
+  `shop_listings` cache is serving sub-millisecond hot reads; Redis
+  would add a network hop and ops surface for no real win.
+- **Don't pre-warm by crawling all of Hareruya nightly.** See
+  `docs/shop_integration_plan.md` for the full discussion — bulk
+  indexing is the right move past ~15 shops, premature today.
+- **Don't switch the bs4 builder to lxml without going further.** The
+  selectolax switch in v1.6.8 already achieved the streaming-parser
+  win; rebuilding on bs4+lxml would be regression in both speed and
+  memory.
+- **Don't async-rewrite to httpx + asyncio.** Threads × Python's GIL
+  was the original concern but parsing dropped out of the hot path in
+  v1.6.8. The remaining wall-time is shop-side I/O latency, which an
+  async rewrite wouldn't change. Effort would be ~2 days and would
+  require migrating SQLAlchemy + Flask to async too. Not worth it.
 
 ---
 
 ## Recommended next move
 
-When the v1.5.11 gunicorn fix has had a few days to prove itself, do
-**#3 (streaming results)** as the next big improvement. It's the
-single change that most transforms how the app feels for a Legacy /
-Modern decklist user, and it doesn't require any of the larger
-refactors below it.
+Land the **SSE streaming endpoint** (the "Open #1" item above). It's
+the structural fix for the remaining CF-524 cases, and the same
+refactor naturally opens the door to the concurrent-users semaphore.

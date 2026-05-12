@@ -11,6 +11,7 @@ Use the platform build scripts to zip and package:
     Windows: scripts/build.ps1
     macOS:   scripts/build.sh
 """
+import os
 import sys
 from PyInstaller.utils.hooks import collect_all
 
@@ -19,13 +20,26 @@ yf_datas,     yf_binaries,     yf_hidden     = collect_all("yfinance")
 pandas_datas, pandas_binaries, pandas_hidden = collect_all("pandas")
 
 _hidden = [
-    # Scrapers are imported by name in shops.py — list them explicitly
-    # so the analyser doesn't miss them.
+    # Belt-and-suspenders: shops.py imports each scraper module statically
+    # so PyInstaller's analyser should already see them, but listing them
+    # explicitly survives any future indirect-import refactor (e.g. an
+    # entry-point or importlib-based discovery scheme).
+    "mtgcompare.scrappers.blackfrog",
+    "mtgcompare.scrappers.cardrush",
+    "mtgcompare.scrappers.enndalgames",
     "mtgcompare.scrappers.hareruya",
+    "mtgcompare.scrappers.mintmall",
     "mtgcompare.scrappers.scryfall",
+    "mtgcompare.scrappers.serra",
     "mtgcompare.scrappers.singlestar",
     "mtgcompare.scrappers.tokyomtg",
 ] + yf_hidden + pandas_hidden
+
+# Bundle version pulled from MTGCOMPARE_VERSION when set by the release
+# workflow (it strips the leading "v" from the git tag), otherwise a
+# clearly-marked dev fallback. The macOS-only Info.plist below reads
+# this so dist/MTG Compare.app advertises the correct CFBundleShortVersionString.
+_bundle_version = os.environ.get("MTGCOMPARE_VERSION", "0.0.0-dev")
 
 if sys.platform == "darwin":
     _hidden += ["pystray._darwin"]
@@ -79,7 +93,7 @@ if sys.platform == "darwin":
         icon=None,
         bundle_identifier="com.mtgcompare.app",
         info_plist={
-            "CFBundleShortVersionString": "1.2.0",
+            "CFBundleShortVersionString": _bundle_version,
             "CFBundleDisplayName": "MTG Compare",
             "LSUIElement": True,       # tray-only: no Dock icon
             "NSHighResolutionCapable": True,

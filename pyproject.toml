@@ -5,7 +5,6 @@ description = "Compares prices for Magic The Gathering cards across online shops
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "beautifulsoup4>=4.14",
     "cachetools>=5.5",
     "selectolax>=0.3.21",
     "duckdb>=1.2",
