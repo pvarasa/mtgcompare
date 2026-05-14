@@ -1,10 +1,15 @@
 """TokyoMTG (tokyomtg.com) scraper.
 
 TokyoMTG has no public API — site is bespoke PHP with server-rendered
-HTML at `/cardpage.html?query=<name>&p=q`. Each printing is wrapped in a
-`div.pwrapper` with Bootstrap nav-tabs for Regular/Played/Foil/PlayedFoil.
-We only pull the Regular (NM) tab of English-version entries that have
-stock.
+HTML at `/cardpage.html?query=<name>&p=q&cx=jpy`. Each printing is
+wrapped in a `div.pwrapper` with Bootstrap nav-tabs for
+Regular/Played/Foil/PlayedFoil. We only pull the Regular (NM) tab of
+English-version entries that have stock.
+
+``cx=jpy`` is load-bearing: without it the site geo-IPs the client and
+serves prices in the local currency (EUR from a German Hetzner egress,
+USD from US IPs, etc.), and our ``_PRICE_RE`` only matches the ¥ glyph.
+Before this was set, prod silently returned 0 rows for every search.
 
 The default `User-Agent` gets a 429, so the scraper merges a full
 ``Accept-*`` browser fingerprint via ``SESSION_HEADERS``.
@@ -104,4 +109,4 @@ class TokyoMtgScrapper(HtmlSearchScrapper):
         return parse_search_html(html, card_name, self.fx)
 
     def search_params(self, card_name: str) -> dict:
-        return {"query": card_name, "p": "q"}
+        return {"query": card_name, "p": "q", "cx": "jpy"}

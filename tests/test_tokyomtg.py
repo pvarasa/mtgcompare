@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from mtgcompare.scrappers.tokyomtg import parse_search_html
+from mtgcompare.scrappers.tokyomtg import TokyoMtgScrapper, parse_search_html
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
@@ -140,3 +140,16 @@ def test_parse_ignores_foil_only_stock():
     </div></div>
     """
     assert parse_search_html(html, "Force of Will", fx_jpy_per_usd=150.0) == []
+
+
+def test_search_params_forces_jpy_currency():
+    """TokyoMTG geo-IPs the client and serves prices in the local
+    currency by default — EUR from a Hetzner Germany egress, USD from
+    US IPs. Our ``_PRICE_RE`` only matches the ¥ glyph, so without
+    ``cx=jpy`` every search silently returned zero rows in production.
+    This test pins the currency override so a future refactor of
+    ``search_params`` can't reintroduce the regression."""
+    scraper = TokyoMtgScrapper(fx=150.0)
+    params = scraper.search_params("Sol Ring")
+    assert params["cx"] == "jpy"
+    assert params["query"] == "Sol Ring"
