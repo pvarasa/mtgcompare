@@ -5,7 +5,7 @@ that was flapping K8s liveness probes. The list below tracks what's
 shipped, what's still open, and why — in priority order for the open
 items.
 
-Reconciled with shipped code at **v1.7.x**.
+Reconciled with shipped code at **v1.8.0**.
 
 ---
 
@@ -63,7 +63,7 @@ the rare popular-card-with-many-printings case.
 
 ---
 
-### SSE-streamed /decklist *(v1.7.x)*
+### SSE-streamed /decklist *(v1.8.0)*
 `POST /decklist/stream` returns `text/event-stream` directly — one
 HTTP request from form-submit to `done`. Bytes start flowing within a
 few hundred ms so Cloudflare never trips its idle timer; 524s on
