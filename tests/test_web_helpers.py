@@ -158,7 +158,7 @@ def test_iter_decklist_prices_populates_timeouts_out(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# SSE /decklist/jobs flow
+# SSE /decklist/stream flow (single streaming POST)
 # ---------------------------------------------------------------------------
 
 def _drain_sse(iter_encoded, timeout=10.0):
@@ -197,16 +197,18 @@ def _drain_sse(iter_encoded, timeout=10.0):
 
 
 @pytest.fixture
-def _clean_search_jobs():
-    """Reset the in-process search-jobs store around each test."""
-    web._search_jobs.clear()
+def _clean_in_flight():
+    """Reset the per-user in-flight counter around each test so cap
+    assertions in one test don't leak into the next."""
+    web._in_flight_by_user.clear()
     yield
-    web._search_jobs.clear()
+    web._in_flight_by_user.clear()
 
 
-def test_decklist_jobs_happy_path_streams_meta_rows_totals_done(monkeypatch, _clean_search_jobs):
-    """End-to-end: POST creates a job, GET stream emits the expected
-    event sequence (meta → row × N → totals → done)."""
+def test_decklist_stream_happy_path_streams_meta_rows_totals_done(monkeypatch, _clean_in_flight):
+    """End-to-end: a single POST returns text/event-stream and emits
+    the expected event sequence (meta → row × N → totals → done) in the
+    response body — no follow-up GET, no job_id."""
     web.app.config["WTF_CSRF_ENABLED"] = False
     monkeypatch.setattr(web, "_get_fx", lambda: 150.0)
 
@@ -219,14 +221,12 @@ def test_decklist_jobs_happy_path_streams_meta_rows_totals_done(monkeypatch, _cl
     monkeypatch.setattr(web, "collect_prices", fake_collect)
 
     with web.app.test_client() as client:
-        post = client.post("/decklist/jobs",
-                           data={"decklist": "1 Sol Ring\n1 Mana Drain"})
-        assert post.status_code == 202, post.data
-        job_id = post.get_json()["job_id"]
-        assert len(job_id) >= 20
-
-        resp = client.get(f"/decklist/jobs/{job_id}/stream", buffered=False)
-        assert resp.status_code == 200
+        resp = client.post(
+            "/decklist/stream",
+            data={"decklist": "1 Sol Ring\n1 Mana Drain"},
+            buffered=False,
+        )
+        assert resp.status_code == 200, resp.data
         assert resp.headers["Content-Type"].startswith("text/event-stream")
         events = _drain_sse(resp.response, timeout=10.0)
 
@@ -236,14 +236,10 @@ def test_decklist_jobs_happy_path_streams_meta_rows_totals_done(monkeypatch, _cl
     assert "totals" in types
     assert types[-1] == "done"
 
-    # meta carries the inventory/basics breakdown the client paints first.
     meta = next(d for t, d in events if t == "meta")
     assert meta["distinct_names"] == 2
     assert meta["names_to_search"] == 2
 
-    # Each row carries pre-rendered HTML + a key + a couple of summary
-    # flags. The HTML must contain the shop name (we know the fake
-    # collect_prices returned Hareruya).
     for t, d in events:
         if t == "row":
             assert {"key", "html", "qty_needed", "has_best"} <= d.keys()
@@ -251,7 +247,7 @@ def test_decklist_jobs_happy_path_streams_meta_rows_totals_done(monkeypatch, _cl
             assert d["has_best"] is True
 
 
-def test_decklist_jobs_row_event_key_matches_lowercased_card_name(monkeypatch, _clean_search_jobs):
+def test_decklist_stream_row_event_key_matches_lowercased_card_name(monkeypatch, _clean_in_flight):
     """The streaming JS uses ``row.key`` as the sort key when inserting
     each <tr> into the alphabetical slot. The key must be the lowercased
     canonical name — sort-aware behavior on the client depends on it."""
@@ -261,15 +257,15 @@ def test_decklist_jobs_row_event_key_matches_lowercased_card_name(monkeypatch, _
                         lambda *a, **kw: [])
 
     with web.app.test_client() as client:
-        post = client.post("/decklist/jobs",
-                           data={"decklist": "1 Sol Ring\n1 Ancestral Recall"})
-        job_id = post.get_json()["job_id"]
-        resp = client.get(f"/decklist/jobs/{job_id}/stream", buffered=False)
+        resp = client.post(
+            "/decklist/stream",
+            data={"decklist": "1 Sol Ring\n1 Ancestral Recall"},
+            buffered=False,
+        )
         events = _drain_sse(resp.response, timeout=10.0)
 
     row_keys = [d["key"] for t, d in events if t == "row"]
     assert sorted(row_keys) == row_keys or set(row_keys) == {"sol ring", "ancestral recall"}
-    # Stronger: each key must be lowercase
     for k in row_keys:
         assert k == k.lower(), f"row.key must be lowercased; got {k!r}"
 
@@ -311,7 +307,7 @@ def test_compute_static_token_returns_stable_positive_integer_string():
     assert token == web._STATIC_TOKEN
 
 
-def test_decklist_jobs_streams_inventory_rows_before_searched_rows(monkeypatch, _clean_search_jobs):
+def test_decklist_stream_emits_inventory_rows_before_searched_rows(monkeypatch, _clean_in_flight):
     """Cards covered by inventory get row events up-front (qty_needed=0,
     has_best=False), before any shop fan-out runs. Without this, the
     streamed table would be shorter than the synchronous one — missing
@@ -319,7 +315,6 @@ def test_decklist_jobs_streams_inventory_rows_before_searched_rows(monkeypatch, 
     web.app.config["WTF_CSRF_ENABLED"] = False
     monkeypatch.setattr(web, "_get_fx", lambda: 150.0)
 
-    # Pretend "Sol Ring" is in inventory but "Mana Drain" isn't.
     def fake_load_inventory(use_inventory):
         return {"sol ring": 1} if use_inventory else {}
     monkeypatch.setattr(web, "_load_inventory_qty_map", fake_load_inventory)
@@ -333,18 +328,15 @@ def test_decklist_jobs_streams_inventory_rows_before_searched_rows(monkeypatch, 
     monkeypatch.setattr(web, "collect_prices", fake_collect)
 
     with web.app.test_client() as client:
-        post = client.post("/decklist/jobs", data={
-            "decklist": "1 Sol Ring\n1 Mana Drain",
-            "use_inventory": "1",
-        })
-        assert post.status_code == 202, post.data
-        job_id = post.get_json()["job_id"]
-
-        resp = client.get(f"/decklist/jobs/{job_id}/stream", buffered=False)
+        resp = client.post(
+            "/decklist/stream",
+            data={"decklist": "1 Sol Ring\n1 Mana Drain", "use_inventory": "1"},
+            buffered=False,
+        )
+        assert resp.status_code == 200, resp.data
         events = _drain_sse(resp.response, timeout=10.0)
 
     row_events = [d for t, d in events if t == "row"]
-    # Two distinct names → two row events total.
     assert len(row_events) == 2
     # The inventory-covered row arrives first, marked qty_needed=0.
     assert row_events[0]["qty_needed"] == 0
@@ -356,13 +348,14 @@ def test_decklist_jobs_streams_inventory_rows_before_searched_rows(monkeypatch, 
     assert "Mana Drain" in row_events[1]["html"]
 
 
-def test_decklist_jobs_rejects_validation_failures_with_json_400(monkeypatch, _clean_search_jobs):
+def test_decklist_stream_rejects_validation_failures_with_json_400(monkeypatch, _clean_in_flight):
     """An only-basics decklist gets a 400 + ``reason`` so the client can
-    show the same error message the synchronous handler shows, without
-    opening a stream that would only carry a single ``error`` event."""
+    surface the same error message the synchronous handler shows,
+    without opening a stream that would only carry a single ``error``
+    event."""
     web.app.config["WTF_CSRF_ENABLED"] = False
     with web.app.test_client() as client:
-        resp = client.post("/decklist/jobs",
+        resp = client.post("/decklist/stream",
                            data={"decklist": "10 Forest\n5 Island"})
     assert resp.status_code == 400
     body = resp.get_json()
@@ -370,63 +363,20 @@ def test_decklist_jobs_rejects_validation_failures_with_json_400(monkeypatch, _c
     assert "only basic lands" in body["error"].lower()
 
 
-def test_decklist_jobs_caps_per_user_with_429(monkeypatch, _clean_search_jobs):
-    """Pre-populating the jobs store with the per-user max forces the
-    next POST to 429 — the cap is the OOM guard from the earlier
-    analysis (~1 GB peak per concurrent search)."""
+def test_decklist_stream_caps_per_user_with_429(monkeypatch, _clean_in_flight):
+    """Pre-populating the per-user in-flight counter at the cap forces
+    the next POST to 429 — this is the OOM guard from the earlier
+    analysis (~1 GB peak per concurrent search). The counter is
+    per-process; with multiple gunicorn workers the effective cap is
+    cap × N_workers."""
     web.app.config["WTF_CSRF_ENABLED"] = False
     monkeypatch.setattr(web, "_get_fx", lambda: 150.0)
-    monkeypatch.setattr(web, "collect_prices",
-                        lambda *a, **kw: [])
-    # Simulate _MAX_JOBS_PER_USER in-flight jobs for "local".
-    for i in range(web._MAX_JOBS_PER_USER):
-        web._search_jobs[f"sim-{i}"] = web._SearchJob(
-            id=f"sim-{i}", user_id="local",
-            prep=web._DecklistPrep(
-                decklist_text="", total_cards=0, skipped_basics=0,
-                name_qty={}, name_canonical={}, name_inv_qty={},
-                name_needed={}, names_to_search=[], inventory_hits=0,
-                fx=150.0, enabled_shops=None,
-                shipping_overrides_jpy={}, use_inventory=False,
-            ),
-            state="running",
-        )
+    monkeypatch.setattr(web, "collect_prices", lambda *a, **kw: [])
+    web._in_flight_by_user["local"] = web._MAX_IN_FLIGHT_PER_USER
     with web.app.test_client() as client:
-        resp = client.post("/decklist/jobs", data={"decklist": "1 Sol Ring"})
+        resp = client.post("/decklist/stream", data={"decklist": "1 Sol Ring"})
     assert resp.status_code == 429
     assert resp.get_json()["reason"] == "rate_limited"
-
-
-def test_decklist_jobs_stream_404s_for_other_user(monkeypatch, _clean_search_jobs):
-    """Job ID belongs to alice; bob's GET must 404, not 403 — we don't
-    want to leak existence of job IDs across the user boundary."""
-    web._search_jobs["alice-job"] = web._SearchJob(
-        id="alice-job", user_id="alice",
-        prep=web._DecklistPrep(
-            decklist_text="", total_cards=0, skipped_basics=0,
-            name_qty={}, name_canonical={}, name_inv_qty={},
-            name_needed={}, names_to_search=[], inventory_hits=0,
-            fx=150.0, enabled_shops=None,
-            shipping_overrides_jpy={}, use_inventory=False,
-        ),
-        state="done",
-        finished_at=__import__("time").monotonic(),
-    )
-    # Run in Postgres-mode-without-WorkOS so the user_id is read from
-    # the configured header instead of defaulting to "local".
-    monkeypatch.setattr(db_module, "IS_POSTGRES", True)
-    monkeypatch.setattr(auth_module, "WORKOS_ENABLED", False)
-    monkeypatch.setattr(web, "_USER_ID_HEADER", "X-UID")
-    with web.app.test_client() as client:
-        resp = client.get("/decklist/jobs/alice-job/stream",
-                          headers={"X-UID": "bob"})
-    assert resp.status_code == 404
-
-
-def test_decklist_jobs_stream_404s_for_unknown_id(monkeypatch, _clean_search_jobs):
-    with web.app.test_client() as client:
-        resp = client.get("/decklist/jobs/no-such-id/stream")
-    assert resp.status_code == 404
 
 
 def test_is_basic_land_recognizes_all_basics_case_insensitive():

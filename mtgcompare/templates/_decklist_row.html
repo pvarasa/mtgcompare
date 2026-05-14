@@ -1,7 +1,7 @@
 {# One <tr> for the decklist results table.
 
    Shared by the synchronous decklist.html render path and the SSE
-   streaming path (mtgcompare/web.py::_run_search_job). Self-contained:
+   streaming path (mtgcompare/web.py::_produce_decklist_events). Self-contained:
    imports its own macros so it can be rendered standalone via
    ``render_template("_decklist_row.html", row=..., use_inventory=...,
    shop_flags=...)`` without a wrapper template.

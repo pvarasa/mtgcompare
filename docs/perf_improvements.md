@@ -5,7 +5,7 @@ that was flapping K8s liveness probes. The list below tracks what's
 shipped, what's still open, and why — in priority order for the open
 items.
 
-Reconciled with shipped code at **v1.6.9**.
+Reconciled with shipped code at **v1.7.x**.
 
 ---
 
@@ -63,68 +63,49 @@ the rare popular-card-with-many-printings case.
 
 ---
 
+### SSE-streamed /decklist *(v1.7.x)*
+`POST /decklist/stream` returns `text/event-stream` directly — one
+HTTP request from form-submit to `done`. Bytes start flowing within a
+few hundred ms so Cloudflare never trips its idle timer; 524s on
+Edgar-class 90+ name decks are gone. Browser consumes the stream via
+`fetch()` + `ReadableStream` (not `EventSource`), which means the
+search is served end-to-end by the gunicorn worker that received the
+POST — no pod affinity / sticky sessions needed for horizontal
+scale-out.
+
+Per-user in-flight cap (`_MAX_IN_FLIGHT_PER_USER=3`, counter +
+`Lock`) replaces the previous OOM stampede risk. Counter is
+per-process; effective cap with N workers is 3×N. A cluster-wide cap
+would need a Postgres advisory lock — defer until concurrent-user
+load justifies it.
+
+The previous two-request shape (`POST /decklist/jobs` →
+`{job_id} 202`, then `GET /decklist/jobs/<id>/stream`) was removed in
+the same change. Its in-process `_search_jobs` dict was the reason
+`--workers=1` was pinned in the Dockerfile; that constraint is gone.
+
+---
+
 ## Open
 
-### Stream results to the browser (SSE) *(highest remaining UX win)*
+### Bump gunicorn workers + replicas *(next scale-out step)*
 
-**Problem.** Cold-cache 100-card commander searches still take
-~100–125 s and one of the three test decks (Edgar Markov, 91 names)
-slips past Cloudflare's ~100 s edge timeout, returning a 524 even
-though the backend eventually completes successfully. The wall-clock
-floor is bounded by `ceil(distinct_names / fan_out_workers) ×
-per_shop_timeout` and can't realistically drop further without
-either a much bigger pod or accepting upstream rate-limit pushback.
+`--workers=1 --threads=32` is unchanged from the SSE migration but
+the shape constraint that forced it is gone. The remaining concern
+is memory: one cold-cache 100-card search peaks ~1.5 GiB and the pod
+limit is 3 GiB. Bumping to `--workers=2` doubles the effective
+per-user in-flight cap (3 → 6) and the worst-case memory ceiling
+(1.5 GiB → 3 GiB) without a parallel pod-memory bump. Sequence the
+work as: bump pod memory first, then workers, then `replicas: 2+`.
 
-**Idea.** Bytes-flowing connections don't 524. Replace the synchronous
-`render_template("decklist.html", ...)` with an SSE-driven flow:
+### Bump DECKLIST_FAN_OUT_WORKERS *(brute-force interim)*
 
-- `POST /decklist` creates an in-process `Job`, returns `{job_id}` + 202.
-- `GET /decklist/{job_id}/stream` opens a `text/event-stream` connection
-  that emits typed events as the search runs:
-  - `started` → skeleton (total cards, basics_skipped, names_to_search)
-  - `row` → one per card as `_fetch_decklist_prices` yields
-  - `totals` → running shop/grand totals (debounced, e.g. every 1 s)
-  - `shop_timeout` → live warning-banner updates
-  - `done` → final aggregated state
-  - `error` → fatal failure
-- Browser uses `EventSource` to append rows and update totals live.
-
-**Why the structural pieces are mostly in place.** `_fetch_decklist_prices`
-already uses `as_completed`; converting it to a generator that yields
-`(name, prices)` per completion is small. Job state can be an in-process
-dict while `replicas: 1` — Redis is a scale-out concern, not a today
-concern. Auth on the SSE endpoint piggybacks on the existing WorkOS
-session check.
-
-**Effort.** ~1 focused day:
-- ~30 min: `_fetch_decklist_prices` → generator
-- ~30 min: `Job` dataclass + `_jobs: dict` + cleanup TTL
-- ~1 h: SSE endpoint (auth + cleanup)
-- ~1 h: tests
-- ~2 h: split `decklist.html` into form + skeleton + JS handler
-- buffer: live running-totals math on the client
-
-**Also fixes the concurrent-users OOM angle.** The SSE plan creates a
-natural place to plug a process-level semaphore that queues
-concurrent `/decklist` requests instead of letting them stampede into
-the 2 GiB memory ceiling.
-
-### Process-level concurrency cap *(small standalone change)*
-
-If SSE is too big to land soon, a 20-line `threading.Semaphore` (or
-`pg_try_advisory_lock` for cross-worker coordination) around the
-fan-out gives concurrent users a clean "you're queued" path instead of
-the current OOM-prone stampede. See the per-fetch memory analysis
-session of 2026-05-12 for the full breakdown.
-
-### Bump pod memory + DECKLIST_FAN_OUT_WORKERS *(brute-force interim)*
-
-2 GiB → 3 GiB on the pod limit + workers 18 → 26–30 would put the
-Edgar cold-cache case under 100 s on raw fan-out alone, without the
-SSE rewrite. Trade-off: more concurrent shop HTTPS requests means a
-higher chance of upstream rate-limit pushback (Scryfall starts 429ing
-above ~20 concurrent in our measurements). Worth doing only if SSE
-slips and Edgar's 124 s 524 becomes a recurring user complaint.
+Workers 18 → 26–30 would drop the Edgar cold-cache fan-out time
+further, but with the SSE migration there's no 524 to chase — the
+client sees rows fill in regardless of total wall-clock. Trade-off:
+more concurrent shop HTTPS requests means higher rate-limit pushback
+(Scryfall starts 429ing above ~20 concurrent in our measurements).
+Not currently worth doing.
 
 ---
 
@@ -150,6 +131,7 @@ slips and Edgar's 124 s 524 becomes a recurring user complaint.
 
 ## Recommended next move
 
-Land the **SSE streaming endpoint** (the "Open #1" item above). It's
-the structural fix for the remaining CF-524 cases, and the same
-refactor naturally opens the door to the concurrent-users semaphore.
+Bump pod memory and gunicorn workers (the open item above). The SSE
+migration removed the shape constraint that pinned `--workers=1`, so
+the path is finally open — but raising workers without a parallel
+memory bump multiplies the OOM risk on cold 100-card searches.

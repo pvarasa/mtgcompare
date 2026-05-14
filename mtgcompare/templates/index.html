@@ -2,6 +2,8 @@
 {% from "_macros.html" import card_icon %}
 {% block title %}mtgcompare{% if q %} - {{ q }}{% endif %}{% endblock %}
 {% block extra_css %}
+  {% include "_decklist_styles.html" %}
+
   .search-mode { display: flex; gap: .5rem; margin-bottom: 1rem; }
   .search-mode button {
     background: transparent;
@@ -230,13 +232,14 @@
   </div>
 
   <div id="panel-decklist" style="display:none">
-    <form id="decklist-form" method="post" action="{{ url_for('decklist_search') }}">
+    <form id="decklist-form" method="post" action="{{ url_for('decklist_search') }}"
+          data-shop-flags='{{ shop_flags | tojson }}'>
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <textarea name="decklist"
                 placeholder="1 Sol Ring&#10;4x Force of Will (FEM)&#10;1 Rhystic Study (C21) 79&#10;..."></textarea>
       <div class="dl-actions">
         <span style="font-size:.78rem; color:var(--muted); margin-right:auto;">max 100 cards</span>
-        <label><input type="checkbox" name="use_inventory" value="1"> Use inventory</label>
+        <label><input type="checkbox" name="use_inventory" value="1" checked> Use inventory</label>
         <button type="submit">Search decklist</button>
       </div>
 
@@ -288,6 +291,12 @@
       </div>
     </form>
   </div>
+
+  {# Streaming results are injected here by decklist-stream.js when the
+     decklist form is submitted with JS available. Empty on initial load
+     and after page refresh; the synchronous /decklist endpoint is the
+     no-JS fallback that renders a full decklist.html page instead. #}
+  <div id="dl-stream-mount"></div>
 
   {% if error %}
     <div class="error">{{ error }}</div>
