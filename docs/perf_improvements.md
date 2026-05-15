@@ -5,7 +5,7 @@ that was flapping K8s liveness probes. The list below tracks what's
 shipped, what's still open, and why — in priority order for the open
 items.
 
-Reconciled with shipped code at **v1.8.0**.
+Reconciled with shipped code at **v1.8.3**.
 
 ---
 
@@ -84,19 +84,30 @@ The previous two-request shape (`POST /decklist/jobs` →
 the same change. Its in-process `_search_jobs` dict was the reason
 `--workers=1` was pinned in the Dockerfile; that constraint is gone.
 
+### Workers 2× + pod-memory bump *(v1.8.3)*
+`--workers=1 --threads=32` → `--workers=2 --threads=16`, pod memory
+limit 3 GiB → 4 GiB. Same total in-flight cap (32) but split across
+two Python processes, doubling effective CPU throughput by working
+around the GIL. Measured on the realistic-mix saturation curve at
+the 200-VU phase: per-pod throughput **91 → 137 r/s** (+50 %), p95
+**2.5 s → 1.5 s**, p99 **7.2 s → 2.1 s**. Knee moved out from ~100 VUs
+to past 200 VUs.
+
+Memory limit had to move because the worst-case-2-concurrent-cold-
+decklist peak goes from ~1.5 GiB (one worker) to ~3 GiB (two
+workers); 4 GiB gives a comfortable margin on the 16 GiB node
+alongside Postgres + cloudflared + monitoring.
+
+The detour worth recording: bumping the SQLAlchemy connection pool
+first (5+10 → 20+20) made things *worse* — the GIL was already
+saturated at 100 VUs, so more in-flight queries just gave the worker
+more contention to schedule. The pool change is reverted; the env
+knobs (`DB_POOL_SIZE`, `DB_POOL_OVERFLOW`) remain in case future
+worker bumps need pool growth too.
+
 ---
 
 ## Open
-
-### Bump gunicorn workers + replicas *(next scale-out step)*
-
-`--workers=1 --threads=32` is unchanged from the SSE migration but
-the shape constraint that forced it is gone. The remaining concern
-is memory: one cold-cache 100-card search peaks ~1.5 GiB and the pod
-limit is 3 GiB. Bumping to `--workers=2` doubles the effective
-per-user in-flight cap (3 → 6) and the worst-case memory ceiling
-(1.5 GiB → 3 GiB) without a parallel pod-memory bump. Sequence the
-work as: bump pod memory first, then workers, then `replicas: 2+`.
 
 ### Bump DECKLIST_FAN_OUT_WORKERS *(brute-force interim)*
 
@@ -131,7 +142,9 @@ Not currently worth doing.
 
 ## Recommended next move
 
-Bump pod memory and gunicorn workers (the open item above). The SSE
-migration removed the shape constraint that pinned `--workers=1`, so
-the path is finally open — but raising workers without a parallel
-memory bump multiplies the OOM risk on cold 100-card searches.
+Run the saturation curve (`server_admin/loadtest/saturate_realistic.js`)
+once more under workers=2 with the realistic mix to confirm the knee
+sits past 200 VUs in steady state, then decide on `replicas: 3` if
+prod's actual concurrent-user count justifies it. Today the
+2-replica × 2-worker stack should clear ~270 r/s aggregate before
+the knee — well past plausible load.

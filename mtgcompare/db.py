@@ -63,7 +63,24 @@ if _DATABASE_URL:
         "DEC2FLOAT",
         lambda v, _: float(v) if v is not None else None,
     ))
-    engine = create_engine(_DATABASE_URL, pool_pre_ping=True, pool_size=5, max_overflow=10)
+    # SQLAlchemy default pool is 5 + 10 overflow per process — fine
+    # for the current single-worker config where the Python GIL caps
+    # effective concurrency well below 15. Bumping the pool actively
+    # hurt under load when measured (see
+    # server_admin/loadtest/saturate_realistic.js results): more
+    # in-flight queries → more threads contending for the GIL → the
+    # worker can't even answer /healthz, kubelet liveness-probe kills
+    # it. Revisit when adding workers=2+; at that point the right
+    # pool size scales with worker count, not concurrent requests.
+    # Env-tunable for /loadtest A/B without rebuilding the image.
+    _pool_size     = int(os.environ.get("DB_POOL_SIZE",     "5"))
+    _pool_overflow = int(os.environ.get("DB_POOL_OVERFLOW", "10"))
+    engine = create_engine(
+        _DATABASE_URL,
+        pool_pre_ping=True,
+        pool_size=_pool_size,
+        max_overflow=_pool_overflow,
+    )
     DB_PATH = None
 else:
     DB_PATH = _db_path()

@@ -27,20 +27,27 @@ EXPOSE 5000
 
 USER mtgc
 
-# One worker, 32 threads = up to 32 concurrent requests per pod.
+# Two workers × 16 threads = up to 32 concurrent requests per pod,
+# split across two Python processes so each gets its own GIL. Measured
+# on the realistic-mix loadtest (see server_admin/loadtest/saturate_realistic.js)
+# this lifts per-pod throughput from ~91 r/s → ~137 r/s and drops the
+# p99 at 200 VUs from 7.2 s → 2.1 s vs the previous workers=1 config —
+# the single-worker setup was bottlenecked on the GIL, not on the
+# in-flight cap. Same total cap, double effective CPU.
 #
-# Workers > 1 is now safe shape-wise: the streaming /decklist/stream
-# endpoint is a single HTTP request (POST that emits text/event-stream),
-# so it doesn't depend on shared in-process state across requests. The
-# per-user in-flight cap (_in_flight_by_user) is still per-process, so
-# bumping workers also multiplies the effective cap — fine as long as
-# pod memory headroom can absorb cap × N_workers concurrent searches
-# at ~1.5 GiB peak each. Today's pod is 3 GiB and one search occupies
-# ~half of it; raising workers needs a parallel memory bump.
+# Safe shape-wise because /decklist/stream is a single HTTP request
+# (no in-process state shared across requests across worker
+# boundaries). Per-user in-flight cap (_in_flight_by_user) is still
+# per-process, so the effective cap is 3 × N_workers.
+#
+# Memory: worst-case is N_workers × 1.5 GiB (one cold 100-card search
+# per worker) plus ~150 MiB baseline each. The deployment manifest
+# accordingly sets memory limit to 4 GiB; bump alongside any further
+# worker count increase.
 #
 # --timeout=120 covers the synchronous /decklist fallback (cold-cache
 # 100-card searches measured ~90 s post-timeout-hardening). The
 # streaming /decklist/stream path doesn't depend on this — its
 # long-lived response body isn't a single request from gunicorn's
 # perspective once bytes start flowing.
-CMD ["gunicorn", "--workers=1", "--threads=32", "--timeout=120", "--bind=0.0.0.0:5000", "--access-logfile=-", "--error-logfile=-", "mtgcompare.web:app"]
+CMD ["gunicorn", "--workers=2", "--threads=16", "--timeout=120", "--bind=0.0.0.0:5000", "--access-logfile=-", "--error-logfile=-", "mtgcompare.web:app"]
