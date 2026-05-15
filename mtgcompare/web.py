@@ -117,8 +117,16 @@ app.register_blueprint(auth.bp)
 # via HMAC. /internal/cron/update-prices is exempted at the route level
 # below (bearer-token auth). /auth/login, /auth/callback, /auth/me are GET
 # and never trigger CSRF; /auth/logout is POST and IS protected.
+#
+# Disabled in the loadtest sidecar (TRUST_USER_HEADER=1) so k6 doesn't
+# need to scrape a token off the search page before every POST. The
+# sidecar is internal-only, has no public Ingress, and only accepts
+# traffic from labeled loadtest pods — CSRF would be defending against
+# a threat model that doesn't apply.
 from flask_wtf.csrf import CSRFProtect  # noqa: E402
 
+if os.environ.get("TRUST_USER_HEADER") == "1":
+    app.config["WTF_CSRF_ENABLED"] = False
 csrf = CSRFProtect(app)
 csrf.exempt(auth.webhook)
 
@@ -1960,7 +1968,22 @@ def market():
         _market_cache_set(cache_key, ctx)
 
     if request.args.get("partial") == "tbody":
-        return render_template("_market_table.html", **ctx)
+        # Filter / sort / pagination updates need to swap both the
+        # table fragment AND the cost-basis / market-value / PnL
+        # summary fragment so the stats stay consistent with what's
+        # shown. The client (paginatedtable.js) reads both keys.
+        #
+        # When the price cache is empty the full page shows a
+        # "Click Update prices" notice instead of the table; the
+        # market_value_* fields are unset on rows, which would crash
+        # _market_table.html. Return empty fragments so the client's
+        # next filter keystroke is a no-op rather than a 500.
+        if not ctx.get("has_cache") or not ctx.get("summary"):
+            return jsonify({"table_html": "", "summary_html": ""})
+        return jsonify({
+            "table_html": render_template("_market_table.html", **ctx),
+            "summary_html": render_template("_market_summary.html", **ctx),
+        })
     return render_template("market.html", **ctx)
 
 
@@ -2180,7 +2203,13 @@ def inventory():
         "active": "inventory",
     }
     if request.args.get("partial") == "tbody":
-        return render_template("_inventory_table.html", **ctx)
+        # Same shape as /market: swap both the table and the inv-stats
+        # "X copies across Y lots · cost basis $Z" line so the totals
+        # match the filtered view.
+        return jsonify({
+            "table_html": render_template("_inventory_table.html", **ctx),
+            "summary_html": render_template("_inventory_stats.html", **ctx),
+        })
     return render_template("inventory.html", **ctx)
 
 

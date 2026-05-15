@@ -1,0 +1,8 @@
+{# Inventory page summary row. Rendered both inline by inventory.html
+   and alone by the /inventory?partial=tbody fragment endpoint so the
+   "copies / lots / cost basis" line updates in lockstep with the
+   filtered table. Receives the same ``stats`` dict the full page
+   sees. #}
+<strong>{{ '{:,}'.format(stats.total_copies) }}</strong> copies
+across <strong>{{ '{:,}'.format(stats.printings) }}</strong> lots
+&middot; cost basis <strong>${{ '%.2f'|format(stats.total_cost) }}</strong>

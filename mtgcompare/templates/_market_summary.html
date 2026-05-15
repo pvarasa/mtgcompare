@@ -1,0 +1,36 @@
+{# Market page summary stats. Rendered both inline by market.html and
+   alone by the /market?partial=tbody fragment endpoint, so the totals
+   row updates in lockstep with the filtered table. Receives the same
+   ``summary`` dict the full page sees. #}
+<div class="mkt-stat">
+  <div class="stat-label">Cost basis</div>
+  <div class="stat-value">${{ '{:,.2f}'.format(summary.total_cost_usd) }}</div>
+  <div class="stat-sub">
+    {{ summary.lots_in_pnl }} of {{ summary.lots_total }} lot{{ 's' if summary.lots_total != 1 else '' }} tracked
+    {% if summary.lots_no_cost %} &middot; {{ summary.lots_no_cost }} uncosted{% endif %}
+  </div>
+</div>
+
+<div class="mkt-stat">
+  <div class="stat-label">Market value</div>
+  <div class="stat-value">${{ '{:,.2f}'.format(summary.total_market_usd) }}</div>
+  <div class="stat-sub">
+    JPY {{ '{:,.0f}'.format(summary.total_market_jpy) }}
+    {% if summary.lots_no_market %} &middot; {{ summary.lots_no_market }} no price{% endif %}
+  </div>
+</div>
+
+<div class="mkt-stat">
+  <div class="stat-label">Unrealized PnL</div>
+  {% set pnl = summary.total_pnl_usd %}
+  <div class="stat-value {% if pnl > 0 %}pnl-up{% elif pnl < 0 %}pnl-down{% endif %}">
+    {% if pnl >= 0 %}+{% endif %}${{ '{:,.2f}'.format(pnl) }}
+  </div>
+  <div class="stat-sub">
+    {% if summary.pnl_pct is not none %}
+      {% if summary.pnl_pct >= 0 %}+{% endif %}{{ summary.pnl_pct }}% on costed lots
+    {% else %}
+      no costed lots
+    {% endif %}
+  </div>
+</div>

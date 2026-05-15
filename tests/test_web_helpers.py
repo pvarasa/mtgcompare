@@ -1150,3 +1150,52 @@ def test_inventory_delete_match_no_filter_wipes_user(test_db, monkeypatch):
     assert inv.list_all() == []
     assert len(inv.list_all("bob")) == 1
 
+
+# ---------------------------------------------------------------------------
+# partial=tbody contract — JSON envelope with table_html + summary_html
+#
+# Both /inventory and /market expose a `?partial=tbody` endpoint that
+# paginatedtable.js hits on filter/sort/page changes. The response must
+# carry both fragments so the page can update the summary stats in
+# lockstep with the table — without summary_html the cost-basis /
+# market-value totals would stay stale, which is the bug fix this
+# regression test pins.
+# ---------------------------------------------------------------------------
+
+
+def test_inventory_partial_tbody_returns_json_with_both_fragments(test_db):
+    web.app.config["WTF_CSRF_ENABLED"] = False
+    inv.add_one({
+        "card_name": "Sol Ring", "set_code": "C21", "quantity": 2,
+        "condition": "NM", "price_bought": 1.50, "language": "EN",
+        "printing": "normal", "date_added": "2026-05-14",
+    })
+    with web.app.test_client() as client:
+        resp = client.get("/inventory?partial=tbody")
+    assert resp.status_code == 200
+    assert resp.headers["Content-Type"].startswith("application/json")
+    body = resp.get_json()
+    assert set(body.keys()) == {"table_html", "summary_html"}
+    # Table HTML carries at least one row reference; summary HTML
+    # carries the unfiltered totals.
+    assert "Sol Ring" in body["table_html"]
+    assert "2</strong> copies" in body["summary_html"]
+    assert "cost basis" in body["summary_html"]
+
+
+def test_market_partial_tbody_returns_empty_fragments_when_no_price_cache(test_db):
+    """No price cache → full page renders an alt UI; the partial
+    endpoint short-circuits to empty fragments so a filter keystroke
+    after a cache flush doesn't 500."""
+    web.app.config["WTF_CSRF_ENABLED"] = False
+    inv.add_one({
+        "card_name": "Sol Ring", "set_code": "C21", "quantity": 1,
+        "condition": "NM", "price_bought": 1.50, "language": "EN",
+        "printing": "normal", "date_added": "2026-05-14",
+    })
+    with web.app.test_client() as client:
+        resp = client.get("/market?partial=tbody")
+    assert resp.status_code == 200
+    assert resp.headers["Content-Type"].startswith("application/json")
+    assert resp.get_json() == {"table_html": "", "summary_html": ""}
+

@@ -3,13 +3,19 @@
  * Each page has the same shape:
  *   - a <form> with text/number/select inputs (q, price_mode, price_value)
  *     plus hidden inputs (sort, dir, page, per_page)
- *   - a "wrapper" <div> containing the table + pagination, which the server
- *     re-renders as a fragment when called with `?partial=tbody`
+ *   - a "wrapper" <div> containing the table + pagination
+ *   - optionally a "summary" element (e.g. #inv-stats, #mkt-summary)
+ *     above the wrapper that shows aggregates over the filtered set
  *
- * On filter/sort/page/per_page changes we fetch the fragment and swap it
- * into the wrapper, mirror the URL via history.pushState/replaceState, and
- * give the page a hook (`onAfterSwap`) to re-bind anything else inside the
- * wrapper (e.g. inventory's row checkboxes, market's chart triggers).
+ * The server's ?partial=tbody endpoint returns JSON
+ *   { "table_html": ..., "summary_html": ... }
+ * so a filter/sort/page change swaps both the table AND the aggregates
+ * row in one round-trip — without this the summary line shows stale
+ * totals (e.g. "cost basis $X" reflecting the whole inventory while
+ * the table is filtered to one card). On change we swap, mirror the
+ * URL via history.pushState/replaceState, and give the page a hook
+ * (`onAfterSwap`) to re-bind anything inside the wrapper (e.g. row
+ * checkboxes, chart triggers).
  *
  * Conventions inside the wrapper (rendered by _pagination.html and the
  * per-page partial):
@@ -29,6 +35,7 @@
     const defaults    = config.defaults    || {};
     const onAfterSwap = config.onAfterSwap || function () {};
     const debounceMs  = config.debounceMs  != null ? config.debounceMs : 250;
+    const summaryEl   = config.summaryEl   || null;
 
     const fields = {
       q:           form.querySelector('input[name="q"]'),
@@ -96,12 +103,15 @@
       try {
         const res = await fetch(`${fullPath}&partial=tbody`, { signal: inflight.signal });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const html = await res.text();
+        const payload = await res.json();
         // The loading spinner sits inside the wrapper and is wiped by the
         // swap. The CSS targets `#wrapper.is-loading .loading-indicator`,
         // so we re-prepend a spinner element after the swap.
         const spinnerClass = config.spinnerClass || 'pt-loading';
-        wrapper.innerHTML = `<span class="${spinnerClass}">Loading…</span>` + html;
+        wrapper.innerHTML = `<span class="${spinnerClass}">Loading…</span>` + (payload.table_html || '');
+        if (summaryEl && payload.summary_html != null) {
+          summaryEl.innerHTML = payload.summary_html;
+        }
         attachTableHandlers();
       } catch (err) {
         if (err.name !== 'AbortError') console.error('paginatedtable fetch failed', err);

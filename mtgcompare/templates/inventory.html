@@ -296,10 +296,8 @@
     }
 {% endblock %}
 {% block content %}
-  <div class="inv-stats">
-    <strong>{{ '{:,}'.format(stats.total_copies) }}</strong> copies
-    across <strong>{{ '{:,}'.format(stats.printings) }}</strong> lots
-    &middot; cost basis <strong>${{ '%.2f'|format(stats.total_cost) }}</strong>
+  <div class="inv-stats" id="inv-stats">
+    {% include "_inventory_stats.html" %}
   </div>
 
   <div class="add-panel">
@@ -652,6 +650,7 @@
 
       window.mtgcompare.attachPaginatedTable({
         form, wrapper,
+        summaryEl: document.getElementById('inv-stats'),
         spinnerClass: 'inv-loading',
         defaults: { sort: 'card_name', dir: 'asc', price_mode: 'any', per_page: '50' },
         onAfterSwap: attachSelectionHandlers,
