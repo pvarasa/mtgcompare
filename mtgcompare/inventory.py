@@ -77,7 +77,6 @@ _INSERT_SQL = text("""
 
 def import_csv(path: str, replace: bool = True, user_id: str = "local") -> int:
     """Load a Deckbox CSV at `path`. `replace=True` clobbers the user's rows first."""
-    init_schema()
     with open(path, encoding="utf-8-sig", newline="") as f:
         records = [
             {
@@ -106,7 +105,6 @@ def import_csv(path: str, replace: bool = True, user_id: str = "local") -> int:
 
 def add_one(record: dict, user_id: str = "local") -> None:
     """Append a single lot to the inventory table."""
-    init_schema()
     with get_conn() as conn:
         conn.execute(_INSERT_SQL, _dict(record, user_id))
 
@@ -115,7 +113,6 @@ def add_many(records: list[dict], user_id: str = "local") -> int:
     """Append multiple lots in a single transaction. Returns count inserted."""
     if not records:
         return 0
-    init_schema()
     with get_conn() as conn:
         conn.execute(_INSERT_SQL, [_dict(r, user_id) for r in records])
     return len(records)
@@ -425,13 +422,16 @@ def _main() -> None:
     sub.add_parser("stats", help="print inventory stats")
 
     args = p.parse_args()
+    # Schema setup happens once per process. Web/test entry points each
+    # call init_schema() during their own boot; the CLI is the only path
+    # that needs to do it here.
+    init_schema()
     if args.cmd == "import":
         n = import_csv(args.path, replace=not args.append)
         verb = "Appended" if args.append else "Imported"
         print(f"{verb} {n} rows from {args.path}")
         print(stats())
     elif args.cmd == "stats":
-        init_schema()
         print(stats())
 
 
