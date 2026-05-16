@@ -27,6 +27,7 @@ JSON-only) so they keep their own classes; they share ``USER_AGENT``
 and ``make_session`` but skip the base class.
 """
 import logging
+import re
 from time import monotonic
 from typing import ClassVar
 
@@ -41,6 +42,15 @@ USER_AGENT = (
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/125.0.0.0 Safari/537.36"
 )
+
+_WHITESPACE_RE = re.compile(r"\s+")
+
+
+def node_text_ws(node) -> str:
+    # selectolax's separator=" " keeps a single space at child boundaries,
+    # but nested <wbr/>/<b>/<span class="result_emphasis"> children can still
+    # leak runs of whitespace; collapse them so downstream regexes anchor cleanly.
+    return _WHITESPACE_RE.sub(" ", node.text(deep=True, separator=" ", strip=True)).strip()
 
 
 class ScraperFetchError(Exception):

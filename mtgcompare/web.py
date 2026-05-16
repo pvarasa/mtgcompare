@@ -700,6 +700,30 @@ def _load_inventory_qty_map(use_inventory: bool) -> dict[str, int]:
     return inv_map
 
 
+@dataclass(frozen=True)
+class _DecklistFormBasics:
+    """Raw form fields shared by both /decklist code paths.
+
+    Both the sync route (which renders an error template that needs these
+    on the reject path) and the SSE route (which only forwards them to
+    `_prepare_decklist_search`) parse the same four fields out of the
+    POST form; centralising the parse keeps them from drifting.
+    """
+    decklist_text: str
+    shipping_overrides_jpy: dict[str, int]
+    use_inventory: bool
+    enabled_shops: set[str] | None
+
+
+def _parse_decklist_form_basics(form) -> _DecklistFormBasics:
+    return _DecklistFormBasics(
+        decklist_text=form.get("decklist", "").strip(),
+        shipping_overrides_jpy=_parse_shipping_overrides(form),
+        use_inventory=form.get("use_inventory") == "1",
+        enabled_shops=_parse_enabled_shops(form),
+    )
+
+
 @dataclass
 class _DecklistPrep:
     """Validated + inventory-deducted + FX-resolved state for a search.
@@ -731,7 +755,7 @@ class _DecklistReject:
     message: str
 
 
-def _prepare_decklist_search(form) -> _DecklistPrep | _DecklistReject:
+def _prepare_decklist_search(basics: _DecklistFormBasics) -> _DecklistPrep | _DecklistReject:
     """Parse / strip basics / consolidate / deduct inventory / fetch FX.
 
     All pure logic — never touches Flask response context. Returns either
@@ -739,10 +763,10 @@ def _prepare_decklist_search(form) -> _DecklistPrep | _DecklistReject:
     same ``reason``/``message`` values the original handler emitted, so
     log/dashboard parsers stay stable.
     """
-    text = form.get("decklist", "").strip()
-    shipping_overrides_jpy = _parse_shipping_overrides(form)
-    use_inventory = form.get("use_inventory") == "1"
-    enabled_shops = _parse_enabled_shops(form)
+    text = basics.decklist_text
+    shipping_overrides_jpy = basics.shipping_overrides_jpy
+    use_inventory = basics.use_inventory
+    enabled_shops = basics.enabled_shops
 
     card_items = _parse_decklist(text)
     if not card_items:
@@ -805,13 +829,14 @@ def _prepare_decklist_search(form) -> _DecklistPrep | _DecklistReject:
 @app.route("/decklist", methods=["POST"])
 def decklist_search():
     t0 = monotonic()
-    shipping_overrides_jpy = _parse_shipping_overrides(request.form)
+    basics = _parse_decklist_form_basics(request.form)
+    shipping_overrides_jpy = basics.shipping_overrides_jpy
     ship_cfg = _shipping_config(shipping_overrides_jpy)
-    use_inventory = request.form.get("use_inventory") == "1"
-    enabled_shops = _parse_enabled_shops(request.form)
+    use_inventory = basics.use_inventory
+    enabled_shops = basics.enabled_shops
     shop_filter_active = enabled_shops is not None
     shop_filter_cfg = _shop_filter_config(enabled_shops)
-    text_raw = request.form.get("decklist", "").strip()
+    text_raw = basics.decklist_text
 
     def _early_return(error_msg: str, fx_val=None, *, reason: str):
         app.logger.info(
@@ -838,7 +863,7 @@ def decklist_search():
             timed_out_shops=[],
         )
 
-    prep = _prepare_decklist_search(request.form)
+    prep = _prepare_decklist_search(basics)
     if isinstance(prep, _DecklistReject):
         return _early_return(prep.message, reason=prep.reason)
 
@@ -938,6 +963,118 @@ def _format_sse(event_type: str, payload: dict) -> str:
     return f"event: {event_type}\ndata: {orjson.dumps(payload).decode()}\n\n"
 
 
+_TOTALS_DEBOUNCE_S = 0.5
+
+
+def _emit_decklist_meta(prep: _DecklistPrep, q: queue.Queue) -> None:
+    q.put(("meta", {
+        "total_cards": prep.total_cards,
+        "skipped_basics": prep.skipped_basics,
+        "distinct_names": len(prep.name_qty),
+        "inventory_hits": prep.inventory_hits,
+        "names_to_search": len(prep.names_to_search),
+        "use_inventory": prep.use_inventory,
+        "fx": prep.fx,
+        "shop_filter_active": prep.enabled_shops is not None,
+    }))
+
+
+def _emit_decklist_row(
+    name: str,
+    prep: _DecklistPrep,
+    rows: list[dict],
+    row_template,
+    q: queue.Queue,
+) -> None:
+    # Pre-render the <tr> server-side so the client can just innerHTML-append.
+    # We can't call render_template from the worker thread (no Flask app
+    # context), but the Jinja env is process-global and thread-safe to read
+    # from — template loading + render takes no Flask state.
+    row = _build_one_card_row(
+        name, prep.name_qty, prep.name_canonical,
+        prep.name_inv_qty, prep.name_needed, rows,
+    )
+    row_html = row_template.render(
+        row=row,
+        use_inventory=prep.use_inventory,
+        shop_flags=SHOP_FLAGS,
+    )
+    q.put(("row", {
+        "key": name,
+        "html": row_html,
+        "qty_needed": row["qty_needed"],
+        "has_best": row["best"] is not None,
+    }))
+
+
+def _emit_decklist_totals(
+    prep: _DecklistPrep,
+    prices_by_name: dict[str, list[dict]],
+    q: queue.Queue,
+) -> list[dict]:
+    """Snapshot card_rows + shop_totals and enqueue one ``totals`` event.
+
+    Returns the freshly-built card_rows so the caller can reuse them for
+    final logging without re-running ``_build_card_rows`` twice.
+    """
+    card_rows = _build_card_rows(
+        prep.name_qty, prep.name_canonical, prep.name_inv_qty,
+        prep.name_needed, prices_by_name,
+    )
+    shop_list, totals = _compute_shop_totals(
+        card_rows, prep.shipping_overrides_jpy, prep.fx,
+    )
+    q.put(("totals", {"shop_list": shop_list, **totals}))
+    return card_rows
+
+
+def _emit_inventory_only_rows(
+    prep: _DecklistPrep, row_template, q: queue.Queue,
+) -> None:
+    # Inventory-covered cards never enter the fan-out (qty_needed is 0)
+    # so the streamed table would otherwise drop them silently, while the
+    # synchronous /decklist path shows them as "✓ in inventory" rows.
+    # Emit in canonical alphabetical order so the inventory section is
+    # stable from the first paint.
+    searched_set = set(prep.names_to_search)
+    inventory_only = sorted(
+        (n for n in prep.name_qty if n not in searched_set),
+        key=lambda x: prep.name_canonical[x].lower(),
+    )
+    for name in inventory_only:
+        _emit_decklist_row(name, prep, [], row_template, q)
+
+
+def _run_decklist_fanout(
+    prep: _DecklistPrep,
+    prices_by_name: dict[str, list[dict]],
+    timed_out: set[str],
+    row_template,
+    q: queue.Queue,
+) -> None:
+    """Drive the per-card fan-out, emitting row + shop_timeout + debounced
+    totals events as results stream in."""
+    if prep.fx is None:
+        return
+    timed_out_emitted: set[str] = set()
+    last_totals_emit = 0.0
+    for name, rows in _iter_decklist_prices(
+        prep.names_to_search, prep.name_canonical, prep.fx, prep.enabled_shops,
+        timeouts_out=timed_out,
+    ):
+        prices_by_name[name] = rows
+        _emit_decklist_row(name, prep, rows, row_template, q)
+
+        for shop in sorted(timed_out - timed_out_emitted):
+            q.put(("shop_timeout", {"shop": shop}))
+            timed_out_emitted.add(shop)
+
+        now = monotonic()
+        if now - last_totals_emit > _TOTALS_DEBOUNCE_S:
+            _emit_decklist_totals(prep, prices_by_name, q)
+            last_totals_emit = now
+
+
 def _produce_decklist_events(prep: _DecklistPrep, q: queue.Queue) -> None:
     """Run the decklist fan-out and push (event_type, payload) tuples to
     ``q``. Terminal sentinel is ``None``. Runs in a daemon thread driven
@@ -948,112 +1085,19 @@ def _produce_decklist_events(prep: _DecklistPrep, q: queue.Queue) -> None:
     arrive instead of bundling them into one rendered page.
     """
     t0 = monotonic()
-    p = prep
     # Cache the template once per search — render() is called per row
     # (~up to 100/decklist), so we don't want to re-look-up the env on
     # each emit. Jinja already caches compiled templates by name, but
     # the auto-reload check + dict lookup is non-trivial in a hot loop.
     row_template = app.jinja_env.get_template("_decklist_row.html")
+    prices_by_name: dict[str, list[dict]] = {n: [] for n in prep.name_qty}
+    timed_out: set[str] = set()
     try:
-        q.put(("meta", {
-            "total_cards": p.total_cards,
-            "skipped_basics": p.skipped_basics,
-            "distinct_names": len(p.name_qty),
-            "inventory_hits": p.inventory_hits,
-            "names_to_search": len(p.names_to_search),
-            "use_inventory": p.use_inventory,
-            "fx": p.fx,
-            "shop_filter_active": p.enabled_shops is not None,
-        }))
+        _emit_decklist_meta(prep, q)
+        _emit_inventory_only_rows(prep, row_template, q)
+        _run_decklist_fanout(prep, prices_by_name, timed_out, row_template, q)
 
-        prices_by_name: dict[str, list[dict]] = {n: [] for n in p.name_qty}
-
-        # Emit row events for inventory-covered cards up-front. They
-        # don't need any fan-out work — qty_needed is 0, so the row is
-        # the "✓ in inventory" badge variant. Without this the streamed
-        # table would silently drop cards the user already owns, while
-        # the synchronous /decklist path shows them. Emit in canonical
-        # alphabetical order so the inventory section of the table is
-        # readable from the first paint.
-        searched_set = set(p.names_to_search)
-        inventory_only = sorted(
-            (n for n in p.name_qty if n not in searched_set),
-            key=lambda x: p.name_canonical[x].lower(),
-        )
-        for n in inventory_only:
-            row = _build_one_card_row(
-                n, p.name_qty, p.name_canonical,
-                p.name_inv_qty, p.name_needed, [],
-            )
-            row_html = row_template.render(
-                row=row,
-                use_inventory=p.use_inventory,
-                shop_flags=SHOP_FLAGS,
-            )
-            q.put(("row", {
-                "key": n,
-                "html": row_html,
-                "qty_needed": 0,
-                "has_best": False,
-            }))
-        timed_out: set[str] = set()
-        timed_out_emitted: set[str] = set()
-        last_totals_emit = 0.0
-
-        if p.fx is not None:
-            for n, rows in _iter_decklist_prices(
-                p.names_to_search, p.name_canonical, p.fx, p.enabled_shops,
-                timeouts_out=timed_out,
-            ):
-                prices_by_name[n] = rows
-
-                row = _build_one_card_row(
-                    n, p.name_qty, p.name_canonical,
-                    p.name_inv_qty, p.name_needed, rows,
-                )
-                # Pre-render the <tr> server-side so the client can just
-                # innerHTML-append. We can't call ``render_template`` from
-                # the worker thread (no Flask app context), but the Jinja
-                # env is process-global and thread-safe to read from —
-                # template loading + render takes no Flask state.
-                row_html = row_template.render(
-                    row=row,
-                    use_inventory=p.use_inventory,
-                    shop_flags=SHOP_FLAGS,
-                )
-                q.put(("row", {
-                    "key": n,
-                    "html": row_html,
-                    "qty_needed": row["qty_needed"],
-                    "has_best": row["best"] is not None,
-                }))
-
-                for shop in sorted(timed_out - timed_out_emitted):
-                    q.put(("shop_timeout", {"shop": shop}))
-                    timed_out_emitted.add(shop)
-
-                # Debounce running totals to at most one emit per 500 ms;
-                # an explicit final emit happens below.
-                now = monotonic()
-                if now - last_totals_emit > 0.5:
-                    card_rows = _build_card_rows(
-                        p.name_qty, p.name_canonical, p.name_inv_qty,
-                        p.name_needed, prices_by_name,
-                    )
-                    shop_list, totals = _compute_shop_totals(
-                        card_rows, p.shipping_overrides_jpy, p.fx,
-                    )
-                    q.put(("totals", {"shop_list": shop_list, **totals}))
-                    last_totals_emit = now
-
-        card_rows = _build_card_rows(
-            p.name_qty, p.name_canonical, p.name_inv_qty,
-            p.name_needed, prices_by_name,
-        )
-        shop_list, totals = _compute_shop_totals(
-            card_rows, p.shipping_overrides_jpy, p.fx,
-        )
-        q.put(("totals", {"shop_list": shop_list, **totals}))
+        card_rows = _emit_decklist_totals(prep, prices_by_name, q)
         rows_with_match = sum(1 for r in card_rows if r["best"] is not None)
         duration_ms = int((monotonic() - t0) * 1000)
         q.put(("done", {
@@ -1066,9 +1110,9 @@ def _produce_decklist_events(prep: _DecklistPrep, q: queue.Queue) -> None:
             "names_searched=%d inventory_hits=%d shops_enabled=%s use_inventory=%d "
             "rows_with_match=%d skipped_basics=%d timed_out_shops=%s "
             "transport=sse duration_ms=%d",
-            p.total_cards, len(p.name_qty), len(p.names_to_search), p.inventory_hits,
-            len(p.enabled_shops) if p.enabled_shops is not None else "all",
-            int(p.use_inventory), rows_with_match, p.skipped_basics,
+            prep.total_cards, len(prep.name_qty), len(prep.names_to_search), prep.inventory_hits,
+            len(prep.enabled_shops) if prep.enabled_shops is not None else "all",
+            int(prep.use_inventory), rows_with_match, prep.skipped_basics,
             ",".join(sorted(timed_out)) or "none",
             duration_ms,
         )
@@ -1090,7 +1134,8 @@ def decklist_stream():
     keepalive matters for cold 100-card searches where individual shop
     timeouts can run ~30 s with no new ``row`` event in between.
     """
-    prep = _prepare_decklist_search(request.form)
+    basics = _parse_decklist_form_basics(request.form)
+    prep = _prepare_decklist_search(basics)
     if isinstance(prep, _DecklistReject):
         return jsonify({"error": prep.message, "reason": prep.reason}), 400
 
@@ -1234,6 +1279,18 @@ def _download_file(url: str, target: Path) -> None:
                 if chunk:
                     fh.write(chunk)
     tmp.replace(target)
+
+
+def _download_or_unavailable(url: str, target: Path, unavailable_msg: str) -> None:
+    # MTGJSON returns 404 during nightly publish windows or before the next
+    # day's file is ready; translate into a user-facing RuntimeError so callers
+    # don't surface a raw HTTPError. Other HTTP errors stay as HTTPError.
+    try:
+        _download_file(url, target)
+    except requests.HTTPError as exc:
+        if exc.response is not None and exc.response.status_code == 404:
+            raise RuntimeError(unavailable_msg) from exc
+        raise
 
 
 def _download_mtgjson_set_file(set_code: str) -> tuple[str, Path] | None:
@@ -1603,14 +1660,11 @@ def _ensure_history_loaded(
 
     history_path = _mtgjson_history_path()
     progress(32, "Downloading history", "Downloading MTGJSON AllPrices history...")
-    try:
-        _download_file(f"{_MTGJSON_BASE_URL}/AllPrices.json.xz", history_path)
-    except requests.HTTPError as exc:
-        if exc.response is not None and exc.response.status_code == 404:
-            raise RuntimeError(
-                "MTGJSON price files are temporarily unavailable. Please try again later."
-            ) from exc
-        raise
+    _download_or_unavailable(
+        f"{_MTGJSON_BASE_URL}/AllPrices.json.xz",
+        history_path,
+        "MTGJSON price files are temporarily unavailable. Please try again later.",
+    )
     try:
         if db.IS_POSTGRES:
             return history_import.rebuild_history_pg(
@@ -1819,6 +1873,80 @@ def _sort_key_market(col: str, descending: bool):
     return key
 
 
+def _attach_market_prices(
+    inventory_rows: list[dict],
+    price_cache: dict,
+    fx: float | None,
+    has_cache: bool,
+) -> list[dict]:
+    priced = []
+    for row in inventory_rows:
+        is_foil = int(_is_foil(row.get("printing")))
+        key = (row["card_name"].lower(), _normalize_set_code(row["set_code"]), is_foil)
+        price_usd = price_cache.get(key) if has_cache else None
+        priced.append({
+            **row,
+            "market_price_usd": price_usd,
+            "market_price_jpy": round(price_usd * fx) if (price_usd is not None and fx) else None,
+        })
+    return priced
+
+
+def _attach_pnl_in_place(priced: list[dict]) -> None:
+    for row in priced:
+        pb  = row.get("price_bought")
+        mp  = row.get("market_price_usd")
+        qty = row["quantity"]
+        row["cost_basis_usd"]   = round(pb * qty, 2) if pb is not None else None
+        row["market_value_usd"] = round(mp * qty, 2) if mp is not None else None
+        row["market_value_jpy"] = round(row["market_price_jpy"] * qty) if row["market_price_jpy"] is not None else None
+        if pb is not None and mp is not None:
+            row["pnl_usd"] = round((mp - pb) * qty, 2)
+            row["pnl_pct"] = round((mp / pb - 1) * 100, 1) if pb > 0 else 0.0
+        else:
+            row["pnl_usd"] = None
+            row["pnl_pct"] = None
+
+
+def _build_market_summary(priced: list[dict]) -> dict:
+    # Aggregates run across the WHOLE filtered set (not just the current
+    # page), because that's what the user expects "Cost basis $X" to mean
+    # in the summary header.
+    pnl_rows    = [r for r in priced if r["pnl_usd"]          is not None]
+    cost_rows   = [r for r in priced if r["cost_basis_usd"]   is not None]
+    market_rows = [r for r in priced if r["market_value_usd"] is not None]
+
+    total_cost       = sum(r["cost_basis_usd"]   for r in cost_rows)
+    total_pnl        = sum(r["pnl_usd"]          for r in pnl_rows)
+    total_market     = sum(r["market_value_usd"]  for r in market_rows)
+    total_market_jpy = sum(r["market_value_jpy"]  for r in market_rows if r["market_value_jpy"] is not None)
+
+    return {
+        "total_cost_usd":   round(total_cost,   2),
+        "total_pnl_usd":    round(total_pnl,    2),
+        "pnl_pct":          round(total_pnl / total_cost * 100, 1) if total_cost > 0 else None,
+        "total_market_usd": round(total_market, 2),
+        "total_market_jpy": round(total_market_jpy),
+        "lots_total":       len(priced),
+        "lots_no_cost":     len(priced) - len(cost_rows),
+        "lots_no_market":   len(priced) - len(market_rows),
+        "lots_in_pnl":      len(pnl_rows),
+    }
+
+
+def _paginate_market_rows(priced: list[dict], params: dict) -> tuple[list[dict], int, int]:
+    # Clamps params['page'] in place so a stale page param (e.g. user
+    # changes filter while on page 7) lands on the last available page
+    # instead of an empty render.
+    total = len(priced)
+    total_pages = max(1, math.ceil(total / params["per_page"])) if total else 1
+    if params["page"] > total_pages:
+        params["page"] = total_pages
+    start = (params["page"] - 1) * params["per_page"]
+    page_rows = priced[start:start + params["per_page"]]
+    return page_rows, total, total_pages
+
+
 def _compute_market_ctx(user_id: str, params: dict) -> dict:
     """All the expensive /market computation, factored out so the route
     handler can cache the result.
@@ -1834,18 +1962,16 @@ def _compute_market_ctx(user_id: str, params: dict) -> dict:
         price_value=params["price_value"],
     )
 
-    # Process-wide cached price dict. The lazy rebuild on first call/
+    # Process-wide cached price dict. The lazy rebuild on first call /
     # invalidation handles freshness; on the hot path this is an in-RAM
     # dict lookup, not a `SELECT * FROM market_prices`.
     price_cache, last_fetched_at, mtgjson_downloaded_at = _get_price_cache()
     has_cache = bool(price_cache)
-    last_refreshed = _format_ago(last_fetched_at)
     history_db_exists = _has_price_history()
-    mtgjson_last_downloaded = _format_ago(mtgjson_downloaded_at) if history_db_exists else None
 
     common = {
-        "last_refreshed": last_refreshed,
-        "mtgjson_last_downloaded": mtgjson_last_downloaded,
+        "last_refreshed": _format_ago(last_fetched_at),
+        "mtgjson_last_downloaded": _format_ago(mtgjson_downloaded_at) if history_db_exists else None,
         "history_db_exists": history_db_exists,
         "allow_price_update": not db.IS_POSTGRES,
         "active": "market",
@@ -1862,74 +1988,21 @@ def _compute_market_ctx(user_id: str, params: dict) -> dict:
         }
 
     fx = _get_fx() if has_cache else None
-
-    priced = []
-    for row in inventory_rows:
-        is_foil = int(_is_foil(row.get("printing")))
-        key = (row["card_name"].lower(), _normalize_set_code(row["set_code"]), is_foil)
-        price_usd = price_cache.get(key) if has_cache else None
-        priced.append({
-            **row,
-            "market_price_usd": price_usd,
-            "market_price_jpy": round(price_usd * fx) if (price_usd is not None and fx) else None,
-        })
+    priced = _attach_market_prices(inventory_rows, price_cache, fx, has_cache)
 
     if not has_cache:
         return {
             "rows": priced, "summary": None, "fx": None, "error": None,
             "has_cache": False,
-            "last_refreshed": None,
             "total": len(priced), "total_pages": 1,
-            **{k: v for k, v in common.items() if k != "last_refreshed"},
+            **common,
+            "last_refreshed": None,
         }
 
-    for row in priced:
-        pb  = row.get("price_bought")
-        mp  = row.get("market_price_usd")
-        qty = row["quantity"]
-        row["cost_basis_usd"]   = round(pb * qty, 2) if pb is not None else None
-        row["market_value_usd"] = round(mp * qty, 2) if mp is not None else None
-        row["market_value_jpy"] = round(row["market_price_jpy"] * qty) if row["market_price_jpy"] is not None else None
-        if pb is not None and mp is not None:
-            row["pnl_usd"] = round((mp - pb) * qty, 2)
-            row["pnl_pct"] = round((mp / pb - 1) * 100, 1) if pb > 0 else 0.0
-        else:
-            row["pnl_usd"] = None
-            row["pnl_pct"] = None
-
-    # Sort by the column requested in the URL. Summary aggregates below
-    # are computed across the WHOLE filtered set (not just the page),
-    # because that's what the user expects "Cost basis $X" to mean.
+    _attach_pnl_in_place(priced)
     priced.sort(key=_sort_key_market(params["sort"], params["direction"] == "desc"))
-
-    pnl_rows    = [r for r in priced if r["pnl_usd"]          is not None]
-    cost_rows   = [r for r in priced if r["cost_basis_usd"]   is not None]
-    market_rows = [r for r in priced if r["market_value_usd"] is not None]
-
-    total_cost       = sum(r["cost_basis_usd"]   for r in cost_rows)
-    total_pnl        = sum(r["pnl_usd"]          for r in pnl_rows)
-    total_market     = sum(r["market_value_usd"]  for r in market_rows)
-    total_market_jpy = sum(r["market_value_jpy"]  for r in market_rows if r["market_value_jpy"] is not None)
-
-    summary = {
-        "total_cost_usd":   round(total_cost,   2),
-        "total_pnl_usd":    round(total_pnl,    2),
-        "pnl_pct":          round(total_pnl / total_cost * 100, 1) if total_cost > 0 else None,
-        "total_market_usd": round(total_market, 2),
-        "total_market_jpy": round(total_market_jpy),
-        "lots_total":       len(priced),
-        "lots_no_cost":     len(priced) - len(cost_rows),
-        "lots_no_market":   len(priced) - len(market_rows),
-        "lots_in_pnl":      len(pnl_rows),
-    }
-
-    # Paginate AFTER the summary is computed.
-    total = len(priced)
-    total_pages = max(1, math.ceil(total / params["per_page"])) if total else 1
-    if params["page"] > total_pages:
-        params["page"] = total_pages
-    start = (params["page"] - 1) * params["per_page"]
-    page_rows = priced[start:start + params["per_page"]]
+    summary = _build_market_summary(priced)
+    page_rows, total, total_pages = _paginate_market_rows(priced, params)
 
     return {
         "rows": page_rows,
@@ -2399,12 +2472,11 @@ def _run_daily_price_update(
 
     today_xz = cache_dir / "AllPricesToday.json.xz"
     _progress(10, "Downloading today's prices", "Downloading AllPricesToday.json.xz...")
-    try:
-        _download_file(f"{_MTGJSON_BASE_URL}/AllPricesToday.json.xz", today_xz)
-    except requests.HTTPError as exc:
-        if exc.response is not None and exc.response.status_code == 404:
-            raise RuntimeError("MTGJSON AllPricesToday not available yet.") from exc
-        raise
+    _download_or_unavailable(
+        f"{_MTGJSON_BASE_URL}/AllPricesToday.json.xz",
+        today_xz,
+        "MTGJSON AllPricesToday not available yet.",
+    )
 
     market_date = history_import.read_meta_date(today_xz)
 

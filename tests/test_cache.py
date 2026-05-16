@@ -22,21 +22,12 @@ from mtgcompare.scrapper import MtgScrapper
 # Fixtures
 # ---------------------------------------------------------------------------
 
-@pytest.fixture()
-def test_db(tmp_path, monkeypatch):
-    db_path = tmp_path / "test.db"
-    engine = create_engine(
-        f"sqlite:///{db_path}",
-        connect_args={"check_same_thread": False},
-    )
-    monkeypatch.setattr(db_module, "engine", engine)
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
-    monkeypatch.setattr(db_module, "IS_POSTGRES", False)
-    # Each test gets a fresh DB, so the cache module's "schema ready" guard
-    # must be reset to ensure init runs again against the new engine.
+@pytest.fixture(autouse=True)
+def _reset_cache_schema_ready(monkeypatch):
+    """Cache module memoises that its DDL has run on the live engine; reset
+    the guard before each test so init re-runs against the per-test SQLite
+    engine swapped in by the ``test_db`` fixture (defined in conftest)."""
     monkeypatch.setattr(cache_module, "_schema_ready", False)
-    db_module.init_schema()
-    yield db_module
 
 
 class FakeScrapper(MtgScrapper):

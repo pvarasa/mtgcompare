@@ -4,27 +4,14 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 
 import mtgcompare.auth as auth_module
 import mtgcompare.db as db_module
 from mtgcompare import inventory as inv
 from mtgcompare import web
 
-
-@pytest.fixture()
-def test_db(tmp_path, monkeypatch):
-    """Swap db.engine for a fresh temp SQLite database (same shape as test_db_layer)."""
-    db_path = tmp_path / "test.db"
-    test_engine = create_engine(
-        f"sqlite:///{db_path}",
-        connect_args={"check_same_thread": False},
-    )
-    monkeypatch.setattr(db_module, "engine", test_engine)
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
-    monkeypatch.setattr(db_module, "IS_POSTGRES", False)
-    db_module.init_schema()
-    yield db_module
+# ``test_db`` fixture (SQLite-temp engine swap) lives in tests/conftest.py.
 
 
 def test_parse_enabled_shops_default_returns_none():

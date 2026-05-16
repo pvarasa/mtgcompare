@@ -20,7 +20,7 @@ import re
 
 from selectolax.parser import HTMLParser
 
-from ._base import HtmlSearchScrapper
+from ._base import HtmlSearchScrapper, node_text_ws
 
 BASE_URL = "https://www.cardrush-mtg.jp"
 SEARCH_URL = f"{BASE_URL}/product-list"
@@ -54,16 +54,6 @@ _LISTING_RE = re.compile(
 _NM_CONDITIONS = {None, "NM", "NM-"}
 
 
-def _goods_name_text(goods_name_el) -> str:
-    """Concatenate text content of the goods_name span.
-
-    selectolax's ``.text(deep=True)`` walks nested ``<b>`` / ``<wbr/>`` /
-    ``<span class="result_emphasis">`` children in C; this helper just
-    centralises whitespace-collapsing for predictable matching.
-    """
-    return re.sub(r"\s+", " ", goods_name_el.text(deep=True, separator=" ", strip=True)).strip()
-
-
 def parse_search_html(html: str | bytes, card_name: str, fx_jpy_per_usd: float) -> list[dict]:
     """Extract NM English price records for ``card_name`` from a Card Rush page."""
     tree = HTMLParser(html)
@@ -78,7 +68,7 @@ def parse_search_html(html: str | bytes, card_name: str, fx_jpy_per_usd: float) 
         if not (name_el and price_el and stock_el and link_el):
             continue
 
-        text = _goods_name_text(name_el)
+        text = node_text_ws(name_el)
         m = _LISTING_RE.match(text)
         if not m:
             continue

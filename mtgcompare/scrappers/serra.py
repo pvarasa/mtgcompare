@@ -22,7 +22,7 @@ import re
 
 from selectolax.parser import HTMLParser
 
-from ._base import HtmlSearchScrapper
+from ._base import HtmlSearchScrapper, node_text_ws
 
 BASE_URL = "https://cardshop-serra.com"
 SEARCH_URL = f"{BASE_URL}/mtg/products/list"
@@ -73,7 +73,7 @@ def parse_search_html(html: str | bytes, card_name: str, fx_jpy_per_usd: float) 
         if title_el is None:
             continue
 
-        title = re.sub(r"\s+", " ", title_el.text(deep=True, separator=" ", strip=True)).strip()
+        title = node_text_ws(title_el)
         m = _TITLE_RE.match(title)
         if not m:
             continue

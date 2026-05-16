@@ -21,7 +21,7 @@ import re
 
 from selectolax.parser import HTMLParser
 
-from ._base import HtmlSearchScrapper
+from ._base import HtmlSearchScrapper, node_text_ws
 
 BASE_URL = "https://www.mint-mall.net"
 SEARCH_URL = f"{BASE_URL}/products/list.php"
@@ -112,7 +112,7 @@ def parse_search_html(html: str | bytes, card_name: str, fx_jpy_per_usd: float) 
         if not (title_el and select_el):
             continue
 
-        title = re.sub(r"\s+", " ", title_el.text(deep=True, separator=" ", strip=True)).strip()
+        title = node_text_ws(title_el)
 
         # Skip foils and special foils.
         if "【Foil】" in title or "Foil】" in title.split("》", 1)[0] + "》":

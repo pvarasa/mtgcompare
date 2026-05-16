@@ -2,6 +2,7 @@
 (user_id scoping, list_all_global, stats, import_csv).
 
 All tests use a temporary SQLite engine so they never touch inventory.db.
+The ``test_db`` fixture lives in ``tests/conftest.py``.
 """
 import textwrap
 
@@ -10,25 +11,6 @@ from sqlalchemy import create_engine, text
 
 import mtgcompare.db as db_module
 from mtgcompare import inventory as inv
-
-# ---------------------------------------------------------------------------
-# Fixture: redirect db.engine to a fresh per-test SQLite file
-# ---------------------------------------------------------------------------
-
-@pytest.fixture()
-def test_db(tmp_path, monkeypatch):
-    """Swap the module-level engine for a fresh temp SQLite database."""
-    db_path = tmp_path / "test.db"
-    test_engine = create_engine(
-        f"sqlite:///{db_path}",
-        connect_args={"check_same_thread": False},
-    )
-    monkeypatch.setattr(db_module, "engine", test_engine)
-    monkeypatch.setattr(db_module, "DB_PATH", db_path)
-    monkeypatch.setattr(db_module, "IS_POSTGRES", False)
-    db_module.init_schema()
-    yield db_module
-
 
 # ---------------------------------------------------------------------------
 # db.upsert

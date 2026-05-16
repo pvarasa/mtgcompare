@@ -28,8 +28,6 @@ Repo-specific guidance for coding sessions.
   Start/stop helpers for local development; `build.ps1` for packaging.
 - `Dockerfile`, `.dockerignore`, `docker-compose.yml`
   Container build and local dev stack (app + postgres).
-- root `app.py`, `compare.py`
-  Thin compatibility wrappers.
 
 ## Import conventions
 
@@ -57,6 +55,14 @@ Repo-specific guidance for coding sessions.
 | `USER_DISPLAY_HEADER` | _(empty)_ | Same fallback path: header for display name; falls back to `USER_ID_HEADER` value if unset |
 | `CRON_SECRET` | _(empty)_ | Bearer token protecting `/internal/cron/update-prices`; if empty, no auth check |
 | `MTGJSON_CACHE_DIR` | `/tmp/mtgjson` | Scratch directory for price import temp files (PostgreSQL mode only) |
+| `TRUST_USER_HEADER` | _(absent)_ | Set to `1` to opt into the `USER_ID_HEADER` fallback path (Postgres + non-WorkOS, e.g. loadtest sidecar or docker-compose dev) |
+| `MARKET_CACHE_TTL` | `60` | TTL (s) for the in-memory `/market` per-request render cache; set to `0` to disable |
+| `MTGCOMPARE_CACHE_ENABLED` | `1` | Toggle the shop-listings query cache (`shop_listings` table); set to `0`/`false` to disable |
+| `MTGCOMPARE_CACHE_TTL_HOURS` | `24` | TTL (h) for cached shop listing rows |
+| `MTGCOMPARE_DECKLIST_FAN_OUT_WORKERS` | `12` | Thread-pool size for the per-card × per-shop fan-out during decklist pricing |
+| `MTGCOMPARE_SHOP_QUERY_TIMEOUT_S` | `30` | Per-shop wall-clock cap (s) during decklist pricing; shops that miss it are reported as timed out |
+| `DB_POOL_SIZE` | `5` | SQLAlchemy connection pool size (PostgreSQL mode) |
+| `DB_POOL_OVERFLOW` | `10` | SQLAlchemy connection pool overflow capacity (PostgreSQL mode) |
 
 ## Database backends
 
@@ -191,8 +197,8 @@ The `users` table is keyed on `workos_user_id`; inventory rows continue to key o
 
 - `uv run pytest`
   Offline tests (SQLite mode).
-- `uv run pytest -m live`
-  Live scraper checks.
+- `uv run pytest -m canary`
+  Live smoke-tests that hit each real shop endpoint and check for HTML/API drift.
 - `DATABASE_URL=postgresql+psycopg2://... uv run pytest -m pg`
   PostgreSQL-specific tests (require a real Postgres instance).
 - `uv run --group e2e pytest -m e2e`
