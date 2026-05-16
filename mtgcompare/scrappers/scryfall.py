@@ -40,12 +40,17 @@ def make_session() -> requests.Session:
         "User-Agent": USER_AGENT,
         "Accept": "application/json",
     })
-    # Each scraper makes 1–3 requests per card; the default pool of 10
-    # idle connections is wasteful when many scrapers spin up per /decklist.
-    adapter = HTTPAdapter(pool_connections=2, pool_maxsize=2)
+    # Module-level session shared across the per-decklist fan-out, so the
+    # pool must hold concurrent in-flight connections — sized to match
+    # MTGCOMPARE_DECKLIST_FAN_OUT_WORKERS (default 12).
+    adapter = HTTPAdapter(pool_connections=12, pool_maxsize=12)
     s.mount("https://", adapter)
     s.mount("http://", adapter)
     return s
+
+
+# Module-level Session shared across all ScryfallScrapper instances.
+_SHARED_SESSION = make_session()
 
 
 def parse_page(
@@ -107,7 +112,7 @@ class ScryfallScrapper(MtgScrapper):
     ):
         super().__init__()
         self.fx = fx if fx is not None else get_fx("jpy")
-        self.session = session or make_session()
+        self.session = session if session is not None else _SHARED_SESSION
         self.logger = logging.getLogger("mtgcompare.scrappers.scryfall")
 
     def get_prices(self, card_name: str) -> list[dict]:

@@ -33,6 +33,13 @@ def make_session() -> requests.Session:
     return _make_session({"X-Requested-With": "XMLHttpRequest"})
 
 
+# Module-level Session shared across all HareruyaScrapper instances.
+# Hareruya doesn't use HtmlSearchScrapper (it does two HTTP calls per
+# search), so we wire the shared session manually rather than via the
+# base class's __init_subclass__ hook.
+_SHARED_SESSION = make_session()
+
+
 def parse_lazy_html(html: str | bytes, card_name: str, fx_jpy_per_usd: float) -> list[dict]:
     """Extract price records from the HTML returned by /unisearch/lazy.
 
@@ -93,7 +100,7 @@ class HareruyaScrapper(MtgScrapper):
     ):
         super().__init__()
         self.fx = fx if fx is not None else get_fx("jpy")
-        self.session = session or make_session()
+        self.session = session if session is not None else _SHARED_SESSION
         self.logger = logging.getLogger("mtgcompare.scrappers.hareruya")
 
     def get_prices(self, card_name: str) -> list[dict]:

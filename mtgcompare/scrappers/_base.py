@@ -77,10 +77,10 @@ def make_session(extra_headers: dict | None = None) -> requests.Session:
     s.headers.update({"User-Agent": USER_AGENT})
     if extra_headers:
         s.headers.update(extra_headers)
-    # Each scraper makes one or two requests per card before the instance
-    # is discarded — requests' default pool of 10 idle connections is
-    # wasteful when many scrapers spin up per /decklist fan-out.
-    adapter = HTTPAdapter(pool_connections=2, pool_maxsize=2)
+    # Module-level sessions are shared across the per-decklist fan-out, so
+    # the pool must accommodate concurrent in-flight requests per shop.
+    # Sized to match MTGCOMPARE_DECKLIST_FAN_OUT_WORKERS (default 12).
+    adapter = HTTPAdapter(pool_connections=12, pool_maxsize=12)
     s.mount("https://", adapter)
     s.mount("http://", adapter)
     return s
@@ -100,6 +100,16 @@ class HtmlSearchScrapper(MtgScrapper):
     SEARCH_PARAM_NAME: ClassVar[str] = "keyword"
     SESSION_HEADERS: ClassVar[dict] = {}
     REQUEST_TIMEOUT_S: ClassVar[float] = 20.0
+    _SHARED_SESSION: ClassVar[requests.Session]
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        # One Session per subclass, allocated at class-definition time and
+        # reused across every instance. Keeps HTTP keep-alive warm across
+        # the per-decklist fan-out instead of forcing a fresh TLS handshake
+        # for each (card, shop) pair. requests.Session is thread-safe for
+        # concurrent GETs.
+        cls._SHARED_SESSION = make_session(cls.SESSION_HEADERS or None)
 
     def __init__(
         self,
@@ -108,7 +118,7 @@ class HtmlSearchScrapper(MtgScrapper):
     ):
         super().__init__()
         self.fx = fx if fx is not None else get_fx("jpy")
-        self.session = session or make_session(self.SESSION_HEADERS or None)
+        self.session = session if session is not None else self._SHARED_SESSION
         self.logger = logging.getLogger(self.LOGGER_NAME)
 
     # --- subclasses customise these ---
