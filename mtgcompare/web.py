@@ -100,6 +100,7 @@ app.secret_key = _SECRET_KEY or "mtgcompare-local-dev"
 @app.before_request
 def _bind_log_context():
     bind_request_id()
+    g._req_start_monotonic = monotonic()
 
 
 @app.after_request
@@ -231,6 +232,30 @@ def _get_display_name() -> str:
         if name:
             return name
     return _get_user_id()
+
+
+_REQUEST_LOG_SKIP_PREFIXES = (
+    "/healthz", "/static/", "/favicon", "/robots.txt", "/internal/",
+)
+
+
+@app.after_request
+def _log_request_access(response):
+    path = request.path or "-"
+    for skip in _REQUEST_LOG_SKIP_PREFIXES:
+        if path.startswith(skip):
+            return response
+    # Surface anon traffic explicitly so user-aggregations bucket it cleanly
+    # rather than collapsing it with records that legitimately lack identity.
+    if not getattr(g, "user_id", None) and auth.WORKOS_ENABLED:
+        g.user_id = "anonymous"
+    start = getattr(g, "_req_start_monotonic", None)
+    duration_ms = int((monotonic() - start) * 1000) if start is not None else -1
+    app.logger.info(
+        "event=request method=%s path=%s status=%s duration_ms=%s",
+        request.method, path, response.status_code, duration_ms,
+    )
+    return response
 
 
 @app.context_processor
