@@ -1211,6 +1211,8 @@ def _format_ago(iso: str | None) -> str | None:
 _MARKET_HISTORY_PERIODS = {
     "1w": 7,
     "1m": 30,
+    "3m": 90,
+    "6m": 180,
     "all": None,
 }
 
