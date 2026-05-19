@@ -10,7 +10,7 @@
       margin-bottom: 1rem;
       display: grid;
       gap: .6rem;
-      grid-template-columns: minmax(0, 1fr) auto minmax(0, 10rem) auto;
+      grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 7rem) auto minmax(0, 8rem) auto;
       align-items: end;
     }
     .inv-filter label {
@@ -388,6 +388,25 @@
                value="{{ params.q }}"
                placeholder="Filter by card name..." autocomplete="off">
       </label>
+      <label>Set
+        <select id="inv-set-code" name="set_code">
+          <option value="">Any set</option>
+          {% for s in set_choices %}
+            <option value="{{ s.set_code }}"
+                    {% if params.set_code == s.set_code %}selected{% endif %}>
+              {% if s.set_name %}{{ s.set_name }} ({{ s.set_code }}){% else %}{{ s.set_code }}{% endif %}
+            </option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>Condition
+        <select id="inv-condition" name="condition">
+          <option value="">Any cond.</option>
+          {% for c in condition_choices %}
+            <option value="{{ c }}" {% if params.condition == c %}selected{% endif %}>{{ c }}</option>
+          {% endfor %}
+        </select>
+      </label>
       <label>Price filter
         <select id="inv-price-mode" name="price_mode">
           {% set m = params.price_mode %}
@@ -598,7 +617,9 @@
               const q          = form.querySelector('input[name="q"]').value.trim();
               const price_mode = form.querySelector('select[name="price_mode"]').value;
               const price_value = form.querySelector('input[name="price_value"]').value.trim();
-              body = { match: { q, price_mode, price_value } };
+              const set_code  = form.querySelector('select[name="set_code"]')?.value || '';
+              const condition = form.querySelector('select[name="condition"]')?.value || '';
+              body = { match: { q, price_mode, price_value, set_code, condition } };
             } else {
               const targets = checkedTrs();
               if (targets.length === 0) return;

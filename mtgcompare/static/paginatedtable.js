@@ -41,6 +41,8 @@
       q:           form.querySelector('input[name="q"]'),
       priceMode:   form.querySelector('select[name="price_mode"]'),
       priceValue:  form.querySelector('input[name="price_value"]'),
+      setCode:     form.querySelector('select[name="set_code"]'),
+      condition:   form.querySelector('select[name="condition"]'),
       sort:        form.querySelector('input[name="sort"]'),
       dir:         form.querySelector('input[name="dir"]'),
       page:        form.querySelector('input[name="page"]'),
@@ -69,6 +71,8 @@
         q:           fields.q          ? fields.q.value.trim()          : '',
         price_mode:  fields.priceMode  ? fields.priceMode.value         : '',
         price_value: fields.priceValue ? fields.priceValue.value.trim() : '',
+        set_code:    fields.setCode    ? fields.setCode.value           : '',
+        condition:   fields.condition  ? fields.condition.value         : '',
         sort:        fields.sort       ? fields.sort.value              : '',
         dir:         fields.dir        ? fields.dir.value               : '',
         page:        fields.page       ? fields.page.value              : '',
@@ -199,6 +203,13 @@
         }, debounceMs);
       });
     }
+    for (const sel of [fields.setCode, fields.condition]) {
+      if (!sel) continue;
+      sel.addEventListener('change', () => {
+        bumpToFirstPage();
+        fetchFragment({});
+      });
+    }
     form.addEventListener('submit', (event) => {
       // Non-JS path also works; with JS we intercept.
       event.preventDefault();
@@ -211,6 +222,8 @@
       if (fields.q)          fields.q.value          = usp.get('q')           || '';
       if (fields.priceMode)  fields.priceMode.value  = usp.get('price_mode')  || (defaults.price_mode || 'any');
       if (fields.priceValue) fields.priceValue.value = usp.get('price_value') || '';
+      if (fields.setCode)    fields.setCode.value    = usp.get('set_code')    || '';
+      if (fields.condition)  fields.condition.value  = usp.get('condition')   || '';
       if (fields.sort)       fields.sort.value       = usp.get('sort')        || (defaults.sort     || '');
       if (fields.dir)        fields.dir.value        = usp.get('dir')         || (defaults.dir      || 'asc');
       if (fields.page)       fields.page.value       = usp.get('page')        || '1';

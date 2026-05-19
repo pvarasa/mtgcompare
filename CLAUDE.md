@@ -99,7 +99,7 @@ The `users` table is keyed on `workos_user_id`; inventory rows continue to key o
 - `Resolve & preview` must run before `Add to inventory` becomes enabled.
 - Resolved preview rows default the date field to today.
 - The preview `Set` field is editable as a 3-character set code only.
-- Inventory filtering is client-side and supports filtering by `price_bought`, including empty values.
+- Inventory filtering is server-side: name (substring), set (dropdown of sets the user owns), condition (dropdown), and `price_bought` mode + value. Filters round-trip through `paginatedtable.js` as `?partial=tbody` fetches.
 - Decklist search on the main Search page is separate from inventory add: it prices pasted lists across shops and shows per-shop shipping-aware totals.
 
 ## Search and market behavior

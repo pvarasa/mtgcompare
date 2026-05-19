@@ -63,10 +63,7 @@ _PUBLIC_PATH_PREFIXES = (
 _PUBLIC_EXACT_PATHS = frozenset({"/healthz"})
 
 
-# ---------------------------------------------------------------------------
-# WorkOS SDK + JWKS — lazily constructed so bare imports stay cheap
-# ---------------------------------------------------------------------------
-
+# WorkOS SDK + JWKS — lazily constructed so bare imports stay cheap.
 _workos_client = None
 _jwks_client: PyJWKClient | None = None
 
@@ -141,13 +138,7 @@ def _to_session(response) -> dict:
 
 @functools.lru_cache(maxsize=1024)
 def _verify_cached(token: str) -> dict:
-    """Cache-key wrapper around the actual JWT verification.
-
-    The raw token string is the cache key, so a different token never
-    serves a cached entry. Tokens are stable for ~5-15 min of their
-    lifetime, so for an active user the hit rate is ~99% — saving an
-    RS256 signature check (~0.5-1 ms) on each authenticated request.
-    """
+    """LRU-cached JWT verification keyed on the raw token string."""
     signing_key = _get_jwks().get_signing_key_from_jwt(token).key
     claims = jwt.decode(
         token, signing_key, algorithms=["RS256"],
@@ -190,10 +181,6 @@ def verify_webhook(raw_body: bytes, signature_header: str):
     )
 
 
-# ---------------------------------------------------------------------------
-# Cookie + DB helpers
-# ---------------------------------------------------------------------------
-
 def _set_session_cookies(response, *, access_token: str, refresh_token: str) -> None:
     common = dict(httponly=True, secure=True, samesite="Lax", path="/")
     response.set_cookie(ACCESS_TOKEN_COOKIE,  access_token,  max_age=REFRESH_COOKIE_MAX_AGE, **common)
@@ -215,18 +202,8 @@ def _set_transient_cookie(response, name: str, value: str) -> None:
 
 
 def _upsert_user(user: dict) -> None:
-    """Insert or update a row in the local `users` table.
-
-    Called from both `/auth/callback` (after the OAuth code-exchange) and
-    the webhook handler (`user.created` / `user.updated`); they each
-    build a `user` dict with `id` + the profile fields they have.
-
-    Webhooks are eventually consistent — we can't rely on `user.created`
-    having arrived before the user's first authenticated request, so the
-    callback path runs the same upsert.
-
-    `updated_at` is set explicitly because the column's `server_default`
-    only fires on INSERT.
+    """Insert or update the local `users` row. `updated_at` is set
+    explicitly because the column's `server_default` only fires on INSERT.
     """
     with db.get_conn() as conn:
         db.upsert(conn, "users", ["workos_user_id"], [{
@@ -274,10 +251,6 @@ def _load_user_record(workos_user_id: str) -> dict | None:
         ).mappings().first()
     return dict(row) if row else None
 
-
-# ---------------------------------------------------------------------------
-# Flask blueprint — middleware + routes
-# ---------------------------------------------------------------------------
 
 bp = Blueprint("auth", __name__)
 

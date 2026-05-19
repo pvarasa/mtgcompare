@@ -17,7 +17,7 @@
 
 {# Build a query-string for a click — preserves the other params. #}
 {% macro qs(overrides) -%}
-?q={{ params.q }}&price_mode={{ params.price_mode }}{% if params.price_value is not none %}&price_value={{ params.price_value }}{% endif %}&per_page={{ params.per_page }}&page={% if 'page' in overrides %}{{ overrides.page }}{% else %}{{ params.page }}{% endif %}&sort={% if 'sort' in overrides %}{{ overrides.sort }}{% else %}{{ sort }}{% endif %}&dir={% if 'dir' in overrides %}{{ overrides.dir }}{% else %}{{ dir }}{% endif %}
+?q={{ params.q }}&price_mode={{ params.price_mode }}{% if params.price_value is not none %}&price_value={{ params.price_value }}{% endif %}{% if params.set_code %}&set_code={{ params.set_code }}{% endif %}{% if params.condition %}&condition={{ params.condition }}{% endif %}&per_page={{ params.per_page }}&page={% if 'page' in overrides %}{{ overrides.page }}{% else %}{{ params.page }}{% endif %}&sort={% if 'sort' in overrides %}{{ overrides.sort }}{% else %}{{ sort }}{% endif %}&dir={% if 'dir' in overrides %}{{ overrides.dir }}{% else %}{{ dir }}{% endif %}
 {%- endmacro %}
 
 {% macro sort_header(col, label, num=False) %}
@@ -38,7 +38,7 @@
      data-matched-printings="{{ matched.printings }}"
      data-matched-copies="{{ matched.total_copies }}"
      data-matched-cost="{{ '%.2f'|format(matched.total_cost) }}">
-  {% if params.q or params.price_mode not in ('any', '') %}
+  {% if params.q or params.price_mode not in ('any', '') or params.set_code or params.condition %}
     <strong>{{ '{:,}'.format(total) }}</strong> matching rows
     {%- if matched.total_copies %}
       &middot; {{ '{:,}'.format(matched.total_copies) }} copies
@@ -135,7 +135,7 @@
        row_count=rows|length) }}
 {% else %}
   <div class="empty">
-    {% if params.q or params.price_mode not in ('any', '') %}
+    {% if params.q or params.price_mode not in ('any', '') or params.set_code or params.condition %}
       No rows match these filters.
       <a href="{{ url_for('inventory') }}">Clear filters</a>
     {% else %}

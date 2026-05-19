@@ -6,12 +6,10 @@ market price — the de-facto US "what does this card cost" reference.
 
 No auth. Respects Scryfall's rate-limit guidance (50-100 ms between calls).
 
-The `parse_page` / `parse_search_response` functions are pure and are
-what tests exercise. ``parse_page`` is the per-page primitive so the
-scrapper can stream-process and drop each page without accumulating
-the full pagination history in memory — popular cards with many
-printings produce multi-MB JSON bodies and were the largest single
-contributor to /decklist's peak RSS.
+`parse_page` is the per-page primitive so the scrapper can stream-process
+and drop each page without accumulating the full pagination history in
+memory — popular cards with many printings produce multi-MB JSON bodies
+and were the largest single contributor to /decklist's peak RSS.
 """
 import logging
 import time
@@ -85,22 +83,6 @@ def parse_page(
             "condition": "NM",
             "link": link,
         })
-    return records
-
-
-def parse_search_response(
-    pages: list[dict],
-    card_name: str,
-    fx_jpy_per_usd: float,
-) -> list[dict]:
-    """Concat parse_page across multiple pages — retained for tests and
-    callers that already materialise the full pagination list. Production
-    callers should iterate with ``ScryfallScrapper.get_prices``, which
-    streams page-by-page."""
-    target = card_name.strip().lower()
-    records: list[dict] = []
-    for page in pages:
-        records.extend(parse_page(page, target, fx_jpy_per_usd))
     return records
 
 

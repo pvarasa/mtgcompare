@@ -12,7 +12,7 @@ import os
 import queue
 import re
 import tempfile
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Collection, Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -71,9 +71,7 @@ install_healthz_access_filter()
 
 app = Flask(__name__)
 
-# Swap Flask's stdlib JSON for orjson — 5-10x faster encoding, ~half the
-# memory. Affects /auth/me, /market/history, /inventory/add-bulk, and the
-# decklist preview endpoint. Drop-in: same .dumps()/.loads() shape.
+# Swap Flask's stdlib JSON for orjson — faster, ~half the memory.
 class _OrjsonProvider(JSONProvider):
     def dumps(self, obj, **_):
         return orjson.dumps(obj).decode()
@@ -183,11 +181,6 @@ if db.IS_POSTGRES and not _CRON_SECRET:
     )
 
 
-# Run the schema setup + migrations once at worker boot, not per-request.
-# Each gunicorn worker imports this module on startup so this fires once
-# per worker. Earlier versions called inv.init_schema() from every route
-# handler that touched the DB, which cost ~10–15 ms per request issuing
-# redundant information_schema queries.
 inv.init_schema()
 
 
@@ -266,22 +259,49 @@ def _inject_current_user():
     }
 
 
+def _render_error(code: int, title: str, message: str):
+    """Render the branded error template. Falls back to plain text if the
+    template itself somehow fails (e.g. base.html context processor blew
+    up alongside the original request)."""
+    try:
+        return render_template(
+            "error.html",
+            code=code, title=title, message=message,
+            request_id=getattr(g, "request_id", None),
+            active=None,
+        ), code
+    except Exception:
+        app.logger.exception("event=error_template_render_failed code=%d", code)
+        return f"{code} {title}\n\n{message}\n", code
+
+
+@app.errorhandler(404)
+def _handle_404(_err):
+    return _render_error(
+        404, "Not found",
+        "We couldn't find what you were looking for. Check the URL or head back to the search page.",
+    )
+
+
+@app.errorhandler(500)
+def _handle_500(_err):
+    return _render_error(
+        500, "Something went wrong",
+        "An unexpected error happened on our side. The details have been logged — "
+        "if you can share the request id below, that helps us track it down.",
+    )
+
+
 def _compute_static_token() -> str:
     """Cache-bust token for ``<script src=".../foo.js?v=TOKEN">`` URLs.
 
-    Without this, browsers happily keep serving the old JS across deploys
-    and users end up running stale code against a new server. We saw it
-    bite in v1.7.1: stale JS expected the old DOM and silently no-op'd
-    on the new status block. Token is the max mtime of any file under
-    ``mtgcompare/static`` — coarse but stable within a deploy (one image
-    rebuild bumps every file's mtime) and zero-cost at template time."""
+    Max mtime under ``static/`` — coarse but stable within a deploy; one
+    image rebuild bumps every file's mtime.
+    """
     static_dir = Path(__file__).resolve().parent / "static"
-    try:
-        return str(int(max(
-            p.stat().st_mtime for p in static_dir.rglob("*") if p.is_file()
-        )))
-    except (FileNotFoundError, ValueError):
-        return "0"
+    return str(int(max(
+        p.stat().st_mtime for p in static_dir.rglob("*") if p.is_file()
+    )))
 
 
 _STATIC_TOKEN = _compute_static_token()
@@ -543,19 +563,10 @@ def _iter_decklist_prices(
     enabled_shops: set[str] | None,
     timeouts_out: set[str] | None = None,
 ) -> Iterator[tuple[str, list[dict]]]:
-    """Stream per-card price results as each shop fan-out completes.
-
-    Yields ``(lower_name, sorted_rows)`` one tuple per distinct name in
-    ``names_to_search``, in completion order (which is roughly fastest
-    cards first). Per-name failures are logged and produce a single
-    ``(name, [])`` yield rather than aborting the whole batch. If
-    ``timeouts_out`` is given, the union of shops that hit the per-shop
-    timeout across all names is added to it in place — usable as a
-    live "partial results" signal during streaming.
-
-    Powers both the synchronous ``_fetch_decklist_prices`` (which
-    materializes the whole dict) and the SSE-streamed /decklist/stream
-    endpoint (which emits a ``row`` event per yield).
+    """Stream ``(lower_name, sorted_rows)`` per card in fan-out
+    completion order. Per-name failures yield ``(name, [])`` rather than
+    aborting. ``timeouts_out``, if given, is mutated in place with the
+    union of shops that hit the per-shop timeout.
     """
     if not names_to_search:
         return
@@ -591,15 +602,8 @@ def _fetch_decklist_prices(
     enabled_shops: set[str] | None,
     timeouts_out: set[str] | None = None,
 ) -> dict[str, list[dict]]:
-    """Fan out one shop search per distinct name and collect price rows.
-
-    Backwards-compatible dict-returning wrapper around
-    ``_iter_decklist_prices``. Returns a mapping ``{lower_name: sorted_rows}``;
-    names with no matches still appear with an empty list. Per-name
-    failures are logged and produce an empty list rather than aborting
-    the whole batch. If ``timeouts_out`` is given, the union of shops
-    that hit the per-shop timeout across all names is added to it
-    (one set, mutated in place).
+    """Dict-returning wrapper around ``_iter_decklist_prices``. Names
+    with no matches still appear with an empty list.
     """
     prices_by_name: dict[str, list[dict]] = {n: [] for n in names_to_search}
     for n, rows in _iter_decklist_prices(
@@ -617,12 +621,7 @@ def _build_one_card_row(
     name_needed: dict[str, int],
     results: list[dict],
 ) -> dict:
-    """Project a single name's state into the row shape the template expects.
-
-    Shared by the synchronous handler (which builds the full ``card_rows``
-    list at once) and the streaming handler (which emits one row event
-    per name as the fan-out resolves).
-    """
+    """Project a single name's state into the row shape the template expects."""
     qty_needed = name_needed[n]
     return {
         "name": name_canonical[n],
@@ -727,13 +726,7 @@ def _load_inventory_qty_map(use_inventory: bool) -> dict[str, int]:
 
 @dataclass(frozen=True)
 class _DecklistFormBasics:
-    """Raw form fields shared by both /decklist code paths.
-
-    Both the sync route (which renders an error template that needs these
-    on the reject path) and the SSE route (which only forwards them to
-    `_prepare_decklist_search`) parse the same four fields out of the
-    POST form; centralising the parse keeps them from drifting.
-    """
+    """Raw form fields shared by both /decklist code paths."""
     decklist_text: str
     shipping_overrides_jpy: dict[str, int]
     use_inventory: bool
@@ -751,12 +744,7 @@ def _parse_decklist_form_basics(form) -> _DecklistFormBasics:
 
 @dataclass
 class _DecklistPrep:
-    """Validated + inventory-deducted + FX-resolved state for a search.
-
-    The output of ``_prepare_decklist_search`` on the happy path. Both the
-    synchronous ``/decklist`` endpoint and the streaming ``/decklist/stream``
-    flow consume one of these.
-    """
+    """Output of `_prepare_decklist_search` on the happy path."""
     decklist_text: str
     total_cards: int
     skipped_basics: int
@@ -782,11 +770,7 @@ class _DecklistReject:
 
 def _prepare_decklist_search(basics: _DecklistFormBasics) -> _DecklistPrep | _DecklistReject:
     """Parse / strip basics / consolidate / deduct inventory / fetch FX.
-
-    All pure logic — never touches Flask response context. Returns either
-    a fully-prepared ``_DecklistPrep`` or a ``_DecklistReject`` with the
-    same ``reason``/``message`` values the original handler emitted, so
-    log/dashboard parsers stay stable.
+    Pure — never touches Flask response context.
     """
     text = basics.decklist_text
     shipping_overrides_jpy = basics.shipping_overrides_jpy
@@ -950,35 +934,16 @@ def decklist_search():
     )
 
 
-# ---------------------------------------------------------------------------
-# Streaming /decklist via SSE — single-request POST
+# Streaming /decklist via SSE.
 #
-# The synchronous /decklist above renders the whole results page in one
-# Flask response, which sits behind Cloudflare's ~100 s edge timeout for
-# free/Pro/Business tunnels. Cold 100-card searches on rare cards can
-# legitimately exceed that, producing a 524 even when the backend would
-# eventually complete.
-#
-# POST /decklist/stream validates synchronously, then immediately starts
-# streaming a text/event-stream response: bytes start flowing within a
-# few hundred ms, so Cloudflare never trips its idle timer. Events:
-#   meta → row* → shop_timeout* → totals* → done (or error)
-# A ": keepalive" comment goes out every 15 s of silence to keep
-# intermediaries from idling the connection during slow shop calls.
-#
-# This is one HTTP request from form submit to "done" — no job_id, no
-# follow-up GET. That collapses the previous POST-then-GET split into a
-# single pod-bound interaction, which means we can horizontally scale
-# (more pods, more gunicorn workers) without sticky sessions: a search
-# is always served end-to-end by the worker that received the POST.
-# ---------------------------------------------------------------------------
+# Cold 100-card searches can exceed Cloudflare's ~100 s edge timeout, so
+# we stream a text/event-stream response (meta → row* → shop_timeout* →
+# totals* → done | error) with a ": keepalive" every 15 s. One HTTP
+# request from submit to done — no job_id, no sticky sessions required.
 
 
-# Per-user cap on in-flight searches. The search workload is heavy
-# (memory + outbound HTTP fan-out); without this cap a user could
-# trigger an OOM by spamming POST /decklist/stream. The counter is
-# per-process — with N gunicorn workers the effective cap is 3×N. Move
-# this to a Postgres advisory lock if we ever need a cluster-wide cap.
+# Per-user cap to bound concurrent SSE fan-outs. Per-process — with N
+# gunicorn workers the cluster-wide cap is 3×N.
 _MAX_IN_FLIGHT_PER_USER = 3
 _in_flight_by_user: dict[str, int] = {}
 _in_flight_lock = Lock()
@@ -1784,11 +1749,8 @@ _MKT_SORT_CHOICES = (
 )
 
 
-# Cache the heavy per-request /market computation. Keyed on the full
-# filter+sort+page tuple per user. TTL configurable via env (default 60s).
-# Set MARKET_CACHE_TTL=0 to disable (every request runs the full Python
-# computation — useful for ops debugging, not normal operation). Cleared
-# explicitly after price-update runs so users don't keep seeing stale PnL.
+# Cache the heavy per-request /market computation. Cleared after
+# price-update runs so users don't see stale PnL.
 _MARKET_CACHE_TTL = int(os.environ.get("MARKET_CACHE_TTL", "60"))
 _MARKET_CACHE_ENABLED = _MARKET_CACHE_TTL > 0
 _market_data_cache: TTLCache = TTLCache(  # keys = tuples, values = template ctx dicts
@@ -1797,12 +1759,8 @@ _market_data_cache: TTLCache = TTLCache(  # keys = tuples, values = template ctx
 )
 _market_data_cache_lock = Lock()
 
-# Process-wide price cache. Earlier versions ran `SELECT * FROM market_prices`
-# on every /market cache-miss request — ~3 000 rows × `row_to_dict` ≈ 10-15 ms
-# of work that doesn't change between price-update cron runs. The dict here
-# is built once per worker on first need, invalidated by market_cache_clear()
-# (called by the cron right after the import). A 1-hour soft TTL provides a
-# safety net so a missed clear doesn't strand the cache forever.
+# Process-wide price cache; invalidated by market_cache_clear() after a
+# price import. 1-hour soft TTL is a safety net for missed invalidations.
 _PRICE_CACHE_MAX_AGE_S = 3600
 _price_cache_state: dict = {
     "dict": None,                    # {(card_name_lower, set_code_lower, is_foil): price_usd}
@@ -2210,9 +2168,6 @@ def market_history():
 
 
 _PER_PAGE_CHOICES = (25, 50, 100, 200)
-_INV_SORT_CHOICES = ("card_name", "set_code", "quantity", "price_bought",
-                     "condition", "printing", "date_bought")
-_PRICE_MODES = frozenset({"any", "empty", "has", "lte", "gte", "eq"})
 
 
 def _clamp_int(value: str | None, *, default: int, lo: int, hi: int) -> int:
@@ -2226,7 +2181,7 @@ def _clamp_int(value: str | None, *, default: int, lo: int, hi: int) -> int:
     return max(lo, min(hi, n))
 
 
-def _parse_table_query(args, *, sort_choices: tuple[str, ...],
+def _parse_table_query(args, *, sort_choices: Collection[str],
                        default_sort: str, default_dir: str) -> dict:
     """Shared filter/sort/pagination parser for /inventory and /market.
 
@@ -2248,14 +2203,17 @@ def _parse_table_query(args, *, sort_choices: tuple[str, ...],
 
     q = (args.get("q") or "").strip()
     price_mode = args.get("price_mode") or "any"
-    if price_mode not in _PRICE_MODES:
+    if price_mode not in inv.PRICE_MODES:
         price_mode = "any"
     price_value = _opt_float(args.get("price_value"))
+    set_code = (args.get("set_code") or "").strip().upper() or None
+    condition = (args.get("condition") or "").strip() or None
 
     return {
         "q": q, "sort": sort, "direction": direction,
         "page": page, "per_page": per_page,
         "price_mode": price_mode, "price_value": price_value,
+        "set_code": set_code, "condition": condition,
     }
 
 
@@ -2264,7 +2222,7 @@ def inventory():
     user_id = _get_user_id()
     params = _parse_table_query(
         request.args,
-        sort_choices=_INV_SORT_CHOICES,
+        sort_choices=inv.SORT_COLUMNS,
         default_sort="card_name", default_dir="asc",
     )
 
@@ -2275,6 +2233,7 @@ def inventory():
         sort=params["sort"], direction=params["direction"],
         page=params["page"], per_page=params["per_page"],
         price_mode=params["price_mode"], price_value=params["price_value"],
+        set_code=params["set_code"], condition=params["condition"],
     )
     total = matched["printings"]
     total_pages = max(1, math.ceil(total / params["per_page"])) if total else 1
@@ -2290,6 +2249,7 @@ def inventory():
             sort=params["sort"], direction=params["direction"],
             page=params["page"], per_page=params["per_page"],
             price_mode=params["price_mode"], price_value=params["price_value"],
+            set_code=params["set_code"], condition=params["condition"],
         )
 
     ctx = {
@@ -2300,6 +2260,8 @@ def inventory():
         "total": total,
         "total_pages": total_pages,
         "per_page_choices": _PER_PAGE_CHOICES,
+        "set_choices": inv.distinct_sets(user_id),
+        "condition_choices": inv.distinct_conditions(user_id),
         "active": "inventory",
     }
     if request.args.get("partial") == "tbody":
@@ -2430,9 +2392,12 @@ def inventory_delete():
     q = (match.get("q") or "").strip() or None
     price_mode = match.get("price_mode") or "any"
     price_value = _opt_float(str(match.get("price_value", "")))
+    set_code = (match.get("set_code") or "").strip().upper() or None
+    condition = (match.get("condition") or "").strip() or None
     try:
         count = inv.delete_matching(
             user_id, q=q, price_mode=price_mode, price_value=price_value,
+            set_code=set_code, condition=condition,
         )
     except Exception as exc:
         app.logger.exception(

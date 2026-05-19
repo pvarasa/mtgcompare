@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}{{ code }} {{ title }} - mtgcompare{% endblock %}
+{% block extra_css %}
+    .err-wrap {
+      max-width: 32rem;
+      margin: 3rem auto;
+      padding: 2rem;
+      background: var(--bg-alt);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      text-align: center;
+    }
+    .err-code {
+      font-family: 'Cinzel', 'Palatino Linotype', Georgia, serif;
+      font-size: 3rem;
+      font-weight: 600;
+      letter-spacing: .08em;
+      color: var(--gold);
+      margin: 0 0 .25rem;
+      line-height: 1;
+    }
+    .err-title {
+      font-family: 'Cinzel', 'Palatino Linotype', Georgia, serif;
+      font-size: 1rem;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin: 0 0 1.25rem;
+    }
+    .err-msg {
+      color: var(--fg);
+      margin: 0 0 1.5rem;
+      line-height: 1.5;
+    }
+    .err-actions {
+      display: flex;
+      gap: .6rem;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+    .err-actions a, .err-actions button {
+      padding: .55rem 1.1rem;
+      font-size: .9rem;
+      border: 1px solid var(--gold);
+      border-radius: 6px;
+      color: var(--gold);
+      background: transparent;
+      text-decoration: none;
+      font-family: inherit;
+      cursor: pointer;
+    }
+    @media (hover: hover) {
+      .err-actions a:hover, .err-actions button:hover {
+        background: var(--gold);
+        color: var(--bg);
+        text-decoration: none;
+      }
+    }
+    .err-trace {
+      margin-top: 1.75rem;
+      color: var(--muted);
+      font-size: .75rem;
+      font-family: ui-monospace, Menlo, Consolas, monospace;
+      letter-spacing: .02em;
+    }
+{% endblock %}
+{% block content %}
+  <div class="err-wrap">
+    <p class="err-code">{{ code }}</p>
+    <p class="err-title">{{ title }}</p>
+    <p class="err-msg">{{ message }}</p>
+    <div class="err-actions">
+      <a href="{{ url_for('index') }}">Go home</a>
+      <button type="button" onclick="history.back()">Go back</button>
+    </div>
+    {% if request_id %}
+      <p class="err-trace">request id: {{ request_id }}</p>
+    {% endif %}
+  </div>
+{% endblock %}

@@ -32,7 +32,7 @@ Conclusion: integrate with the underlying shops directly. Don't proxy WONDER.
 
 ## Integration tiers
 
-The 24 unintegrated shops cluster onto 4 e-commerce platforms plus a few customs. Most are scrapable today with the same `requests + selectolax` pattern used in `singlestar.py` (selectolax replaced BeautifulSoup project-wide in v1.6.8 for ~75% lower parse-tree memory; see `docs/perf_improvements.md`).
+The 24 unintegrated shops cluster onto 4 e-commerce platforms plus a few customs. Most are scrapable today with the same `requests + selectolax` pattern used in `singlestar.py` (selectolax replaced BeautifulSoup project-wide in v1.6.8 for ~75% lower parse-tree memory).
 
 ### Tier 1 — Easy (~½ day per shop, less with shared base classes)
 

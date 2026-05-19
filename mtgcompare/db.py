@@ -46,33 +46,19 @@ _DATABASE_URL = os.environ.get("DATABASE_URL")
 IS_POSTGRES = bool(_DATABASE_URL)
 
 if _DATABASE_URL:
-    # Register a global psycopg2 type cast that returns Python floats for
-    # NUMERIC columns instead of decimal.Decimal. Decimal arithmetic +
-    # the per-row Decimal -> float coercion in row_to_dict was the single
-    # hottest function in /market profiles (~30% of cache-miss request
-    # time). With this cast we get floats straight from the driver and
-    # row_to_dict becomes a plain dict() call.
-    #
-    # Trade-off: floats lose precision on very large monetary values.
-    # mtgcompare prices fit comfortably in float64 (USD prices stored to
-    # 4 decimal places, max value ~10^6). Anything currency-sensitive
-    # that needs exact decimals would have to cast back at the use site.
+    # Cast NUMERIC columns to Python float (not Decimal) at the driver
+    # level. Trade-off: prices fit comfortably in float64; anything
+    # needing exact decimals must cast back at the use site.
     import psycopg2.extensions
     psycopg2.extensions.register_type(psycopg2.extensions.new_type(
         psycopg2.extensions.DECIMAL.values,
         "DEC2FLOAT",
         lambda v, _: float(v) if v is not None else None,
     ))
-    # SQLAlchemy default pool is 5 + 10 overflow per process — fine
-    # for the current single-worker config where the Python GIL caps
-    # effective concurrency well below 15. Bumping the pool actively
-    # hurt under load when measured (see
-    # server_admin/loadtest/saturate_realistic.js results): more
-    # in-flight queries → more threads contending for the GIL → the
-    # worker can't even answer /healthz, kubelet liveness-probe kills
-    # it. Revisit when adding workers=2+; at that point the right
-    # pool size scales with worker count, not concurrent requests.
-    # Env-tunable for /loadtest A/B without rebuilding the image.
+    # GIL caps effective concurrency, so the SQLAlchemy default (5 + 10
+    # overflow) is enough for the current single-worker config. Bumping
+    # it under load measurably hurt — more in-flight queries → more
+    # threads contending for the GIL → /healthz misses kubelet probes.
     _pool_size     = int(os.environ.get("DB_POOL_SIZE",     "5"))
     _pool_overflow = int(os.environ.get("DB_POOL_OVERFLOW", "10"))
     engine = create_engine(
@@ -177,9 +163,8 @@ _users = Table(
 )
 Index("idx_users_email", _users.c.email, unique=True)
 
-# Cached shop listings: one row per (shop, card, set, language, finish, condition).
-# Populated lazily by CachedScrapper on user search; the same table is the read
-# path for any future bulk crawler — bulk just writes rows with source='bulk'.
+# Cached shop listings: one row per (shop, card, set, language, finish,
+# condition). Populated lazily by CachedScrapper on user search.
 _shop_listings = Table(
     "shop_listings", metadata,
     Column("id", BigInteger().with_variant(Integer(), "sqlite"), primary_key=True, autoincrement=True),
@@ -281,15 +266,6 @@ def _migrate(conn) -> None:
             "ON inventory (user_id, lower(card_name))"
         ))
 
-        # Older versions briefly shipped an expression index on
-        # (lower(card_name), lower(set_code), is_foil) of market_prices
-        # for a SQL JOIN path on /market that we measured to be slower
-        # than the Python join. The path was reverted; drop the index
-        # if it's still lying around — it's dead weight otherwise.
-        conn.execute(text(
-            "DROP INDEX IF EXISTS idx_market_prices_lower_key"
-        ))
-
         for table in ("price_rows", "mtgjson_card_map"):
             col_type = conn.execute(text("""
                 SELECT data_type FROM information_schema.columns
@@ -300,32 +276,12 @@ def _migrate(conn) -> None:
                     f"ALTER TABLE {table} ALTER COLUMN uuid TYPE UUID USING uuid::UUID"
                 ))
 
-        # shop_listings.first_seen was in the v1.5.0 schema and was dropped
-        # in the immediate code-review cleanup. Existing DBs created at
-        # v1.5.0 still have the column with NOT NULL and no default — every
-        # cache write since that cleanup has been silently failing on those
-        # DBs because the new INSERT omits the column.
-        first_seen_exists = conn.execute(text("""
-            SELECT 1 FROM information_schema.columns
-            WHERE table_name = 'shop_listings' AND column_name = 'first_seen'
-        """)).fetchone()
-        if first_seen_exists:
-            conn.execute(text("ALTER TABLE shop_listings DROP COLUMN first_seen"))
     else:
         cols = {r[1] for r in conn.execute(text("PRAGMA table_info(inventory)")).fetchall()}
         if "user_id" not in cols:
             conn.execute(text(
                 "ALTER TABLE inventory ADD COLUMN user_id TEXT NOT NULL DEFAULT 'local'"
             ))
-
-        # Same orphaned-column fix for SQLite. SQLite supports
-        # ALTER TABLE ... DROP COLUMN since 3.35 (2021); Python 3.12 ships
-        # with 3.40+, so this works on all supported runtimes.
-        listing_cols = {
-            r[1] for r in conn.execute(text("PRAGMA table_info(shop_listings)")).fetchall()
-        }
-        if "first_seen" in listing_cols:
-            conn.execute(text("ALTER TABLE shop_listings DROP COLUMN first_seen"))
 
 
 def init_schema() -> None:

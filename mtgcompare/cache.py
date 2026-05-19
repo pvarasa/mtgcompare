@@ -1,17 +1,11 @@
 """Lazy/on-demand caching wrapper for shop scrapers.
 
-Wraps any ``MtgScrapper`` so that repeated searches for the same card within
+Wraps any ``MtgScrapper`` so repeated searches for the same card within
 ``ttl`` are served from the local DB (``shop_listings`` + ``shop_query_log``)
-instead of re-hitting the shop. Designed so that a future nightly bulk crawler
-can write into the same ``shop_listings`` table — the read path here doesn't
-care whether rows came from a user-triggered scrape or a background job.
-
-Negative results are cached too: if the shop returns zero rows, that fact is
-stored in ``shop_query_log`` and respected on subsequent lookups, so cards a
-shop genuinely doesn't carry don't keep triggering scrapes.
-
-Concurrent searches for the same ``(shop, card_name)`` coalesce into a single
-HTTP fetch via an in-process singleflight, so traffic spikes don't fan out.
+instead of re-hitting the shop. Negative results are cached too, so a shop
+that doesn't carry a card stops getting scraped on every lookup. Concurrent
+searches for the same ``(shop, card_name)`` coalesce via an in-process
+singleflight.
 """
 import logging
 import os
@@ -40,10 +34,7 @@ def _ttl_from_env() -> timedelta:
 DEFAULT_TTL = _ttl_from_env()
 
 
-# The Flask search endpoint reaches the cache before any inventory operation
-# does, and the inventory module is what historically called init_schema().
-# Guard the first cache access so the new tables exist on a fresh standalone
-# DB; subsequent calls are a single bool check.
+# Lazy schema init — cache may be the first DB caller on a fresh DB.
 _schema_ready = False
 _schema_lock = threading.Lock()
 
@@ -156,12 +147,8 @@ def replace_listings(
 ) -> None:
     """Atomically replace every cached listing for (shop, card_name).
 
-    Old rows that aren't in ``records`` disappear — that's how stock that's
-    been sold out / delisted gets evicted from the cache.
-
-    The ``source`` column on ``shop_listings`` is left at its server default
-    of ``"search"`` for rows written here; a future bulk crawler can pass
-    its own value when that path is built.
+    Old rows that aren't in ``records`` disappear — that's how sold-out
+    or delisted stock gets evicted from the cache.
     """
     timestamp = now or _now()
     conn.execute(

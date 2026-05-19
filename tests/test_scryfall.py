@@ -3,9 +3,20 @@ from pathlib import Path
 
 import pytest
 
-from mtgcompare.scrappers.scryfall import parse_search_response
+from mtgcompare.scrappers.scryfall import parse_page
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
+
+
+def parse_search_response(pages, card_name, fx_jpy_per_usd):
+    """Mirror what `ScryfallScrapper.get_prices` does end-to-end: concat
+    `parse_page` across the materialised pagination list. Lives here in
+    tests because production streams page-by-page and never needs it."""
+    target = card_name.strip().lower()
+    out = []
+    for page in pages:
+        out.extend(parse_page(page, target, fx_jpy_per_usd))
+    return out
 
 
 @pytest.fixture

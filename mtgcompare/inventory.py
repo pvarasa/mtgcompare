@@ -161,6 +161,41 @@ def list_all_global() -> list[dict]:
     return [row_to_dict(r) for r in rows]
 
 
+def distinct_sets(user_id: str = "local") -> list[dict]:
+    """Return distinct (set_code, set_name) pairs in the user's inventory.
+
+    Used to populate the inventory filter dropdown. Sorted by set_name
+    case-insensitively, falling back to set_code when set_name is blank.
+    """
+    # Postgres requires ORDER BY expressions to appear in the DISTINCT
+    # select list; SQLite is permissive. Wrap to keep both happy.
+    with get_conn() as conn:
+        rows = conn.execute(
+            text("""SELECT set_code, set_name FROM (
+                       SELECT DISTINCT set_code, set_name
+                       FROM inventory
+                       WHERE user_id = :uid
+                         AND set_code IS NOT NULL AND set_code <> ''
+                   ) s
+                   ORDER BY lower(COALESCE(NULLIF(set_name, ''), set_code))"""),
+            {"uid": user_id},
+        ).mappings().all()
+    return [row_to_dict(r) for r in rows]
+
+
+def distinct_conditions(user_id: str = "local") -> list[str]:
+    """Return distinct non-empty condition values in the user's inventory."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            text("""SELECT DISTINCT condition
+                   FROM inventory
+                   WHERE user_id = :uid AND condition IS NOT NULL AND condition <> ''
+                   ORDER BY condition"""),
+            {"uid": user_id},
+        ).all()
+    return [r[0] for r in rows]
+
+
 def stats(user_id: str = "local") -> dict:
     with get_conn() as conn:
         row = conn.execute(
@@ -179,25 +214,14 @@ def stats(user_id: str = "local") -> dict:
     }
 
 
-# ---------------------------------------------------------------------------
-# Paginated / filtered read API used by the /inventory and /market pages.
-#
-# Everything that takes filters builds the same WHERE fragment, so calls
-# stay consistent across the page (table query, count, aggregate, bulk
-# delete). Filter args are bound parameters — no SQL injection surface.
-#
-# Sort column names are whitelisted; anything outside the set falls back
-# to card_name. The whitelist's job is purely to keep user input out of
-# the ORDER BY string — it does NOT imply each column is covered by an
-# index.
-# ---------------------------------------------------------------------------
-
-_SORT_COLUMNS = {
+# Paginated / filtered read API. SORT_COLUMNS keeps unbound user input
+# out of the ORDER BY string; it does not imply each column is indexed.
+SORT_COLUMNS = frozenset({
     "card_name", "set_code", "quantity", "price_bought",
     "condition", "printing", "date_bought",
-}
+})
 
-_PRICE_MODES = {"any", "empty", "has", "lte", "gte", "eq"}
+PRICE_MODES = frozenset({"any", "empty", "has", "lte", "gte", "eq"})
 
 _SELECT_COLUMNS = (
     "id, card_name, set_code, set_name, card_number, quantity, "
@@ -206,7 +230,9 @@ _SELECT_COLUMNS = (
 
 
 def _filter_clause(q: str | None, price_mode: str | None,
-                   price_value: float | None) -> tuple[str, dict]:
+                   price_value: float | None,
+                   set_code: str | None = None,
+                   condition: str | None = None) -> tuple[str, dict]:
     """Build the WHERE-clause fragment + bind dict for the inventory filters.
 
     The returned string has no leading AND/WHERE — callers prepend whichever
@@ -223,7 +249,7 @@ def _filter_clause(q: str | None, price_mode: str | None,
         parts.append("lower(card_name) LIKE :q")
         binds["q"] = "%" + q.lower() + "%"
 
-    if price_mode in _PRICE_MODES and price_mode != "any":
+    if price_mode in PRICE_MODES and price_mode != "any":
         if price_mode == "empty":
             parts.append("price_bought IS NULL")
         elif price_mode == "has":
@@ -233,12 +259,22 @@ def _filter_clause(q: str | None, price_mode: str | None,
             parts.append(f"price_bought {op} :price_v")
             binds["price_v"] = price_value
 
+    if set_code:
+        parts.append("upper(set_code) = :set_code")
+        binds["set_code"] = set_code.upper()
+
+    if condition:
+        parts.append("condition = :condition")
+        binds["condition"] = condition
+
     return (" AND ".join(parts), binds)
 
 
 def _user_where(user_id: str, *, q: str | None = None,
                 price_mode: str | None = None,
-                price_value: float | None = None) -> tuple[str, dict]:
+                price_value: float | None = None,
+                set_code: str | None = None,
+                condition: str | None = None) -> tuple[str, dict]:
     """Build the full `user_id = :uid [AND filter...]` clause + binds.
 
     All four paginated functions interpolate the returned string into a
@@ -246,7 +282,8 @@ def _user_where(user_id: str, *, q: str | None = None,
     whitelisted filter clauses produced by `_filter_clause`; user input
     is exclusively bound, never concatenated.
     """
-    where_extra, binds = _filter_clause(q, price_mode, price_value)
+    where_extra, binds = _filter_clause(q, price_mode, price_value,
+                                        set_code=set_code, condition=condition)
     binds["uid"] = user_id
     sql = "user_id = :uid" + (f" AND {where_extra}" if where_extra else "")
     return sql, binds
@@ -254,7 +291,7 @@ def _user_where(user_id: str, *, q: str | None = None,
 
 def _order_by_sort(sort: str | None, direction: str | None) -> str:
     """Return the ORDER BY clause body (column names only, no leading keyword)."""
-    col = sort if sort in _SORT_COLUMNS else "card_name"
+    col = sort if sort in SORT_COLUMNS else "card_name"
     dir_norm = "DESC" if (direction or "").lower() == "desc" else "ASC"
     # Stable secondary sort so paginated views don't shuffle rows that
     # happen to be tied on the primary sort key.
@@ -273,6 +310,8 @@ def page_with_aggregates(
     per_page: int = 50,
     price_mode: str | None = None,
     price_value: float | None = None,
+    set_code: str | None = None,
+    condition: str | None = None,
 ) -> tuple[list[dict], dict, dict]:
     """Return (page_rows, matched_aggregates, unfiltered_stats) in 2 queries
     on a single connection.
@@ -282,7 +321,8 @@ def page_with_aggregates(
     connection, so total wire cost is two server round-trips.
     """
     where_sql, binds = _user_where(user_id, q=q,
-                                   price_mode=price_mode, price_value=price_value)
+                                   price_mode=price_mode, price_value=price_value,
+                                   set_code=set_code, condition=condition)
 
     # The unfiltered "total inventory at a glance" stats live in their
     # own CTE; bind the user_id separately so it doesn't clash with the
@@ -343,13 +383,16 @@ def list_paginated(
     per_page: int = 50,
     price_mode: str | None = None,
     price_value: float | None = None,
+    set_code: str | None = None,
+    condition: str | None = None,
 ) -> list[dict]:
     """Return a single page of the user's inventory matching the filters.
 
     `page` is 1-indexed; `per_page` is clamped by the caller.
     """
     where_sql, binds = _user_where(user_id, q=q,
-                                   price_mode=price_mode, price_value=price_value)
+                                   price_mode=price_mode, price_value=price_value,
+                                   set_code=set_code, condition=condition)
     order_sql = _order_by_sort(sort, direction)
     binds.update({"lim": per_page, "off": (page - 1) * per_page})
 
@@ -369,6 +412,8 @@ def delete_matching(
     q: str | None = None,
     price_mode: str | None = None,
     price_value: float | None = None,
+    set_code: str | None = None,
+    condition: str | None = None,
 ) -> int:
     """Delete all inventory rows for the user that match the filter.
 
@@ -377,7 +422,8 @@ def delete_matching(
     destructive intent before invoking this with no filter.
     """
     where_sql, binds = _user_where(user_id, q=q,
-                                   price_mode=price_mode, price_value=price_value)
+                                   price_mode=price_mode, price_value=price_value,
+                                   set_code=set_code, condition=condition)
     with get_conn() as conn:
         result = conn.execute(
             text(f"DELETE FROM inventory WHERE {where_sql}"),  # noqa: S608
@@ -392,6 +438,8 @@ def list_filtered_for_market(
     q: str | None = None,
     price_mode: str | None = None,
     price_value: float | None = None,
+    set_code: str | None = None,
+    condition: str | None = None,
 ) -> list[dict]:
     """Return ALL matching rows (no pagination, no sort).
 
@@ -399,7 +447,8 @@ def list_filtered_for_market(
     available). Python-side join + sort + paginate happens in the caller.
     """
     where_sql, binds = _user_where(user_id, q=q,
-                                   price_mode=price_mode, price_value=price_value)
+                                   price_mode=price_mode, price_value=price_value,
+                                   set_code=set_code, condition=condition)
     with get_conn() as conn:
         rows = conn.execute(
             text(f"SELECT {_SELECT_COLUMNS} FROM inventory "  # noqa: S608

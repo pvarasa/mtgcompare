@@ -163,8 +163,9 @@ uv run python -m mtgcompare.inventory stats
 
 ```bash
 uv run pytest                                              # offline tests (default)
-uv run pytest -m live                                      # live scraper tests — hits real sites
+uv run pytest -m canary                                    # live scraper tests — hits real sites
 DATABASE_URL=postgresql+psycopg2://... uv run pytest -m pg # PostgreSQL bulk-load tests
+uv run --group e2e pytest -m e2e                           # Playwright UI tests
 ```
 
 ### Building the Windows app
@@ -173,10 +174,10 @@ DATABASE_URL=postgresql+psycopg2://... uv run pytest -m pg # PostgreSQL bulk-loa
 .\scripts\build.ps1
 ```
 
-Produces `dist/mtgcompare-windows.zip`. To publish a release, push a version tag:
+Produces `dist/mtgcompare-windows.zip`. To publish a release, push a `v*` tag:
 
 ```bash
-git tag v1.7.0 && git push --tags
+git tag vX.Y.Z && git push --tags
 ```
 
 GitHub Actions builds and attaches the zip to the GitHub Release automatically.
