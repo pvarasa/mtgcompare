@@ -186,15 +186,22 @@ GitHub Actions builds and attaches the zip to the GitHub Release automatically.
 
 ```
 mtgcompare/
-  web.py          Flask UI (search, decklist, inventory, market, cron endpoint)
-  auth.py         WorkOS AuthKit Blueprint (auth gate + login/callback/logout/me + webhook)
-  compare.py      CLI entry point
+  web.py          Flask layer: routes, middleware, SSE, download-job registry
+  decklist.py     Decklist pricing domain (parse → deduct → fan-out → totals)
+  pricing.py      Market + MTGJSON orchestration and the /market computation
+  pricehistory.py PriceHistoryStore (DuckDB-file vs PostgreSQL backends)
+  history_import.py  MTGJSON price history ETL (DuckDB → SQLite or PostgreSQL)
+  market_repo.py  Data access for market_prices + mtgjson_card_map
+  meta.py         Data access for the app_meta key/value table
   inventory.py    Inventory storage + CSV import (per-user scoping)
-  history_import.py  MTGJSON price history pipeline (DuckDB ETL → SQLite or PostgreSQL)
-  launcher.py     Packaged-app entry point (tray icon + browser open)
+  run_log.py      Daily price-update run bookkeeping
+  auth.py         WorkOS AuthKit Blueprint (auth gate + login/callback/logout/me + webhook)
   db.py           SQLAlchemy engine + schema (SQLite and PostgreSQL backends)
   shops.py        Shop registry + collect_prices()
+  cache.py        CachedScrapper DB-cache wrapper around any scraper
   scrappers/      Per-shop scraper implementations
+  compare.py      CLI entry point
+  launcher.py     Packaged-app entry point (tray icon + browser open)
   templates/      Jinja2 HTML templates
   static/         CSS, JS, images
 scripts/          start/stop helpers + build.ps1
