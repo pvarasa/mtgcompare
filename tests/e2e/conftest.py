@@ -22,6 +22,7 @@ from sqlalchemy import create_engine, text
 from werkzeug.serving import make_server
 
 import mtgcompare.db as db_module
+import mtgcompare.pricing as pricing_module
 import mtgcompare.web as web_module
 from mtgcompare import inventory as inv
 from mtgcompare.web import app as flask_app
@@ -77,7 +78,7 @@ def clean_inventory(e2e_base_url):
     with db_module.get_conn() as conn:
         conn.execute(text("DELETE FROM inventory"))
         conn.execute(text("DELETE FROM market_prices"))
-    web_module.market_cache_clear()
+    pricing_module.market_cache_clear()
     yield
 
 
@@ -149,10 +150,10 @@ def seed_market_data(clean_inventory, monkeypatch):
                 ["card_name", "set_code", "is_foil"],
                 rows,
             )
-        web_module.market_cache_clear()
+        pricing_module.market_cache_clear()
         return count
     yield _seed
-    web_module.market_cache_clear()
+    pricing_module.market_cache_clear()
 
 
 # Playwright's default `browser_context_args` ignores HTTPS errors and sets

@@ -8,8 +8,8 @@ from sqlalchemy import text
 
 import mtgcompare.auth as auth_module
 import mtgcompare.db as db_module
+from mtgcompare import decklist, pricing, web
 from mtgcompare import inventory as inv
-from mtgcompare import web
 
 # ``test_db`` fixture (SQLite-temp engine swap) lives in tests/conftest.py.
 
@@ -59,7 +59,7 @@ def test_decklist_search_rejects_oversized_lists():
     """Total card count above MAX_DECKLIST_CARDS should short-circuit
     with a clear error rather than fanning out shop scrapes."""
     web.app.config["WTF_CSRF_ENABLED"] = False
-    over = web.MAX_DECKLIST_CARDS + 1
+    over = decklist.MAX_DECKLIST_CARDS + 1
     body = f"{over} Sol Ring\n"  # one line, but qty exceeds the cap
     with web.app.test_client() as client:
         resp = client.post("/decklist", data={"decklist": body})
@@ -73,7 +73,7 @@ def test_decklist_search_accepts_at_cap():
     """Exactly MAX_DECKLIST_CARDS is allowed; the request reaches the FX
     fetch path (which we stub to return None to skip the actual scrape)."""
     web.app.config["WTF_CSRF_ENABLED"] = False
-    body = f"{web.MAX_DECKLIST_CARDS} Sol Ring\n"
+    body = f"{decklist.MAX_DECKLIST_CARDS} Sol Ring\n"
     # Stubbing FX out short-circuits with a different error; the point is
     # that the size cap doesn't fire.
     original = web._get_fx
@@ -372,7 +372,7 @@ def test_is_basic_land_recognizes_all_basics_case_insensitive():
         "Snow-Covered Plains", "snow-covered forest",
         "  Forest  ",
     ]:
-        assert web._is_basic_land(name), name
+        assert decklist.is_basic_land(name), name
 
 
 def test_is_basic_land_rejects_non_basics():
@@ -381,7 +381,7 @@ def test_is_basic_land_rejects_non_basics():
         "Cavern of Souls", "Snow-Covered Wastes",  # not a real card
         "Plainsrider",
     ]:
-        assert not web._is_basic_land(name), name
+        assert not decklist.is_basic_land(name), name
 
 
 def test_strip_basic_lands_counts_skipped_copies():
@@ -391,14 +391,14 @@ def test_strip_basic_lands_counts_skipped_copies():
         (2, "Lightning Bolt"),
         (5, "Snow-Covered Island"),
     ]
-    kept, skipped = web._strip_basic_lands(items)
+    kept, skipped = decklist.strip_basic_lands(items)
     assert kept == [(4, "Sol Ring"), (2, "Lightning Bolt")]
     assert skipped == 15
 
 
 def test_strip_basic_lands_no_basics_is_passthrough():
     items = [(4, "Sol Ring"), (1, "Force of Will")]
-    kept, skipped = web._strip_basic_lands(items)
+    kept, skipped = decklist.strip_basic_lands(items)
     assert kept == items
     assert skipped == 0
 
@@ -419,7 +419,7 @@ def test_decklist_search_oversize_check_runs_after_basics_stripped():
     """A 99-non-basic + 50-basic list (149 total) should be accepted —
     basics are stripped before the MAX_DECKLIST_CARDS check fires."""
     web.app.config["WTF_CSRF_ENABLED"] = False
-    body = f"{web.MAX_DECKLIST_CARDS} Sol Ring\n50 Forest\n"
+    body = f"{decklist.MAX_DECKLIST_CARDS} Sol Ring\n50 Forest\n"
     original = web._get_fx
     web._get_fx = lambda: None  # short-circuit before scraping
     try:
@@ -445,7 +445,7 @@ def test_parse_decklist_skips_headers_and_comments():
     2 Rhystic Study (C21) 79
     """
 
-    assert web._parse_decklist(text) == [
+    assert decklist.parse_decklist(text) == [
         (1, "Sol Ring"),
         (4, "Force of Will"),
         (2, "Rhystic Study"),
@@ -468,16 +468,16 @@ def test_parse_shipping_overrides_clamps_and_falls_back_to_defaults():
 
 
 def test_normalize_set_code_and_foil_helpers():
-    assert web._normalize_set_code("neo_123") == "neo"
-    assert web._normalize_set_code("neo_123", upper=True) == "NEO"
-    assert web._normalize_set_code(None) == ""
-    assert web._is_foil("Foil") is True
-    assert web._is_foil("Normal") is False
+    assert pricing.normalize_set_code("neo_123") == "neo"
+    assert pricing.normalize_set_code("neo_123", upper=True) == "NEO"
+    assert pricing.normalize_set_code(None) == ""
+    assert pricing.is_foil("Foil") is True
+    assert pricing.is_foil("Normal") is False
 
 
 def test_deduct_inventory_empty_inventory():
     name_qty = {"sol ring": 4, "force of will": 2}
-    inv_qty, needed = web._deduct_inventory(name_qty, {})
+    inv_qty, needed = decklist.deduct_inventory(name_qty, {})
     assert inv_qty == {"sol ring": 0, "force of will": 0}
     assert needed == {"sol ring": 4, "force of will": 2}
 
@@ -485,7 +485,7 @@ def test_deduct_inventory_empty_inventory():
 def test_deduct_inventory_full_coverage():
     name_qty = {"sol ring": 2, "rhystic study": 1}
     inv_map = {"sol ring": 5, "rhystic study": 3}
-    inv_qty, needed = web._deduct_inventory(name_qty, inv_map)
+    inv_qty, needed = decklist.deduct_inventory(name_qty, inv_map)
     assert inv_qty == {"sol ring": 2, "rhystic study": 1}
     assert needed == {"sol ring": 0, "rhystic study": 0}
 
@@ -493,7 +493,7 @@ def test_deduct_inventory_full_coverage():
 def test_deduct_inventory_partial_coverage():
     name_qty = {"force of will": 4}
     inv_map = {"force of will": 2}
-    inv_qty, needed = web._deduct_inventory(name_qty, inv_map)
+    inv_qty, needed = decklist.deduct_inventory(name_qty, inv_map)
     assert inv_qty == {"force of will": 2}
     assert needed == {"force of will": 2}
 
@@ -502,7 +502,7 @@ def test_deduct_inventory_excess_inventory_is_capped():
     # Having more copies than requested should never produce negative need
     name_qty = {"lightning bolt": 1}
     inv_map = {"lightning bolt": 99}
-    inv_qty, needed = web._deduct_inventory(name_qty, inv_map)
+    inv_qty, needed = decklist.deduct_inventory(name_qty, inv_map)
     assert inv_qty["lightning bolt"] == 1
     assert needed["lightning bolt"] == 0
 
@@ -512,7 +512,7 @@ def test_deduct_inventory_case_insensitive_matching():
     # are also lowercased — so mixed-case variants must match.
     name_qty = {"counterspell": 3}
     inv_map = {"counterspell": 1}   # already lowercased by the caller
-    inv_qty, needed = web._deduct_inventory(name_qty, inv_map)
+    inv_qty, needed = decklist.deduct_inventory(name_qty, inv_map)
     assert inv_qty["counterspell"] == 1
     assert needed["counterspell"] == 2
 
@@ -520,7 +520,7 @@ def test_deduct_inventory_case_insensitive_matching():
 def test_deduct_inventory_unrelated_inventory_cards_ignored():
     name_qty = {"sol ring": 1}
     inv_map = {"black lotus": 10, "mox pearl": 4}
-    inv_qty, needed = web._deduct_inventory(name_qty, inv_map)
+    inv_qty, needed = decklist.deduct_inventory(name_qty, inv_map)
     assert inv_qty["sol ring"] == 0
     assert needed["sol ring"] == 1
 
@@ -530,15 +530,15 @@ def test_deduct_inventory_multiple_lots_aggregated():
     # the helper handles already-aggregated values correctly.
     name_qty = {"dark ritual": 4}
     inv_map = {"dark ritual": 3}    # 2 lots of 1 + 1 lot of 2, pre-summed
-    inv_qty, needed = web._deduct_inventory(name_qty, inv_map)
+    inv_qty, needed = decklist.deduct_inventory(name_qty, inv_map)
     assert inv_qty["dark ritual"] == 3
     assert needed["dark ritual"] == 1
 
 
 def test_history_cutoff_for_known_period():
     now = datetime(2026, 4, 22, tzinfo=UTC)
-    assert web._history_cutoff("1m", now=now) == datetime(2026, 3, 23, tzinfo=UTC)
-    assert web._history_cutoff("all", now=now) is None
+    assert pricing.history_cutoff("1m", now=now) == datetime(2026, 3, 23, tzinfo=UTC)
+    assert pricing.history_cutoff("all", now=now) is None
 
 
 def test_densify_daily_points_fills_gaps():
@@ -547,7 +547,7 @@ def test_densify_daily_points_fills_gaps():
         "2026-04-22": 5.0,
     }
 
-    assert web._densify_daily_points(points) == [
+    assert pricing.densify_daily_points(points) == [
         {"market_date": "2026-04-20", "price_usd": 3.0},
         {"market_date": "2026-04-21", "price_usd": None},
         {"market_date": "2026-04-22", "price_usd": 5.0},
@@ -555,7 +555,7 @@ def test_densify_daily_points_fills_gaps():
 
 
 def test_mtgjson_set_candidates_include_trimmed_variants():
-    assert web._mtgjson_set_candidates("FMB1")[:2] == ["FMB1", "FMB"]
+    assert pricing.mtgjson_set_candidates("FMB1")[:2] == ["FMB1", "FMB"]
 
 
 # ---------------------------------------------------------------------------
@@ -572,7 +572,7 @@ def _candidates_for_dmr_force_of_will():
 
 def test_resolve_candidate_uuid_exact_match():
     row = {"card_name": "Force of Will", "set_code": "DMR", "card_number": "50", "printing": "Normal"}
-    assert web._resolve_candidate_uuid(row, _candidates_for_dmr_force_of_will()) == "uuid-50"
+    assert pricing.resolve_candidate_uuid(row, _candidates_for_dmr_force_of_will()) == "uuid-50"
 
 
 def test_resolve_candidate_uuid_falls_back_to_lowest_collector_when_number_mismatched():
@@ -580,33 +580,33 @@ def test_resolve_candidate_uuid_falls_back_to_lowest_collector_when_number_misma
     of (name, set) rather than silently failing — that's how Force of Will entered as
     DMR #1 used to drop off the market page entirely."""
     row = {"card_name": "Force of Will", "set_code": "DMR", "card_number": "1", "printing": "Normal"}
-    assert web._resolve_candidate_uuid(row, _candidates_for_dmr_force_of_will()) == "uuid-50"
+    assert pricing.resolve_candidate_uuid(row, _candidates_for_dmr_force_of_will()) == "uuid-50"
 
 
 def test_resolve_candidate_uuid_falls_back_when_card_number_empty():
     row = {"card_name": "Force of Will", "set_code": "DMR", "card_number": "", "printing": "Normal"}
-    assert web._resolve_candidate_uuid(row, _candidates_for_dmr_force_of_will()) == "uuid-50"
+    assert pricing.resolve_candidate_uuid(row, _candidates_for_dmr_force_of_will()) == "uuid-50"
 
 
 def test_resolve_candidate_uuid_respects_finish():
     row = {"card_name": "Force of Will", "set_code": "DMR", "card_number": "999", "printing": "Foil"}
     # Only #50 and #284 have foils; lowest collector wins.
-    assert web._resolve_candidate_uuid(row, _candidates_for_dmr_force_of_will()) == "uuid-50f"
+    assert pricing.resolve_candidate_uuid(row, _candidates_for_dmr_force_of_will()) == "uuid-50f"
 
 
 def test_resolve_candidate_uuid_returns_none_when_set_has_no_match():
     row = {"card_name": "Black Lotus", "set_code": "DMR", "card_number": "1", "printing": "Normal"}
-    assert web._resolve_candidate_uuid(row, _candidates_for_dmr_force_of_will()) is None
+    assert pricing.resolve_candidate_uuid(row, _candidates_for_dmr_force_of_will()) is None
 
 
 def test_collector_sort_key_orders_numerically():
     nums = ["100", "20", "1", "284", "50"]
-    assert sorted(nums, key=web._collector_sort_key) == ["1", "20", "50", "100", "284"]
+    assert sorted(nums, key=pricing.collector_sort_key) == ["1", "20", "50", "100", "284"]
 
 
 def test_collector_sort_key_plain_before_suffixed():
     nums = ["50a", "50", "50★"]
-    assert sorted(nums, key=web._collector_sort_key)[0] == "50"
+    assert sorted(nums, key=pricing.collector_sort_key)[0] == "50"
 
 
 # ---------------------------------------------------------------------------
@@ -1044,7 +1044,7 @@ def test_populate_market_prices_handles_postgres_types(monkeypatch):
     monkeypatch.setattr(db_mod, "get_conn", fake_get_conn)
     monkeypatch.setattr(db_mod, "upsert", lambda conn, table, cols, rows: captured.update({"rows": rows}))
 
-    web._populate_market_prices_from_history(card_maps, None, "2026-04-29T00:00:00+00:00")
+    pricing.populate_market_prices_from_history(card_maps, None, "2026-04-29T00:00:00+00:00")
 
     assert captured["rows"][0]["price_usd"] == pytest.approx(1.23)
     assert isinstance(captured["rows"][0]["price_usd"], float)

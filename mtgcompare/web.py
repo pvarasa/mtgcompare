@@ -381,10 +381,6 @@ def _shop_filter_config(enabled: set[str] | None) -> list[dict]:
     ]
 
 
-_normalize_set_code = pricing.normalize_set_code
-_is_foil = pricing.is_foil
-
-
 @app.route("/")
 def index():
     q = request.args.get("q", "").strip()
@@ -446,28 +442,6 @@ def _shipping_config(overrides_jpy: dict | None = None) -> list[dict]:
         }
         for shop in SHIPPING_JPY
     ]
-
-
-# --- Decklist pricing: domain logic lives in mtgcompare/decklist.py ---
-#
-# The parsing, inventory deduction, per-card price fan-out, row building,
-# and shop-total aggregation were extracted to the `decklist` module so
-# this file is left with HTTP routing and SSE plumbing. The aliases below
-# preserve the `web.<name>` references that the SSE helpers further down
-# and the test suite still reach for; new code should call `decklist.*`
-# directly.
-MAX_DECKLIST_CARDS = decklist.MAX_DECKLIST_CARDS
-_DecklistFormBasics = decklist.DecklistFormBasics
-_DecklistPrep = decklist.DecklistPrep
-_DecklistReject = decklist.DecklistReject
-_parse_decklist = decklist.parse_decklist
-_strip_basic_lands = decklist.strip_basic_lands
-_is_basic_land = decklist.is_basic_land
-_deduct_inventory = decklist.deduct_inventory
-_consolidate_decklist = decklist.consolidate_decklist
-_build_one_card_row = decklist.build_one_card_row
-_build_card_rows = decklist.build_card_rows
-_compute_shop_totals = decklist.compute_shop_totals
 
 
 def _iter_decklist_prices(
@@ -566,7 +540,7 @@ def decklist_search():
         load_inv_map=lambda: _load_inventory_qty_map(basics.use_inventory),
         get_fx=_get_fx,
     )
-    if isinstance(prep, _DecklistReject):
+    if isinstance(prep, decklist.DecklistReject):
         return _early_return(prep.message, reason=prep.reason)
 
     text = prep.decklist_text
@@ -592,8 +566,8 @@ def decklist_search():
     for n in name_qty:
         prices_by_name.setdefault(n, [])
 
-    card_rows = _build_card_rows(name_qty, name_canonical, name_inv_qty, name_needed, prices_by_name)
-    shop_list, totals = _compute_shop_totals(card_rows, shipping_overrides_jpy, fx)
+    card_rows = decklist.build_card_rows(name_qty, name_canonical, name_inv_qty, name_needed, prices_by_name)
+    shop_list, totals = decklist.compute_shop_totals(card_rows, shipping_overrides_jpy, fx)
 
     rows_with_match = sum(1 for r in card_rows if r["best"] is not None)
     timed_out_sorted = sorted(timed_out_shops)
@@ -649,7 +623,7 @@ def _format_sse(event_type: str, payload: dict) -> str:
 _TOTALS_DEBOUNCE_S = 0.5
 
 
-def _emit_decklist_meta(prep: _DecklistPrep, q: queue.Queue) -> None:
+def _emit_decklist_meta(prep: decklist.DecklistPrep, q: queue.Queue) -> None:
     q.put(("meta", {
         "total_cards": prep.total_cards,
         "skipped_basics": prep.skipped_basics,
@@ -664,7 +638,7 @@ def _emit_decklist_meta(prep: _DecklistPrep, q: queue.Queue) -> None:
 
 def _emit_decklist_row(
     name: str,
-    prep: _DecklistPrep,
+    prep: decklist.DecklistPrep,
     rows: list[dict],
     row_template,
     q: queue.Queue,
@@ -673,7 +647,7 @@ def _emit_decklist_row(
     # We can't call render_template from the worker thread (no Flask app
     # context), but the Jinja env is process-global and thread-safe to read
     # from — template loading + render takes no Flask state.
-    row = _build_one_card_row(
+    row = decklist.build_one_card_row(
         name, prep.name_qty, prep.name_canonical,
         prep.name_inv_qty, prep.name_needed, rows,
     )
@@ -691,20 +665,20 @@ def _emit_decklist_row(
 
 
 def _emit_decklist_totals(
-    prep: _DecklistPrep,
+    prep: decklist.DecklistPrep,
     prices_by_name: dict[str, list[dict]],
     q: queue.Queue,
 ) -> list[dict]:
     """Snapshot card_rows + shop_totals and enqueue one ``totals`` event.
 
     Returns the freshly-built card_rows so the caller can reuse them for
-    final logging without re-running ``_build_card_rows`` twice.
+    final logging without re-running ``decklist.build_card_rows`` twice.
     """
-    card_rows = _build_card_rows(
+    card_rows = decklist.build_card_rows(
         prep.name_qty, prep.name_canonical, prep.name_inv_qty,
         prep.name_needed, prices_by_name,
     )
-    shop_list, totals = _compute_shop_totals(
+    shop_list, totals = decklist.compute_shop_totals(
         card_rows, prep.shipping_overrides_jpy, prep.fx,
     )
     q.put(("totals", {"shop_list": shop_list, **totals}))
@@ -712,7 +686,7 @@ def _emit_decklist_totals(
 
 
 def _emit_inventory_only_rows(
-    prep: _DecklistPrep, row_template, q: queue.Queue,
+    prep: decklist.DecklistPrep, row_template, q: queue.Queue,
 ) -> None:
     # Inventory-covered cards never enter the fan-out (qty_needed is 0)
     # so the streamed table would otherwise drop them silently, while the
@@ -729,7 +703,7 @@ def _emit_inventory_only_rows(
 
 
 def _run_decklist_fanout(
-    prep: _DecklistPrep,
+    prep: decklist.DecklistPrep,
     prices_by_name: dict[str, list[dict]],
     timed_out: set[str],
     row_template,
@@ -758,7 +732,7 @@ def _run_decklist_fanout(
             last_totals_emit = now
 
 
-def _produce_decklist_events(prep: _DecklistPrep, q: queue.Queue) -> None:
+def _produce_decklist_events(prep: decklist.DecklistPrep, q: queue.Queue) -> None:
     """Run the decklist fan-out and push (event_type, payload) tuples to
     ``q``. Terminal sentinel is ``None``. Runs in a daemon thread driven
     by the SSE response generator below.
@@ -823,7 +797,7 @@ def decklist_stream():
         load_inv_map=lambda: _load_inventory_qty_map(basics.use_inventory),
         get_fx=_get_fx,
     )
-    if isinstance(prep, _DecklistReject):
+    if isinstance(prep, decklist.DecklistReject):
         return jsonify({"error": prep.message, "reason": prep.reason}), 400
 
     user_id = _get_user_id()
@@ -881,30 +855,6 @@ def decklist_stream():
     )
 
 
-# --- Market & price-history domain: moved to mtgcompare/pricing.py ---
-#
-# The MTGJSON download + UUID-mapping pipeline, the price-history import
-# orchestration, and the /market render computation were extracted to the
-# ``pricing`` module. The routes, SSE, and download-job registry below stay
-# here. These aliases preserve the ``web.<name>`` references the routes, the
-# e2e fixtures (market_cache_clear), and the unit tests still reach for; new
-# code should call ``pricing.*`` directly.
-_MARKET_HISTORY_PERIODS = pricing.MARKET_HISTORY_PERIODS
-_MKT_SORT_CHOICES = pricing.MKT_SORT_CHOICES
-_history_cutoff = pricing.history_cutoff
-_mtgjson_set_candidates = pricing.mtgjson_set_candidates
-_collector_sort_key = pricing.collector_sort_key
-_resolve_candidate_uuid = pricing.resolve_candidate_uuid
-_densify_daily_points = pricing.densify_daily_points
-_populate_market_prices_from_history = pricing.populate_market_prices_from_history
-_query_history = pricing.query_history
-_import_mtgjson_history = pricing.import_mtgjson_history
-_run_daily_price_update = pricing.run_daily_price_update
-market_cache_clear = pricing.market_cache_clear
-_market_cache_get = pricing.market_cache_get
-_market_cache_set = pricing.market_cache_set
-
-
 def _compute_market_ctx(user_id: str, params: dict) -> dict:
     """Inject the web-layer FX provider and pagination choices into the pure
     pricing computation. Kept as a thin wrapper so the /market route needs no
@@ -947,24 +897,24 @@ def market():
     user_id = _get_user_id()
     params = _parse_table_query(
         request.args,
-        sort_choices=_MKT_SORT_CHOICES,
+        sort_choices=pricing.MKT_SORT_CHOICES,
         default_sort="pnl_usd", default_dir="desc",
     )
 
     # Server-side cache of the heavy computation. The rendered HTML
     # carries a per-request CSRF token, so we cache the data dict and
     # let render_template build a fresh response per call. Daily price
-    # update calls market_cache_clear() to flush.
+    # update calls pricing.market_cache_clear() to flush.
     cache_key = (
         user_id,
         params["q"], params["sort"], params["direction"],
         params["page"], params["per_page"],
         params["price_mode"], params["price_value"],
     )
-    ctx = _market_cache_get(cache_key)
+    ctx = pricing.market_cache_get(cache_key)
     if ctx is None:
         ctx = _compute_market_ctx(user_id, params)
-        _market_cache_set(cache_key, ctx)
+        pricing.market_cache_set(cache_key, ctx)
 
     if request.args.get("partial") == "tbody":
         # Filter / sort / pagination updates need to swap both the
@@ -1004,7 +954,7 @@ def market_history_download():
 
     def _worker(snapshot_rows: list[dict]) -> None:
         try:
-            mapped_count, point_count = _import_mtgjson_history(snapshot_rows, progress_cb=_progress)
+            mapped_count, point_count = pricing.import_mtgjson_history(snapshot_rows, progress_cb=_progress)
             _set_download_job(
                 job_id,
                 state="done",
@@ -1043,11 +993,11 @@ def market_history_download_status():
 @app.route("/market/history")
 def market_history():
     card_name = request.args.get("card_name", "").strip()
-    set_code = _normalize_set_code(request.args.get("set_code", ""), upper=True)
+    set_code = pricing.normalize_set_code(request.args.get("set_code", ""), upper=True)
     card_number = request.args.get("card_number", "").strip()
     is_foil = 1 if request.args.get("printing", "").strip().lower() == "foil" else 0
     period = request.args.get("period", "1m").strip().lower()
-    if period not in _MARKET_HISTORY_PERIODS:
+    if period not in pricing.MARKET_HISTORY_PERIODS:
         period = "1m"
 
     if not card_name or not set_code:
@@ -1061,13 +1011,13 @@ def market_history():
         )
 
     finish = "foil" if is_foil else "normal"
-    history = _query_history(mapped_uuid, finish) if mapped_uuid else {}
-    dense_points = _densify_daily_points(
+    history = pricing.query_history(mapped_uuid, finish) if mapped_uuid else {}
+    dense_points = pricing.densify_daily_points(
         history,
         end_day=datetime.now(UTC).date(),
     ) if history else []
     if period != "all" and dense_points:
-        cutoff = _history_cutoff(period)
+        cutoff = pricing.history_cutoff(period)
         if cutoff is None:
             raise ValueError(f"Unknown history period: {period!r}")
         dense_points = [
@@ -1084,8 +1034,8 @@ def market_history():
         "is_foil": bool(is_foil),
         "default_period": "1m",
         "period": period,
-        "available_periods": list(_MARKET_HISTORY_PERIODS),
-        "period_days": _MARKET_HISTORY_PERIODS,
+        "available_periods": list(pricing.MARKET_HISTORY_PERIODS),
+        "period_days": pricing.MARKET_HISTORY_PERIODS,
         "available_since": available_since,
         "downloaded_at": downloaded_at,
         "has_history": bool(history),
@@ -1419,7 +1369,7 @@ def cron_update_prices():
         t0 = monotonic()
         try:
             mapped_count, rows_inserted, uuids_streamed, market_date = (
-                _run_daily_price_update(progress_cb=_progress)
+                pricing.run_daily_price_update(progress_cb=_progress)
             )
             duration_ms = int((monotonic() - t0) * 1000)
             _set_download_job(
