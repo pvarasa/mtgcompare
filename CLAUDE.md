@@ -15,39 +15,34 @@ Repo-specific guidance for coding sessions.
 - `mtgcompare/decklist.py`
   Decklist pricing domain (Flask-free): parse → strip basics → consolidate
   → deduct inventory → per-card×shop fan-out → row/shop-total building.
-- `mtgcompare/pricing.py`
-  Market + MTGJSON orchestration (Flask-free): MTGJSON set-file download,
-  inventory-lot→UUID mapping, the price-history import pipeline, and the
-  `/market` render computation + its process caches.
-- `mtgcompare/pricehistory.py`
-  `PriceHistoryStore` with two backends (`PostgresPriceStore`,
-  `DuckDbPriceStore`) and a `get_store()` factory — the single place the
-  local-DuckDB-vs-Postgres branch lives.
-- `mtgcompare/history_import.py`
-  MTGJSON price history ETL: XZ → NDJSON → DuckDB ETL → DuckDB file (local)
-  or PostgreSQL (remote). Pure functions taking an engine/path; the
-  orchestration that calls them is in `pricing.py`.
-- `mtgcompare/market_repo.py`, `mtgcompare/meta.py`
-  Repository (data-access) modules: `market_repo` for `market_prices` +
-  `mtgjson_card_map`, `meta` for the `app_meta` key/value table. Both take a
-  live connection so callers compose them inside one transaction.
-- `mtgcompare/shops.py`, `mtgcompare/cache.py`, `mtgcompare/scrapper.py`
-  Shop registry + parallel `collect_prices()` fan-out; the `CachedScrapper`
-  DB-cache wrapper; the `MtgScrapper` ABC.
-- `mtgcompare/run_log.py`
-  Bookkeeping for daily price-update runs (`price_update_runs` table).
-- `mtgcompare/compare.py`
-  CLI price comparison entry point.
+- `mtgcompare/pricing/`
+  Market + MTGJSON price-history package. `pricing/__init__.py` re-exports
+  `service`'s public API so callers use `pricing.<name>`.
+  - `service.py` — orchestration (MTGJSON set-file download, inventory-lot→UUID
+    mapping, the import pipeline) + the `/market` render computation and caches.
+  - `history_store.py` — `PriceHistoryStore` with two backends
+    (`PostgresPriceStore`, `DuckDbPriceStore`) and `get_store()`, the single
+    place the local-DuckDB-vs-Postgres branch lives.
+  - `history_import.py` — MTGJSON ETL (XZ → NDJSON → DuckDB → DuckDB file or
+    PostgreSQL). Pure functions taking an engine/path.
+  - `market_repo.py` — data access for `market_prices` + `mtgjson_card_map`.
+  - `meta.py` — data access for the `app_meta` key/value table.
+  - `run_log.py` — bookkeeping for daily price-update runs (`price_update_runs`).
+- `mtgcompare/scrapers/`
+  Scraper stack. `base.py` (the `MtgScrapper` ABC), `html_base.py`
+  (`HtmlSearchScrapper` convention base), `cache.py` (`CachedScrapper`
+  DB-cache wrapper), `registry.py` (shop registry + parallel
+  `collect_prices()` fan-out), and one module per shop.
 - `mtgcompare/inventory.py`
   Inventory storage and inventory CLI. All public functions accept a `user_id` parameter.
+- `mtgcompare/compare.py`
+  CLI price comparison entry point.
 - `mtgcompare/launcher.py`
   Packaged-app entry point: starts Flask in a daemon thread, opens the browser, runs the system-tray icon loop.
 - `mtgcompare/db.py`
   SQLAlchemy engine, schema, and DB path resolution. Supports SQLite (local) and PostgreSQL (remote) via `DATABASE_URL`.
 - `mtgcompare/auth.py`
   WorkOS AuthKit integration. Exposes the `auth.bp` Flask Blueprint (login/callback/logout/me + `/webhooks/workos`), the `before_app_request` auth gate, and pure helpers (`verify_access_token`, `verify_webhook`, etc.). Inert when `WORKOS_API_KEY`/`WORKOS_CLIENT_ID`/`WORKOS_REDIRECT_URI` are unset.
-- `mtgcompare/scrappers/`
-  Shop scraper implementations.
 - `mtgcompare/templates/`, `mtgcompare/static/`
   Flask templates and browser assets.
 - `scripts/`
@@ -98,7 +93,7 @@ Repo-specific guidance for coding sessions.
 - `db.upsert(conn, table, conflict_cols, rows)` — dialect-aware upsert (`INSERT OR REPLACE` on SQLite, `ON CONFLICT DO UPDATE` on PostgreSQL).
 - `db.init_schema()` — creates all tables if absent and runs `_migrate()` to add columns missing from older schemas.
 
-Raw SQL is kept out of `web.py`: each table is reached through a data-access module — `inventory`, `run_log`, `market_repo` (`market_prices` + `mtgjson_card_map`), `meta` (`app_meta`) — or, for price history, through `pricehistory.PriceHistoryStore`. New queries belong in those modules, not inline in routes.
+Raw SQL is kept out of `web.py`: each table is reached through a data-access module — `inventory`, `pricing.run_log`, `pricing.market_repo` (`market_prices` + `mtgjson_card_map`), `pricing.meta` (`app_meta`) — or, for price history, through `pricing.history_store.PriceHistoryStore`. New queries belong in those modules, not inline in routes.
 
 When adding inventory fields, update `mtgcompare/db.py` (Table definition + `_migrate`), `mtgcompare/inventory.py` (`_INSERT_SQL` and `_dict()`), together.
 
@@ -146,7 +141,7 @@ The `users` table is keyed on `workos_user_id`; inventory rows continue to key o
 - Price history is stored in `mtgjson/AllPricesHistory.duckdb` (DuckDB, single file).
 - Full rebuild: `history_import.rebuild_history_db()` — builds to a `.tmp` file and renames atomically. Only runs once; if the DuckDB already exists the download is skipped.
 - Incremental update: `history_import.merge_today_prices()` — upserts today's prices into the existing DuckDB.
-- Concurrency: all DuckDB access is serialized via a module-level lock in `pricehistory.py` (`DuckDbPriceStore`; reads use `read_only=True`).
+- Concurrency: all DuckDB access is serialized via a module-level lock in `pricing/history_store.py` (`DuckDbPriceStore`; reads use `read_only=True`).
 
 ### PostgreSQL mode
 
@@ -158,7 +153,7 @@ The `users` table is keyed on `workos_user_id`; inventory rows continue to key o
 
 ### Shared
 
-- Both backends are reached through `pricehistory.PriceHistoryStore` (`PostgresPriceStore` / `DuckDbPriceStore`), selected once by `pricehistory.get_store()`. The orchestration that calls them (`import_mtgjson_history`, `run_daily_price_update`, UUID mapping, `market_prices` population) lives in `pricing.py`.
+- Both backends are reached through `pricing.history_store.PriceHistoryStore` (`PostgresPriceStore` / `DuckDbPriceStore`), selected once by `pricing.history_store.get_store()`. The orchestration that calls them (`import_mtgjson_history`, `run_daily_price_update`, UUID mapping, `market_prices` population) lives in `pricing/service.py`.
 - Card-to-UUID mapping lives in the `mtgjson_card_map` table (data access via `market_repo`); only sets with unmapped lots are reprocessed.
 - The `/market/history/download` route uses `inv.list_all_global()` so all users' cards get mapped and priced; the work runs in `pricing.import_mtgjson_history()`.
 

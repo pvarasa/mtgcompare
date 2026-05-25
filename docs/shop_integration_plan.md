@@ -6,14 +6,14 @@ The candidate list comes from the shops that **Wisdom Guild's WONDER** price agg
 
 ## Currently integrated
 
-- Hareruya (`mtgcompare/scrappers/hareruya.py`)
-- SingleStar — シングルスター (`mtgcompare/scrappers/singlestar.py`)
-- Card Rush — カードラッシュ (`mtgcompare/scrappers/cardrush.py`) — first ocnk.net shop
-- Cardshop Serra (`mtgcompare/scrappers/serra.py`) — first ec-cube shop, biggest indexed inventory (~1.19M)
-- ENNDAL GAMES (`mtgcompare/scrappers/enndalgames.py`) — second-biggest indexed inventory (~493k); custom platform. **Currently disabled in `build_scrapers`** — `www.enndalgames.com` has no A record at the AWS auth NS, so cluster lookups fail. Re-enable when their DNS is restored.
-- BLACK FROG (`mtgcompare/scrappers/blackfrog.py`) — first ColorMe-platform shop (~119k indexed); legacy `/shop/shopbrand.html?search=…` URL, EUC-JP encoded
-- MINT MALL (`mtgcompare/scrappers/mintmall.py`) — multi-tenant ec-cube marketplace (~90k indexed); per-spec stock + price come from a `specificationTreeSearchProductsTree` JS const, not the listing markup
-- TokyoMTG (`mtgcompare/scrappers/tokyomtg.py`) — *not on the WONDER list, separate integration*
+- Hareruya (`mtgcompare/scrapers/hareruya.py`)
+- SingleStar — シングルスター (`mtgcompare/scrapers/singlestar.py`)
+- Card Rush — カードラッシュ (`mtgcompare/scrapers/cardrush.py`) — first ocnk.net shop
+- Cardshop Serra (`mtgcompare/scrapers/serra.py`) — first ec-cube shop, biggest indexed inventory (~1.19M)
+- ENNDAL GAMES (`mtgcompare/scrapers/enndalgames.py`) — second-biggest indexed inventory (~493k); custom platform. **Currently disabled in `build_scrapers`** — `www.enndalgames.com` has no A record at the AWS auth NS, so cluster lookups fail. Re-enable when their DNS is restored.
+- BLACK FROG (`mtgcompare/scrapers/blackfrog.py`) — first ColorMe-platform shop (~119k indexed); legacy `/shop/shopbrand.html?search=…` URL, EUC-JP encoded
+- MINT MALL (`mtgcompare/scrapers/mintmall.py`) — multi-tenant ec-cube marketplace (~90k indexed); per-spec stock + price come from a `specificationTreeSearchProductsTree` JS const, not the listing markup
+- TokyoMTG (`mtgcompare/scrapers/tokyomtg.py`) — *not on the WONDER list, separate integration*
 
 **Skipped (data quality):**
 
@@ -102,7 +102,7 @@ These two would mean introducing a headless browser dependency or a TLS-fingerpr
 
 ## Suggested implementation order
 
-1. **Refactor: shared platform base classes.** Add `mtgcompare/scrappers/_platforms/{colorme,eccube,ocnk}.py`. Each subclass per shop should be ~30 lines: shop name, base URL, optional field-extractor overrides. SingleStar already has the bilingual-name parsing logic that maps cleanly to all three platforms.
+1. **Refactor: shared platform base classes.** Add `mtgcompare/scrapers/_platforms/{colorme,eccube,ocnk}.py`. Each subclass per shop should be ~30 lines: shop name, base URL, optional field-extractor overrides. SingleStar already has the bilingual-name parsing logic that maps cleanly to all three platforms.
 2. **MINT MALL first** for multi-shop leverage in one scraper.
 3. **Roll out the rest of Tier 1** opportunistically — each one is largely a config change after the base classes exist.
 4. **BIGWEB + ドラゴンスター** together once a decision is made on anti-bot HTTP infra.
