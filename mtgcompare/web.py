@@ -36,9 +36,8 @@ from flask import (
     url_for,
 )
 from flask.json.provider import JSONProvider
-from sqlalchemy import text
 
-from . import auth, db, decklist, history_import, pricehistory, run_log
+from . import auth, db, decklist, history_import, market_repo, meta, pricehistory, run_log
 from . import inventory as inv
 from .log_context import (
     REQUEST_ID_HEADER,
@@ -1007,17 +1006,6 @@ def _download_mtgjson_set_file(set_code: str) -> tuple[str, Path] | None:
     return None
 
 
-def _read_meta(conn, key: str) -> str | None:
-    row = conn.execute(
-        text("SELECT value FROM app_meta WHERE key = :key"), {"key": key}
-    ).mappings().first()
-    return row["value"] if row else None
-
-
-def _write_meta(conn, key: str, value: str) -> None:
-    db.upsert(conn, "app_meta", ["key"], [{"key": key, "value": value}])
-
-
 def _init_download_job(job_id: str) -> None:
     with _download_jobs_lock:
         _download_jobs[job_id] = {
@@ -1201,7 +1189,7 @@ def _populate_market_prices_from_history(
         for (uuid, finish), (card_name, set_code, is_foil) in uuid_to_db_key.items()
     ]
     with db.get_conn() as conn:
-        db.upsert(conn, "market_prices", ["card_name", "set_code", "is_foil"], inserts)
+        market_repo.upsert_market_prices(conn, inserts)
 
 
 def _row_key_for_mapping(row: dict) -> tuple[str, str, str, int]:
@@ -1217,9 +1205,7 @@ def _row_key_for_mapping(row: dict) -> tuple[str, str, str, int]:
 def _load_existing_card_map() -> dict[tuple[str, str, str, int], str]:
     """Read mtgjson_card_map keyed by row identity for fast lookup."""
     with db.get_conn() as conn:
-        existing_rows = conn.execute(
-            text("SELECT card_name, set_code, card_number, is_foil, uuid FROM mtgjson_card_map")
-        ).mappings().all()
+        existing_rows = market_repo.load_card_map(conn)
     return {
         (r["card_name"].lower(), r["set_code"], r["card_number"], r["is_foil"]): r["uuid"]
         for r in existing_rows
@@ -1330,32 +1316,23 @@ def _persist_card_map_and_meta(
     consistent number.
     """
     with db.get_conn() as conn:
-        if sets_needing_load:
-            params = {f"s{i}": s for i, s in enumerate(sets_needing_load)}
-            placeholders = ", ".join(f":s{i}" for i in range(len(sets_needing_load)))
-            conn.execute(
-                # placeholders are :s0, :s1, …; user values bound via `params`.
-                text(f"DELETE FROM mtgjson_card_map WHERE set_code IN ({placeholders})"),  # noqa: S608
-                params,
-            )
+        market_repo.delete_card_map_for_sets(conn, sets_needing_load)
         if card_maps:
             card_map_dicts = [
                 {"card_name": m[0], "set_code": m[1], "card_number": m[2],
                  "is_foil": m[3], "uuid": m[4], "updated_at": m[5]}
                 for m in card_maps
             ]
-            db.upsert(conn, "mtgjson_card_map",
-                      ["card_name", "set_code", "card_number", "is_foil"],
-                      card_map_dicts)
-        _write_meta(conn, "mtgjson_history_downloaded_at", downloaded_at)
+            market_repo.upsert_card_map(conn, card_map_dicts)
+        meta.write(conn, "mtgjson_history_downloaded_at", downloaded_at)
         if history_row_count:
-            _write_meta(conn, "mtgjson_history_db_built_at", downloaded_at)
-            _write_meta(conn, "mtgjson_history_db_row_count", str(history_row_count))
+            meta.write(conn, "mtgjson_history_db_built_at", downloaded_at)
+            meta.write(conn, "mtgjson_history_db_row_count", str(history_row_count))
 
     if history_row_count:
         return history_row_count
     with db.get_conn() as conn:
-        row_count = _read_meta(conn, "mtgjson_history_db_row_count")
+        row_count = meta.read(conn, "mtgjson_history_db_row_count")
     return int(row_count) if row_count else 0
 
 
@@ -1467,10 +1444,8 @@ def _get_price_cache() -> tuple[dict, str | None, str | None]:
     # Build outside the lock — readers concurrently can still serve from
     # a stale snapshot via the early return above until we publish.
     with db.get_conn() as conn:
-        cache_rows = [db.row_to_dict(r) for r in conn.execute(
-            text("SELECT card_name, set_code, is_foil, price_usd, fetched_at FROM market_prices")
-        ).mappings().all()]
-        mtgjson_downloaded_at = _read_meta(conn, "mtgjson_history_downloaded_at")
+        cache_rows = market_repo.load_market_prices(conn)
+        mtgjson_downloaded_at = meta.read(conn, "mtgjson_history_downloaded_at")
 
     price_dict: dict[tuple, float | None] = {}
     last_fetched_at: str | None = None
@@ -1760,21 +1735,14 @@ def market_history():
         return jsonify({"ok": False, "error": "card_name and set_code are required"}), 400
 
     with db.get_conn() as conn:
-        downloaded_at = _read_meta(conn, "mtgjson_history_downloaded_at")
-        mapped = conn.execute(
-            text("""SELECT uuid
-                    FROM mtgjson_card_map
-                    WHERE lower(card_name) = lower(:card_name)
-                      AND set_code = :set_code
-                      AND card_number = :card_number
-                      AND is_foil = :is_foil
-                    LIMIT 1"""),
-            {"card_name": card_name, "set_code": set_code,
-             "card_number": card_number, "is_foil": is_foil},
-        ).mappings().first()
+        downloaded_at = meta.read(conn, "mtgjson_history_downloaded_at")
+        mapped_uuid = market_repo.find_card_uuid(
+            conn, card_name=card_name, set_code=set_code,
+            card_number=card_number, is_foil=is_foil,
+        )
 
     finish = "foil" if is_foil else "normal"
-    history = _query_history(mapped["uuid"], finish) if mapped else {}
+    history = _query_history(mapped_uuid, finish) if mapped_uuid else {}
     dense_points = _densify_daily_points(
         history,
         end_day=datetime.now(UTC).date(),
