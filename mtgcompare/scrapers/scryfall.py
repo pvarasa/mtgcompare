@@ -20,9 +20,9 @@ import orjson
 import requests
 from requests.adapters import HTTPAdapter
 
-from ..scrapper import MtgScrapper
 from ..utils import get_fx
-from ._base import RateLimitedError, ScraperFetchError
+from .base import MtgScrapper
+from .html_base import RateLimitedError, ScraperFetchError
 
 SEARCH_URL = "https://api.scryfall.com/cards/search"
 
@@ -95,7 +95,7 @@ class ScryfallScrapper(MtgScrapper):
         super().__init__()
         self.fx = fx if fx is not None else get_fx("jpy")
         self.session = session if session is not None else _SHARED_SESSION
-        self.logger = logging.getLogger("mtgcompare.scrappers.scryfall")
+        self.logger = logging.getLogger("mtgcompare.scrapers.scryfall")
 
     def get_prices(self, card_name: str) -> list[dict]:
         t0 = monotonic()

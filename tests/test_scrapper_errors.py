@@ -10,13 +10,13 @@ This file covers all three fetch paths:
 import pytest
 import requests
 
-from mtgcompare.scrappers._base import (
+from mtgcompare.scrapers.hareruya import HareruyaScrapper
+from mtgcompare.scrapers.html_base import (
     HtmlSearchScrapper,
     RateLimitedError,
     ScraperFetchError,
 )
-from mtgcompare.scrappers.hareruya import HareruyaScrapper
-from mtgcompare.scrappers.scryfall import ScryfallScrapper
+from mtgcompare.scrapers.scryfall import ScryfallScrapper
 
 # ---------------------------------------------------------------------------
 # Helpers — fake requests.Session that returns whatever we want

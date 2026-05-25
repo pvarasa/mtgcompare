@@ -8,15 +8,15 @@ Run:  uv run pytest -m canary
 import pytest
 import requests
 
-from mtgcompare.scrappers.blackfrog import BlackFrogScrapper
-from mtgcompare.scrappers.cardrush import CardRushScrapper
-from mtgcompare.scrappers.enndalgames import EnndalGamesScrapper
-from mtgcompare.scrappers.hareruya import HareruyaScrapper
-from mtgcompare.scrappers.mintmall import MintMallScrapper
-from mtgcompare.scrappers.scryfall import ScryfallScrapper
-from mtgcompare.scrappers.serra import CardshopSerraScrapper
-from mtgcompare.scrappers.singlestar import SingleStarScrapper
-from mtgcompare.scrappers.tokyomtg import TokyoMtgScrapper
+from mtgcompare.scrapers.blackfrog import BlackFrogScrapper
+from mtgcompare.scrapers.cardrush import CardRushScrapper
+from mtgcompare.scrapers.enndalgames import EnndalGamesScrapper
+from mtgcompare.scrapers.hareruya import HareruyaScrapper
+from mtgcompare.scrapers.mintmall import MintMallScrapper
+from mtgcompare.scrapers.scryfall import ScryfallScrapper
+from mtgcompare.scrapers.serra import CardshopSerraScrapper
+from mtgcompare.scrapers.singlestar import SingleStarScrapper
+from mtgcompare.scrapers.tokyomtg import TokyoMtgScrapper
 from mtgcompare.utils import get_fx
 
 _DEFAULT_PROBE_CARD = "Force of Will"

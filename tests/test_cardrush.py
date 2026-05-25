@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from mtgcompare.scrappers.cardrush import parse_search_html
+from mtgcompare.scrapers.cardrush import parse_search_html
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 

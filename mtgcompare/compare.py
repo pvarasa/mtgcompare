@@ -5,7 +5,7 @@ import logging
 import logging.config
 from pathlib import Path
 
-from .shops import collect_prices
+from .scrapers.registry import collect_prices
 from .utils import get_fx
 
 LOGGING_CONF = Path(__file__).resolve().parent.parent / "logging.conf"

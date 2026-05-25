@@ -6,8 +6,9 @@ import pytest
 from sqlalchemy import create_engine, text
 
 import mtgcompare.db as db_module
-from mtgcompare import cache as cache_module
-from mtgcompare.cache import (
+from mtgcompare.scrapers import cache as cache_module
+from mtgcompare.scrapers.base import MtgScrapper
+from mtgcompare.scrapers.cache import (
     CachedScrapper,
     _normalize,
     _Singleflight,
@@ -16,7 +17,6 @@ from mtgcompare.cache import (
     replace_listings,
     upsert_log,
 )
-from mtgcompare.scrapper import MtgScrapper
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -232,7 +232,7 @@ class TestCachedScrapper:
         24h returns nothing."""
         from sqlalchemy import text
 
-        from mtgcompare.scrappers._base import RateLimitedError
+        from mtgcompare.scrapers.html_base import RateLimitedError
         inner = FakeScrapper(raises=RateLimitedError("simulated 429"))
         cached = CachedScrapper(inner, shop_name="FakeShop", ttl=timedelta(hours=24))
         with pytest.raises(RateLimitedError):
@@ -248,7 +248,7 @@ class TestCachedScrapper:
         """Same check for the generic ScraperFetchError path."""
         from sqlalchemy import text
 
-        from mtgcompare.scrappers._base import ScraperFetchError
+        from mtgcompare.scrapers.html_base import ScraperFetchError
         inner = FakeScrapper(raises=ScraperFetchError("DNS resolution failed"))
         cached = CachedScrapper(inner, shop_name="FakeShop", ttl=timedelta(hours=24))
         with pytest.raises(ScraperFetchError):

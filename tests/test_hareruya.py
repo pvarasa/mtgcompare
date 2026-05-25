@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from mtgcompare.scrappers.hareruya import parse_lazy_html
+from mtgcompare.scrapers.hareruya import parse_lazy_html
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 

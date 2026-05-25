@@ -28,7 +28,7 @@ import re
 import requests
 from selectolax.parser import HTMLParser
 
-from ._base import HtmlSearchScrapper
+from .html_base import HtmlSearchScrapper
 
 BASE_URL = "https://blackfrog.jp"
 SEARCH_URL = f"{BASE_URL}/shop/shopbrand.html"
@@ -119,7 +119,7 @@ def parse_search_html(html: str | bytes, card_name: str, fx_jpy_per_usd: float) 
 class BlackFrogScrapper(HtmlSearchScrapper):
     SHOP_NAME = "BLACK FROG"
     SEARCH_URL = SEARCH_URL
-    LOGGER_NAME = "mtgcompare.scrappers.blackfrog"
+    LOGGER_NAME = "mtgcompare.scrapers.blackfrog"
     SEARCH_PARAM_NAME = "search"
 
     def parse_html(self, html: str | bytes, card_name: str) -> list[dict]:

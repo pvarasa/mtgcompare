@@ -34,8 +34,8 @@ from typing import ClassVar
 import requests
 from requests.adapters import HTTPAdapter
 
-from ..scrapper import MtgScrapper
 from ..utils import get_fx
+from .base import MtgScrapper
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "

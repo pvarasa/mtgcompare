@@ -3,17 +3,17 @@ import re
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, wait
 
+from .base import MtgScrapper
+from .blackfrog import BlackFrogScrapper
 from .cache import DEFAULT_TTL, CachedScrapper
-from .scrapper import MtgScrapper
-from .scrappers.blackfrog import BlackFrogScrapper
-from .scrappers.cardrush import CardRushScrapper
-from .scrappers.enndalgames import EnndalGamesScrapper
-from .scrappers.hareruya import HareruyaScrapper
-from .scrappers.mintmall import MintMallScrapper
-from .scrappers.scryfall import ScryfallScrapper
-from .scrappers.serra import CardshopSerraScrapper
-from .scrappers.singlestar import SingleStarScrapper
-from .scrappers.tokyomtg import TokyoMtgScrapper
+from .cardrush import CardRushScrapper
+from .enndalgames import EnndalGamesScrapper
+from .hareruya import HareruyaScrapper
+from .mintmall import MintMallScrapper
+from .scryfall import ScryfallScrapper
+from .serra import CardshopSerraScrapper
+from .singlestar import SingleStarScrapper
+from .tokyomtg import TokyoMtgScrapper
 
 _JP_FLAG = "\U0001F1EF\U0001F1F5"
 _US_FLAG = "\U0001F1FA\U0001F1F8"

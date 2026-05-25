@@ -2,8 +2,8 @@
 import logging
 import time
 
-from mtgcompare import shops
-from mtgcompare.scrapper import MtgScrapper
+from mtgcompare.scrapers import registry as shops
+from mtgcompare.scrapers.base import MtgScrapper
 
 
 class _SleepyScraper(MtgScrapper):

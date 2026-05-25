@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from mtgcompare.scrappers.scryfall import parse_page
+from mtgcompare.scrapers.scryfall import parse_page
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 

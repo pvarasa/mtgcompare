@@ -42,7 +42,7 @@ from .log_context import (
     install_record_factory,
 )
 from .pricing import market_repo, meta, run_log
-from .shops import ACTIVE_SHOPS, SHIPPING_JPY, SHOP_FLAGS, collect_prices, shop_slug
+from .scrapers.registry import ACTIVE_SHOPS, SHIPPING_JPY, SHOP_FLAGS, collect_prices, shop_slug
 from .utils import get_fx
 
 ROOT_DIR = Path(__file__).resolve().parent.parent

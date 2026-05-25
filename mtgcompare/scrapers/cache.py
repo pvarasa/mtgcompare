@@ -15,9 +15,9 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import text
 
-from . import db
-from .scrapper import MtgScrapper
-from .scrappers._base import RateLimitedError, ScraperFetchError
+from .. import db
+from .base import MtgScrapper
+from .html_base import RateLimitedError, ScraperFetchError
 
 
 def _ttl_from_env() -> timedelta:

@@ -15,10 +15,10 @@ from time import monotonic
 import requests
 from selectolax.parser import HTMLParser
 
-from ..scrapper import MtgScrapper
 from ..utils import get_fx
-from ._base import RateLimitedError, ScraperFetchError
-from ._base import make_session as _make_session
+from .base import MtgScrapper
+from .html_base import RateLimitedError, ScraperFetchError
+from .html_base import make_session as _make_session
 
 BASE_URL = "https://www.hareruyamtg.com"
 UNISEARCH_API = f"{BASE_URL}/en/products/search/unisearch_api"
@@ -101,7 +101,7 @@ class HareruyaScrapper(MtgScrapper):
         super().__init__()
         self.fx = fx if fx is not None else get_fx("jpy")
         self.session = session if session is not None else _SHARED_SESSION
-        self.logger = logging.getLogger("mtgcompare.scrappers.hareruya")
+        self.logger = logging.getLogger("mtgcompare.scrapers.hareruya")
 
     def get_prices(self, card_name: str) -> list[dict]:
         # Both fetch helpers raise ScraperFetchError on transport failure.

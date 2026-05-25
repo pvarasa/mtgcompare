@@ -29,7 +29,7 @@ from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
-from .shops import SHIPPING_JPY, collect_prices
+from .scrapers.registry import SHIPPING_JPY, collect_prices
 
 logger = logging.getLogger(__name__)
 

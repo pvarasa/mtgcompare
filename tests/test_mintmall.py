@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from mtgcompare.scrappers.mintmall import _stock_map, parse_search_html
+from mtgcompare.scrapers.mintmall import _stock_map, parse_search_html
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 

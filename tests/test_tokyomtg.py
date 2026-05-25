@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from mtgcompare.scrappers.tokyomtg import TokyoMtgScrapper, parse_search_html
+from mtgcompare.scrapers.tokyomtg import TokyoMtgScrapper, parse_search_html
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 

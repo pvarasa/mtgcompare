@@ -19,18 +19,18 @@ from typing import Any
 
 import requests
 
-from mtgcompare.scrappers._base import HtmlSearchScrapper
-from mtgcompare.scrappers.blackfrog import BlackFrogScrapper
-from mtgcompare.scrappers.cardrush import CardRushScrapper
-from mtgcompare.scrappers.enndalgames import EnndalGamesScrapper
-from mtgcompare.scrappers.hareruya import UNISEARCH_API, UNISEARCH_LAZY
-from mtgcompare.scrappers.hareruya import make_session as hareruya_session
-from mtgcompare.scrappers.mintmall import MintMallScrapper
-from mtgcompare.scrappers.scryfall import SEARCH_URL as SCRYFALL_SEARCH_URL
-from mtgcompare.scrappers.scryfall import make_session as scryfall_session
-from mtgcompare.scrappers.serra import CardshopSerraScrapper
-from mtgcompare.scrappers.singlestar import SingleStarScrapper
-from mtgcompare.scrappers.tokyomtg import TokyoMtgScrapper
+from mtgcompare.scrapers.blackfrog import BlackFrogScrapper
+from mtgcompare.scrapers.cardrush import CardRushScrapper
+from mtgcompare.scrapers.enndalgames import EnndalGamesScrapper
+from mtgcompare.scrapers.hareruya import UNISEARCH_API, UNISEARCH_LAZY
+from mtgcompare.scrapers.hareruya import make_session as hareruya_session
+from mtgcompare.scrapers.html_base import HtmlSearchScrapper
+from mtgcompare.scrapers.mintmall import MintMallScrapper
+from mtgcompare.scrapers.scryfall import SEARCH_URL as SCRYFALL_SEARCH_URL
+from mtgcompare.scrapers.scryfall import make_session as scryfall_session
+from mtgcompare.scrapers.serra import CardshopSerraScrapper
+from mtgcompare.scrapers.singlestar import SingleStarScrapper
+from mtgcompare.scrapers.tokyomtg import TokyoMtgScrapper
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 FIXTURES.mkdir(exist_ok=True)
