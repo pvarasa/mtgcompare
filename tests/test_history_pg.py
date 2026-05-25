@@ -15,7 +15,7 @@ import os
 import pytest
 from sqlalchemy import create_engine, text
 
-from mtgcompare import history_import
+from mtgcompare.pricing import history_import
 
 pytestmark = pytest.mark.pg
 

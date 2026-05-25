@@ -8,7 +8,7 @@ from datetime import UTC, date, datetime
 
 from sqlalchemy import text
 
-from .db import engine
+from ..db import engine
 
 logger = logging.getLogger(__name__)
 

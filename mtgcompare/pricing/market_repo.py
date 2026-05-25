@@ -8,7 +8,7 @@ the import transaction; dialect-aware writes go through ``db.upsert``.
 """
 from sqlalchemy import bindparam, text
 
-from . import db
+from .. import db
 
 _MARKET_PRICES_CONFLICT = ["card_name", "set_code", "is_foil"]
 _CARD_MAP_CONFLICT = ["card_name", "set_code", "card_number", "is_foil"]

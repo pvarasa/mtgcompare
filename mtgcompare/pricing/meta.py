@@ -7,7 +7,7 @@ inside a larger transaction.
 """
 from sqlalchemy import text
 
-from . import db
+from .. import db
 
 
 def read(conn, key: str) -> str | None:

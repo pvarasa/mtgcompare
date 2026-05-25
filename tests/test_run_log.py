@@ -5,7 +5,7 @@ import pytest
 from sqlalchemy import create_engine, text
 
 import mtgcompare.db as db_module
-import mtgcompare.run_log as run_log_module
+import mtgcompare.pricing.run_log as run_log_module
 
 
 @pytest.fixture()

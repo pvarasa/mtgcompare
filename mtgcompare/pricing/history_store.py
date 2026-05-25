@@ -23,7 +23,8 @@ from pathlib import Path
 import duckdb
 from sqlalchemy import text
 
-from . import db, history_import
+from .. import db
+from . import history_import
 
 logger = logging.getLogger(__name__)
 

@@ -5,7 +5,7 @@ import lzma
 import duckdb
 import pytest
 
-from mtgcompare import history_import
+from mtgcompare.pricing import history_import
 
 
 def _make_xz(path, data: dict):

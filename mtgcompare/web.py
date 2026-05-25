@@ -33,7 +33,7 @@ from flask import (
 )
 from flask.json.provider import JSONProvider
 
-from . import auth, db, decklist, market_repo, meta, pricing, run_log
+from . import auth, db, decklist, pricing
 from . import inventory as inv
 from .log_context import (
     REQUEST_ID_HEADER,
@@ -41,6 +41,7 @@ from .log_context import (
     install_healthz_access_filter,
     install_record_factory,
 )
+from .pricing import market_repo, meta, run_log
 from .shops import ACTIVE_SHOPS, SHIPPING_JPY, SHOP_FLAGS, collect_prices, shop_slug
 from .utils import get_fx
 

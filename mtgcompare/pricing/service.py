@@ -29,10 +29,56 @@ from time import monotonic
 import requests
 from cachetools import TTLCache
 
-from . import db, history_import, market_repo, meta, pricehistory
-from . import inventory as inv
+from .. import db
+from .. import inventory as inv
+from . import history_import, history_store, market_repo, meta
 
 logger = logging.getLogger(__name__)
+
+__all__ = [
+    "MARKET_HISTORY_PERIODS",
+    "MKT_SORT_CHOICES",
+    "MTGJSON_BASE_URL",
+    "MTGJSON_HEADERS",
+    "attach_market_prices",
+    "attach_pnl_in_place",
+    "build_market_summary",
+    "candidate_uuid_map",
+    "collector_sort_key",
+    "compute_market_ctx",
+    "densify_daily_points",
+    "download_file",
+    "download_mtgjson_set_file",
+    "download_or_unavailable",
+    "ensure_history_loaded",
+    "format_ago",
+    "get_price_cache",
+    "has_price_history",
+    "history_cutoff",
+    "import_mtgjson_history",
+    "is_foil",
+    "load_existing_card_map",
+    "load_set_cards",
+    "market_cache_clear",
+    "market_cache_get",
+    "market_cache_set",
+    "mtgjson_cache_dir",
+    "mtgjson_history_duckdb_path",
+    "mtgjson_history_path",
+    "mtgjson_set_candidates",
+    "mtgjson_set_path",
+    "normalize_set_code",
+    "paginate_market_rows",
+    "persist_card_map_and_meta",
+    "populate_market_prices_from_history",
+    "price_store",
+    "query_history",
+    "resolve_candidate_uuid",
+    "resolve_inventory_uuids",
+    "row_key_for_mapping",
+    "run_daily_price_update",
+    "sort_key_market",
+]
 
 MTGJSON_BASE_URL = "https://mtgjson.com/api/v5"
 MTGJSON_HEADERS = {"User-Agent": "mtgcompare/0.1", "Accept": "application/json"}
@@ -169,7 +215,7 @@ def download_mtgjson_set_file(set_code: str) -> tuple[str, Path] | None:
 
 # --- price-history store wrappers ------------------------------------------
 
-def price_store() -> pricehistory.PriceHistoryStore:
+def price_store() -> history_store.PriceHistoryStore:
     """Price-history store for the active backend (Postgres or local DuckDB).
 
     Constructed per call so a per-test ``db.IS_POSTGRES`` flip is honoured;
@@ -179,7 +225,7 @@ def price_store() -> pricehistory.PriceHistoryStore:
     Postgres path, matching the previous behaviour.
     """
     duckdb_path = None if db.IS_POSTGRES else mtgjson_history_duckdb_path()
-    return pricehistory.get_store(duckdb_path)
+    return history_store.get_store(duckdb_path)
 
 
 def has_price_history() -> bool:
@@ -367,7 +413,7 @@ def populate_market_prices_from_history(
     # early-return). An empty dict means "history present, no matching rows":
     # the inserts below still write NULL prices, as the old code did.
     uuid_list = list({u for (u, _) in uuid_to_db_key})
-    latest = pricehistory.get_store(duckdb_path).latest_prices(uuid_list)
+    latest = history_store.get_store(duckdb_path).latest_prices(uuid_list)
     if latest is None:
         return
 
@@ -396,7 +442,7 @@ def ensure_history_loaded(
     is empty. Returns the row count written, or 0 if the existing store
     was reused (caller can fall back to the meta table for the count).
     """
-    store = pricehistory.get_store(history_duckdb_path)
+    store = history_store.get_store(history_duckdb_path)
     if store.has_history():
         progress(40, "History ready", "Using existing price history.")
         return 0
