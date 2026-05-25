@@ -19,7 +19,6 @@ from threading import Lock, Thread
 from time import monotonic
 from uuid import uuid4
 
-import duckdb
 import orjson
 import requests
 from cachetools import TTLCache
@@ -39,7 +38,7 @@ from flask import (
 from flask.json.provider import JSONProvider
 from sqlalchemy import text
 
-from . import auth, db, decklist, history_import, run_log
+from . import auth, db, decklist, history_import, pricehistory, run_log
 from . import inventory as inv
 from .log_context import (
     REQUEST_ID_HEADER,
@@ -1047,43 +1046,25 @@ def _get_download_job(job_id: str) -> dict | None:
         return dict(job) if job else None
 
 
-_history_duckdb_lock = Lock()
+def _price_store() -> pricehistory.PriceHistoryStore:
+    """Price-history store for the active backend (Postgres or local DuckDB).
+
+    Constructed per call so a per-test ``db.IS_POSTGRES`` flip is honoured;
+    construction is cheap and the local store's DuckDB lock is module-level
+    in ``pricehistory``, so serialization holds across instances. The local
+    DuckDB path is only resolved (and its cache dir created) off the
+    Postgres path, matching the previous behaviour.
+    """
+    duckdb_path = None if db.IS_POSTGRES else _mtgjson_history_duckdb_path()
+    return pricehistory.get_store(duckdb_path)
 
 
 def _has_price_history() -> bool:
-    if db.IS_POSTGRES:
-        with db.get_conn() as conn:
-            return conn.execute(text("SELECT 1 FROM price_rows LIMIT 1")).fetchone() is not None
-    return _mtgjson_history_duckdb_path().exists()
+    return _price_store().has_history()
 
 
 def _query_history(uuid: str, finish: str) -> dict[str, float]:
-    if db.IS_POSTGRES:
-        with db.get_conn() as conn:
-            rows = conn.execute(
-                text("SELECT market_date, price_usd FROM price_rows"
-                     " WHERE uuid = :uuid AND finish = :finish ORDER BY market_date ASC"),
-                {"uuid": uuid, "finish": finish},
-            ).fetchall()
-        return {
-            (r[0].isoformat() if isinstance(r[0], date) else str(r[0])): float(r[1])
-            for r in rows if r[1] is not None
-        }
-
-    duckdb_path = _mtgjson_history_duckdb_path()
-    if not duckdb_path.exists():
-        return {}
-    with _history_duckdb_lock:
-        conn = duckdb.connect(str(duckdb_path), read_only=True)
-        try:
-            rows = conn.execute(
-                "SELECT market_date, price_usd FROM price_rows "
-                "WHERE uuid = ? AND finish = ? ORDER BY market_date ASC",
-                [uuid, finish],
-            ).fetchall()
-        finally:
-            conn.close()
-    return {row[0]: row[1] for row in rows if row[1] is not None}
+    return _price_store().query(uuid, finish)
 
 
 def _candidate_uuid_map(cards: list[dict], set_code: str) -> dict[tuple[str, str, str], dict[str, str]]:
@@ -1200,46 +1181,14 @@ def _populate_market_prices_from_history(
     if not uuid_to_db_key:
         return
 
-    if db.IS_POSTGRES:
-        uuid_list = list({u for (u, _) in uuid_to_db_key})
-        params = {f"u{i}": u for i, u in enumerate(uuid_list)}
-        placeholders = ", ".join(f":u{i}" for i in range(len(uuid_list)))
-        with db.get_conn() as conn:
-            rows = conn.execute(
-                # placeholders are :u0, :u1, …; user values bound via `params`.
-                text(f"""
-                    SELECT DISTINCT ON (uuid, finish) uuid, finish, price_usd
-                    FROM price_rows
-                    WHERE uuid IN ({placeholders})
-                    ORDER BY uuid, finish, market_date DESC
-                """),  # noqa: S608
-                params,
-            ).fetchall()
-        latest: dict[tuple[str, str], float | None] = {
-            (str(r[0]), r[1]): float(r[2]) if r[2] is not None else None
-            for r in rows
-        }
-    else:
-        if not duckdb_path or not duckdb_path.exists():
-            return
-        uuid_list = list({u for (u, _) in uuid_to_db_key})
-        placeholders = ", ".join("?" for _ in uuid_list)
-        with _history_duckdb_lock:
-            conn_duck = duckdb.connect(str(duckdb_path), read_only=True)
-            try:
-                rows = conn_duck.execute(
-                    # placeholders are positional `?`; user values bound via `uuid_list`.
-                    f"""
-                    SELECT uuid, finish, price_usd
-                    FROM price_rows
-                    WHERE uuid IN ({placeholders})
-                    QUALIFY ROW_NUMBER() OVER (PARTITION BY uuid, finish ORDER BY market_date DESC) = 1
-                    """,  # noqa: S608
-                    uuid_list,
-                ).fetchall()
-            finally:
-                conn_duck.close()
-        latest = {(r[0], r[1]): r[2] for r in rows}
+    # latest_prices returns None for the local backend when no DuckDB file
+    # exists yet — skip the upsert entirely in that case (matches the prior
+    # early-return). An empty dict means "history present, no matching rows":
+    # the inserts below still write NULL prices, as the old code did.
+    uuid_list = list({u for (u, _) in uuid_to_db_key})
+    latest = pricehistory.get_store(duckdb_path).latest_prices(uuid_list)
+    if latest is None:
+        return
 
     inserts = [
         {
@@ -1350,11 +1299,8 @@ def _ensure_history_loaded(
     is empty. Returns the row count written, or 0 if the existing store
     was reused (caller can fall back to the meta table for the count).
     """
-    needs_history = (
-        (db.IS_POSTGRES and not _has_price_history())
-        or (not db.IS_POSTGRES and not history_duckdb_path.exists())
-    )
-    if not needs_history:
+    store = pricehistory.get_store(history_duckdb_path)
+    if store.has_history():
         progress(40, "History ready", "Using existing price history.")
         return 0
 
@@ -1366,14 +1312,7 @@ def _ensure_history_loaded(
         "MTGJSON price files are temporarily unavailable. Please try again later.",
     )
     try:
-        if db.IS_POSTGRES:
-            return history_import.rebuild_history_pg(
-                history_path, db.engine, progress_cb=progress,
-            )
-        with _history_duckdb_lock:
-            return history_import.rebuild_history_db(
-                history_path, history_duckdb_path, progress_cb=progress,
-            )
+        return store.rebuild(history_path, progress_cb=progress)
     finally:
         history_path.unlink(missing_ok=True)
 
@@ -2180,16 +2119,9 @@ def _run_daily_price_update(
 
     market_date = history_import.read_meta_date(today_xz)
 
-    if db.IS_POSTGRES:
-        uuids_streamed, rows_inserted = history_import.merge_today_prices_pg(
-            today_xz, db.engine, progress_cb=_progress,
-        )
-    else:
-        duckdb_path = _mtgjson_history_duckdb_path()
-        with _history_duckdb_lock:
-            uuids_streamed, rows_inserted = history_import.merge_today_prices(
-                today_xz, duckdb_path, progress_cb=_progress,
-            )
+    uuids_streamed, rows_inserted = _price_store().merge_today(
+        today_xz, progress_cb=_progress,
+    )
     today_xz.unlink(missing_ok=True)
 
     mapped_count, _ = _import_mtgjson_history(inventory_rows, progress_cb=_progress)
