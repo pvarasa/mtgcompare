@@ -10,7 +10,7 @@ The candidate list comes from the shops that **Wisdom Guild's WONDER** price agg
 - SingleStar — シングルスター (`mtgcompare/scrapers/singlestar.py`)
 - Card Rush — カードラッシュ (`mtgcompare/scrapers/cardrush.py`) — first ocnk.net shop
 - Cardshop Serra (`mtgcompare/scrapers/serra.py`) — first ec-cube shop, biggest indexed inventory (~1.19M)
-- ENNDAL GAMES (`mtgcompare/scrapers/enndalgames.py`) — second-biggest indexed inventory (~493k); custom platform. **Re-enabled 2026-05-26** — the DNS that went dark on 2026-05-04 is restored (`dig +short www.enndalgames.com @8.8.8.8` returns `13.159.57.5` / `52.193.201.15`), the search endpoint serves HTTP 200, and the live scraper parses NM-EN rows again.
+- ENNDAL GAMES (`mtgcompare/scrapers/enndalgames.py`) — second-biggest indexed inventory (~493k); custom platform. **Still disabled in `build_scrapers`.** As of 2026-05-26 *public* resolvers recovered (`dig +short www.enndalgames.com @8.8.8.8` → `13.159.57.5` / `52.193.201.15`) and the live scraper parses NM-EN rows from a dev box — but the **prod cluster's upstream DNS still can't resolve `www.enndalgames.com`** (in-pod `socket.gethostbyname` → Errno -5; the apex `enndalgames.com` resolves to `219.94.128.207` but its TLS cert is www-only, so it's not a usable fallback). Re-enable only after an in-cluster resolution check passes — the dev-box `dig` is not sufficient evidence.
 - BLACK FROG (`mtgcompare/scrapers/blackfrog.py`) — first ColorMe-platform shop (~119k indexed); legacy `/shop/shopbrand.html?search=…` URL, EUC-JP encoded
 - MINT MALL (`mtgcompare/scrapers/mintmall.py`) — multi-tenant ec-cube marketplace (~90k indexed); per-spec stock + price come from a `specificationTreeSearchProductsTree` JS const, not the listing markup
 - TokyoMTG (`mtgcompare/scrapers/tokyomtg.py`) — *not on the WONDER list, separate integration*
@@ -185,7 +185,10 @@ These two would mean introducing a headless browser dependency or a TLS-fingerpr
 
 Revised after the 2026-05-26 volume probe (see "Measured volume" above).
 
-0. **(Done) Re-enable ENNDAL GAMES** — DNS restored, flag flipped back to `True`.
+0. **ENNDAL GAMES — blocked on cluster DNS.** Public DNS recovered but the
+   prod cluster still can't resolve `www.enndalgames.com` (see above). Stays
+   disabled until an in-pod resolution check passes; no app change needed then
+   beyond flipping the flag.
 1. **GOODGAME first** — the highest-volume candidate (≈95 med/staple, on par with
    Card Rush) and the simplest endpoint (Shopify `/search?q=`). Its
    `【EN】<JP>/<EN> [SET]` titles match the existing bilingual-name parsers.

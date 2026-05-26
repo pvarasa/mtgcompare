@@ -41,11 +41,16 @@ _SHOPS: list[tuple[str, str, int, bool, Callable[[float], MtgScrapper]]] = [
     ("Cardshop Serra",       _JP_FLAG, _DEFAULT_JP_SHIPPING,   True,  lambda fx: CardshopSerraScrapper(fx=fx)),
     ("BLACK FROG",           _JP_FLAG, _DEFAULT_JP_SHIPPING,   True,  lambda fx: BlackFrogScrapper(fx=fx)),
     ("MINT MALL",            _JP_FLAG, _DEFAULT_JP_SHIPPING,   True,  lambda fx: MintMallScrapper(fx=fx)),
-    # ENNDAL GAMES — DNS restored 2026-05-26: dig +short
-    # www.enndalgames.com @8.8.8.8 again returns A records (13.159.57.5,
-    # 52.193.201.15) and the search endpoint serves HTTP 200 with parseable
-    # NM-EN rows. Re-enabled after the 2026-05-04 AWS-auth-NS outage.
-    ("ENNDAL GAMES",         _JP_FLAG, _DEFAULT_JP_SHIPPING,   True,  lambda fx: EnndalGamesScrapper(fx=fx)),
+    # ENNDAL GAMES still disabled. Public resolvers recovered on 2026-05-26
+    # (dig +short www.enndalgames.com @8.8.8.8 → 13.159.57.5 / 52.193.201.15),
+    # but the *cluster's* upstream DNS still can't resolve www — an in-pod
+    # socket.gethostbyname('www.enndalgames.com') returns Errno -5 while the
+    # apex enndalgames.com (219.94.128.207) does resolve. The apex isn't a
+    # usable fallback: its TLS cert is valid only for www. So prod would just
+    # log fast NameResolutionErrors and contribute nothing. Re-enable only
+    # once `kubectl -n apps exec <pod> -- python -c
+    # "import socket; socket.gethostbyname('www.enndalgames.com')"` succeeds.
+    ("ENNDAL GAMES",         _JP_FLAG, _DEFAULT_JP_SHIPPING,   False, lambda fx: EnndalGamesScrapper(fx=fx)),
 ]
 
 
