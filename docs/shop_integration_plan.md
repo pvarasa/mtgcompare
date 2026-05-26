@@ -10,7 +10,7 @@ The candidate list comes from the shops that **Wisdom Guild's WONDER** price agg
 - SingleStar — シングルスター (`mtgcompare/scrapers/singlestar.py`)
 - Card Rush — カードラッシュ (`mtgcompare/scrapers/cardrush.py`) — first ocnk.net shop
 - Cardshop Serra (`mtgcompare/scrapers/serra.py`) — first ec-cube shop, biggest indexed inventory (~1.19M)
-- ENNDAL GAMES (`mtgcompare/scrapers/enndalgames.py`) — second-biggest indexed inventory (~493k); custom platform. **Currently disabled in `build_scrapers`** — `www.enndalgames.com` has no A record at the AWS auth NS, so cluster lookups fail. Re-enable when their DNS is restored.
+- ENNDAL GAMES (`mtgcompare/scrapers/enndalgames.py`) — second-biggest indexed inventory (~493k); custom platform. **Re-enabled 2026-05-26** — the DNS that went dark on 2026-05-04 is restored (`dig +short www.enndalgames.com @8.8.8.8` returns `13.159.57.5` / `52.193.201.15`), the search endpoint serves HTTP 200, and the live scraper parses NM-EN rows again.
 - BLACK FROG (`mtgcompare/scrapers/blackfrog.py`) — first ColorMe-platform shop (~119k indexed); legacy `/shop/shopbrand.html?search=…` URL, EUC-JP encoded
 - MINT MALL (`mtgcompare/scrapers/mintmall.py`) — multi-tenant ec-cube marketplace (~90k indexed); per-spec stock + price come from a `specificationTreeSearchProductsTree` JS const, not the listing markup
 - TokyoMTG (`mtgcompare/scrapers/tokyomtg.py`) — *not on the WONDER list, separate integration*
@@ -30,11 +30,92 @@ Of the 26 shops surfaced by WONDER, we already have 7 (Hareruya, SingleStar, Car
 
 Conclusion: integrate with the underlying shops directly. Don't proxy WONDER.
 
+## Measured volume (probe, 2026-05-26)
+
+The tiers below were originally ranked by *platform and scraping effort*, not
+by measured volume — only the integrated shops had inventory figures. To close
+that gap, `scripts/probe_shop_volume.py` hits each shop's real search endpoint
+for a basket of 8 bellwether staples (Force of Will, Brainstorm, Lightning
+Bolt, Counterspell, Sol Ring, Swords to Plowshares, Birds of Paradise, Llanowar
+Elves) and counts the **relevant** result cards — product-card nodes whose
+bilingual title actually names the queried card. Re-run it any time:
+
+```sh
+uv run python scripts/probe_shop_volume.py --json docs/shop_volume_probe.json
+```
+
+**What the number means / caveats.** "med" is the median relevant listings per
+staple — a *search-breadth-on-staples* proxy, not a catalog count and not
+English-NM-in-stock depth (that needs the per-shop parser). It is good for
+ranking candidates against each other and roughly against the anchors. Two
+deliberate guards keep it honest: it counts only result-card nodes a known
+platform selector matches (the page-wide 【SET】 token regex over-counts the
+sidebar/footer "recommended items" rails by 10–45× and is diagnostic-only), and
+it filters to cards whose title names the query (whitespace-insensitive, to
+survive ocnk's `result_emphasis` keyword highlighting).
+
+**Calibration anchors** (integrated shops, so "med" can be read against a known
+catalog size):
+
+| Shop | med listings/staple | known indexed |
+|---|---:|---|
+| Card Rush | 100 | (integrated) |
+| SingleStar | 48 | (integrated) |
+| BLACK FROG | 45 | ~119k |
+| MINT MALL | 42 | ~90k |
+| Cardshop Serra | 36 | ~1.19M |
+| ENNDAL GAMES | 15 | ~493k |
+
+Note med/staple is *not* proportional to total catalog (Serra's 1.19M is spread
+broad-and-shallow; ~36/staple), so treat it as "is this shop in the same league
+as ones we already ingest," which the anchors put at roughly **15–100**.
+
+**Candidate ranking** (relevant med/staple, 8-card basket):
+
+| Shop | platform | med | hit rate | verdict |
+|---|---|---:|---|---|
+| **GOODGAME** | Shopify | **95** | 8/8 | **Top pick.** Depth on par with Card Rush; clean `【EN】渦まく知識/Brainstorm [SET]` bilingual titles; trivial `/search?q=` endpoint. |
+| Todo | ocnk | 16 | 8/8 | Workable. ENNDAL-band depth; ocnk base already exists → cheap. |
+| Kurowaku | ocnk | 7 | 8/8 | Thin but real; cheap once ocnk base exists. |
+| Suzunone | ColorMe | 7 | 7/8 | Real results in `.productlist_list` (modern ColorMe theme). |
+| F-conclave | ocnk | 4 | 8/8 | Thin. |
+| Genki302 | ocnk | 0 | 2/8 | English search mostly returns nothing. |
+| Takaoka | BASE | — | — | **Fuzzy search**: `/items?q=` returns a whole MTG grid (24 cards/page) that ignores the query term — real depth unmeasured. Titles *are* clean bilingual MTG; worth a manual look, but `q=` isn't a usable single-card lookup. |
+| Hamaya | ColorMe | — | — | Fuzzy search, only ~2 cards/page surfaced. |
+| Manzokuya | ec-cube | 0 | 0/8 | **No English (or JP) card-node match** — search returns 0 shelf items even for 渦まく知識. Not an easy English-searchable shop. |
+| Nukenin | ec-cube | 0 | 0/8 | No card-node match for English names. |
+| CARDMAX | ColorMe | 0 | 0/8 | No card-node match for English names. |
+| Gemutlich | ColorMe | 0 | 0/8 | No card-node match for English names. |
+
+**Findings that revise the plan:**
+
+1. **GOODGAME is the clear next integration** — it's the only candidate whose
+   measured depth (95) lands in the integrated band, it speaks the same
+   bilingual title format the existing parsers already handle, and Shopify
+   `/search?q=` is the simplest endpoint of any candidate.
+2. **The platform-based "easy" tiering was over-optimistic.** Manzokuya,
+   Nukenin, CARDMAX, and Gemütlich return *zero* parseable products for English
+   card names — their search needs Japanese names, i.e. a JP↔EN name table
+   (the Tier-2 effort the plan only attributed to Famicomkun). They are **not**
+   ½-day ColorMe/ec-cube config jobs.
+3. **A clean `requests` GET ≠ a usable single-card search.** Takaoka (BASE) and
+   Hamaya return HTTP 200 with MTG grids, but `q=`/`keyword=` doesn't actually
+   filter to the queried card — so they can't back the per-card fan-out without
+   a different endpoint.
+4. **The ocnk candidates are the safe, cheap tier-1 tail** (Todo 16 > Kurowaku 7
+   > F-conclave 4), all reusing the existing ocnk pattern; Genki302 is not worth
+   it.
+
 ## Integration tiers
 
 The 24 unintegrated shops cluster onto 4 e-commerce platforms plus a few customs. Most are scrapable today with the same `requests + selectolax` pattern used in `singlestar.py` (selectolax replaced BeautifulSoup project-wide in v1.6.8 for ~75% lower parse-tree memory).
 
 ### Tier 1 — Easy (~½ day per shop, less with shared base classes)
+
+> ⚠️ The groupings below are by *platform*, which is no longer the same as
+> *effort* — see "Measured volume" above. Several of these (Manzokuya, Nukenin,
+> CARDMAX, Gemütlich) return nothing for English card names and actually belong
+> in the name-table tier; GOODGAME (in "other customs") is the real easy win.
 
 **ColorMe Shop** platform — search at `/?mode=srh&keyword=…` (or `/shop/shopbrand.html?search=…`). EUC-JP encoded.
 
@@ -102,11 +183,25 @@ These two would mean introducing a headless browser dependency or a TLS-fingerpr
 
 ## Suggested implementation order
 
-1. **Refactor: shared platform base classes.** Add `mtgcompare/scrapers/_platforms/{colorme,eccube,ocnk}.py`. Each subclass per shop should be ~30 lines: shop name, base URL, optional field-extractor overrides. SingleStar already has the bilingual-name parsing logic that maps cleanly to all three platforms.
-2. **MINT MALL first** for multi-shop leverage in one scraper.
-3. **Roll out the rest of Tier 1** opportunistically — each one is largely a config change after the base classes exist.
-4. **BIGWEB + ドラゴンスター** together once a decision is made on anti-bot HTTP infra.
-5. **Famicomkun + Toretoku** later — moderate effort, narrower English-card payoff.
+Revised after the 2026-05-26 volume probe (see "Measured volume" above).
+
+0. **(Done) Re-enable ENNDAL GAMES** — DNS restored, flag flipped back to `True`.
+1. **GOODGAME first** — the highest-volume candidate (≈95 med/staple, on par with
+   Card Rush) and the simplest endpoint (Shopify `/search?q=`). Its
+   `【EN】<JP>/<EN> [SET]` titles match the existing bilingual-name parsers.
+2. **Refactor: shared platform base classes.** Add
+   `mtgcompare/scrapers/_platforms/{ocnk,colorme,eccube}.py`. Each per-shop
+   subclass is then ~30 lines. SingleStar's bilingual-name logic maps cleanly.
+3. **ocnk tail behind the base class** — Todo (16) > Kurowaku (7) > F-conclave (4).
+   Cheap config once the ocnk base exists. Skip Genki302 (English search empty).
+4. **Suzunone** (modern ColorMe, results in `.productlist_list`, ≈7/staple).
+5. **BIGWEB + ドラゴンスター** together once a decision is made on anti-bot HTTP infra.
+6. **JP-name-table tier (was mis-filed as Tier 1):** Manzokuya, Nukenin, CARDMAX,
+   Gemütlich return nothing for English names — they need a JP↔EN name table
+   first, same as **Famicomkun**. Group them with Famicomkun + Toretoku as the
+   name-table-dependent batch. Verify Takaoka/Hamaya have a query-respecting
+   search endpoint before committing (their `q=`/`keyword=` returned unfiltered
+   grids in the probe).
 
 ## Notes for whoever picks this up
 

@@ -41,11 +41,11 @@ _SHOPS: list[tuple[str, str, int, bool, Callable[[float], MtgScrapper]]] = [
     ("Cardshop Serra",       _JP_FLAG, _DEFAULT_JP_SHIPPING,   True,  lambda fx: CardshopSerraScrapper(fx=fx)),
     ("BLACK FROG",           _JP_FLAG, _DEFAULT_JP_SHIPPING,   True,  lambda fx: BlackFrogScrapper(fx=fx)),
     ("MINT MALL",            _JP_FLAG, _DEFAULT_JP_SHIPPING,   True,  lambda fx: MintMallScrapper(fx=fx)),
-    # ENNDAL GAMES temporarily disabled — www.enndalgames.com has no A
-    # record at the AWS auth NS as of 2026-05-04, so cluster DNS lookups
-    # fail. The scraper, tests, and canary remain in place; flip ``enabled``
-    # to True once dig +short www.enndalgames.com @8.8.8.8 returns an IP.
-    ("ENNDAL GAMES",         _JP_FLAG, _DEFAULT_JP_SHIPPING,   False, lambda fx: EnndalGamesScrapper(fx=fx)),
+    # ENNDAL GAMES — DNS restored 2026-05-26: dig +short
+    # www.enndalgames.com @8.8.8.8 again returns A records (13.159.57.5,
+    # 52.193.201.15) and the search endpoint serves HTTP 200 with parseable
+    # NM-EN rows. Re-enabled after the 2026-05-04 AWS-auth-NS outage.
+    ("ENNDAL GAMES",         _JP_FLAG, _DEFAULT_JP_SHIPPING,   True,  lambda fx: EnndalGamesScrapper(fx=fx)),
 ]
 
 
