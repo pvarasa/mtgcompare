@@ -117,6 +117,85 @@ def test_iter_decklist_prices_yields_one_per_name(monkeypatch):
         assert prices == sorted(prices)
 
 
+def test_iter_decklist_prices_drops_marketplace_shops(monkeypatch):
+    """Decklist fan-outs never query marketplace shops — their per-card
+    landed prices don't sum to an order total."""
+    from mtgcompare.scrapers.registry import ACTIVE_SHOPS, MARKETPLACE_SHOPS
+
+    captured = {}
+    def fake_collect(name, fx, *, enabled, logger, timeouts_out):
+        captured["enabled"] = enabled
+        return []
+    monkeypatch.setattr(web, "collect_prices", fake_collect)
+    # Literal name on purpose: a rename that loses the marketplace flag
+    # must fail here, not silently re-enter decklist totals.
+    assert "TCGPlayer → JP" in MARKETPLACE_SHOPS
+
+    # Default "all shops" search: every active shop except marketplaces.
+    list(web._iter_decklist_prices(["x"], {"x": "X"}, fx=150.0, enabled_shops=None))
+    assert captured["enabled"] == set(ACTIVE_SHOPS) - MARKETPLACE_SHOPS
+
+    # Explicit selection that includes a marketplace shop: still dropped.
+    list(web._iter_decklist_prices(
+        ["x"], {"x": "X"}, fx=150.0,
+        enabled_shops={"Hareruya", "TCGPlayer → JP"},
+    ))
+    assert captured["enabled"] == {"Hareruya"}
+
+
+def test_shipping_config_excludes_marketplace_shops():
+    """Marketplace rows carry their offer's real shipping; rendering an
+    editable flat override for them would invite double counting."""
+    shops = {c["shop"] for c in web._shipping_config()}
+    assert "TCGPlayer → JP" not in shops
+    assert "TCGPlayer market" in shops
+
+
+def test_collapse_marketplace_offers_picks_the_active_modes_winner():
+    """Shipping off → cheapest by item price, no shipping influence at
+    all. Shipping on → cheapest by landed total. Never both rows."""
+    by_item = {"shop": "TCGPlayer → JP", "card": "Foo", "set": "MH3",
+               "price_jpy": 562.0, "ship_jpy": 3000.0}
+    by_landed = {"shop": "TCGPlayer → JP", "card": "Foo", "set": "MH3",
+                 "price_jpy": 2064.0, "ship_jpy": 300.0}
+    other = {"shop": "Hareruya", "card": "Foo", "set": "MH3", "price_jpy": 1090.0}
+
+    off = web._collapse_marketplace_offers([by_item, by_landed, other], False)
+    assert other in off
+    assert [r for r in off if r["shop"] == "TCGPlayer → JP"] == [by_item]
+
+    on = web._collapse_marketplace_offers([by_item, by_landed, other], True)
+    assert other in on
+    assert [r for r in on if r["shop"] == "TCGPlayer → JP"] == [by_landed]
+
+
+def test_collapse_keeps_marketplace_offers_of_distinct_printings():
+    a = {"shop": "TCGPlayer → JP", "card": "Foo", "set": "MH3",
+         "price_jpy": 562.0, "ship_jpy": 3000.0}
+    b = {"shop": "TCGPlayer → JP", "card": "Foo", "set": "PLST",
+         "price_jpy": 700.0, "ship_jpy": 300.0}
+    out = web._collapse_marketplace_offers([a, b], False)
+    assert len(out) == 2
+
+
+def test_apply_shipping_prefers_row_level_over_flat_override():
+    """Marketplace rows keep their offer's own ship_jpy; other rows get
+    the flat per-shop estimate; sort is by the landed total."""
+    marketplace_row = {"shop": "TCGPlayer → JP", "price_jpy": 562.0, "ship_jpy": 3000.0}
+    flat_row = {"shop": "Hareruya", "price_jpy": 800.0}
+    free_ship_row = {"shop": "TCGPlayer → JP", "price_jpy": 2000.0, "ship_jpy": 0.0}
+    results = [marketplace_row, flat_row, free_ship_row]
+
+    web._apply_shipping(results, {"Hareruya": 385})
+
+    assert marketplace_row["price_jpy_with_shipping"] == 3562.0
+    assert flat_row["ship_jpy"] == 385
+    assert flat_row["price_jpy_with_shipping"] == 1185.0
+    # ship_jpy == 0.0 is a real value (free shipping), not "missing".
+    assert free_ship_row["price_jpy_with_shipping"] == 2000.0
+    assert results == [flat_row, free_ship_row, marketplace_row]
+
+
 def test_iter_decklist_prices_empty_input_is_empty_iter(monkeypatch):
     """Edge case — caller passed no names; generator yields nothing
     and never spawns a thread pool."""
@@ -456,7 +535,7 @@ def test_parse_shipping_overrides_clamps_and_falls_back_to_defaults():
     source = {
         "ship_hareruya": "500",
         "ship_singlestar": "-5",
-        "ship_tcgplayer_scryfall": "oops",
+        "ship_tcgplayer_market": "oops",
     }
 
     overrides = web._parse_shipping_overrides(source)
@@ -464,7 +543,8 @@ def test_parse_shipping_overrides_clamps_and_falls_back_to_defaults():
     assert overrides["Hareruya"] == 500
     assert overrides["SingleStar"] == 0
     assert overrides["TokyoMTG"] == web.SHIPPING_JPY["TokyoMTG"]
-    assert overrides["TCGPlayer (Scryfall)"] == web.SHIPPING_JPY["TCGPlayer (Scryfall)"]
+    # Non-numeric input falls back to the default, not a crash or 0.
+    assert overrides["TCGPlayer market"] == web.SHIPPING_JPY["TCGPlayer market"]
 
 
 def test_normalize_set_code_and_foil_helpers():

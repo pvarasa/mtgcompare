@@ -3,19 +3,23 @@ from pathlib import Path
 
 import pytest
 
-from mtgcompare.scrapers.scryfall import parse_page
+from mtgcompare.scrapers import scryfall
+from mtgcompare.scrapers.scryfall import record_from_summary, summarize_page
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 
-def parse_search_response(pages, card_name, fx_jpy_per_usd):
-    """Mirror what `ScryfallScrapper.get_prices` does end-to-end: concat
-    `parse_page` across the materialised pagination list. Lives here in
-    tests because production streams page-by-page and never needs it."""
+def records_from_pages(pages, card_name, fx_jpy_per_usd):
+    """Mirror what `ScryfallScrapper.get_prices` does end-to-end: summarize
+    each page, project priced summaries into records. Lives here in tests
+    because production streams page-by-page inside fetch_card_summaries."""
     target = card_name.strip().lower()
     out = []
     for page in pages:
-        out.extend(parse_page(page, target, fx_jpy_per_usd))
+        for summary in summarize_page(page, target):
+            record = record_from_summary(summary, fx_jpy_per_usd)
+            if record is not None:
+                out.append(record)
     return out
 
 
@@ -27,10 +31,10 @@ def fow_page() -> dict:
 
 
 def test_parse_returns_records_for_matching_card(fow_page):
-    records = parse_search_response([fow_page], "Force of Will", fx_jpy_per_usd=150.0)
+    records = records_from_pages([fow_page], "Force of Will", fx_jpy_per_usd=150.0)
     assert records, "expected at least one Force of Will record in the fixture"
     for r in records:
-        assert r["shop"] == "TCGPlayer (Scryfall)"
+        assert r["shop"] == "TCGPlayer market"
         assert r["card"] == "Force of Will"
         assert isinstance(r["set"], str) and r["set"]
         assert isinstance(r["price_usd"], float) and r["price_usd"] > 0
@@ -46,18 +50,47 @@ def test_parse_skips_printings_without_usd_price(fow_page):
         c for c in fow_page["data"]
         if (c.get("prices") or {}).get("usd") and c["name"].lower() == "force of will"
     ]
-    records = parse_search_response([fow_page], "Force of Will", fx_jpy_per_usd=150.0)
+    records = records_from_pages([fow_page], "Force of Will", fx_jpy_per_usd=150.0)
     assert len(records) == len(printings_with_usd)
 
 
+def test_summaries_include_unpriced_printings_and_product_ids(fow_page):
+    # The ships-to-JP scraper consumes summaries directly and needs every
+    # printing (priced or not) with its tcgplayer_id surfaced.
+    summaries = summarize_page(fow_page, "force of will")
+    all_printings = [c for c in fow_page["data"] if c["name"].lower() == "force of will"]
+    assert len(summaries) == len(all_printings)
+    for s in summaries:
+        assert set(s) == {"name", "set", "usd", "tcgplayer_id", "link"}
+
+
 def test_parse_case_insensitive_match(fow_page):
-    upper = parse_search_response([fow_page], "FORCE OF WILL", fx_jpy_per_usd=150.0)
-    mixed = parse_search_response([fow_page], "Force of Will", fx_jpy_per_usd=150.0)
+    upper = records_from_pages([fow_page], "FORCE OF WILL", fx_jpy_per_usd=150.0)
+    mixed = records_from_pages([fow_page], "Force of Will", fx_jpy_per_usd=150.0)
     assert len(upper) == len(mixed) > 0
 
 
 def test_parse_ignores_non_matching_card(fow_page):
-    assert parse_search_response([fow_page], "Some Other Card", fx_jpy_per_usd=150.0) == []
+    assert records_from_pages([fow_page], "Some Other Card", fx_jpy_per_usd=150.0) == []
+
+
+def test_record_links_to_filtered_product_page_when_id_known():
+    """prices.usd is the non-foil market price — the link must open the
+    Normal-finish listing view, not the foil-mixed default page."""
+    page = {
+        "data": [{
+            "name": "Foo",
+            "set": "mh3",
+            "prices": {"usd": "2.92"},
+            "tcgplayer_id": 552336,
+            "purchase_uris": {"tcgplayer": "https://partner.tcgplayer.example/affiliate"},
+        }],
+        "has_more": False,
+    }
+    [r] = records_from_pages([page], "Foo", fx_jpy_per_usd=150.0)
+    assert r["link"] == (
+        "https://www.tcgplayer.com/product/552336?Language=English&Printing=Normal"
+    )
 
 
 def test_parse_handcrafted_fx_conversion():
@@ -73,11 +106,11 @@ def test_parse_handcrafted_fx_conversion():
         ],
         "has_more": False,
     }
-    records = parse_search_response([page], "Foo", fx_jpy_per_usd=150.0)
+    records = records_from_pages([page], "Foo", fx_jpy_per_usd=150.0)
     assert len(records) == 1
     r = records[0]
     assert r == {
-        "shop": "TCGPlayer (Scryfall)",
+        "shop": "TCGPlayer market",
         "card": "Foo",
         "set": "BAR",
         "price_jpy": 7500.0,
@@ -101,5 +134,43 @@ def test_parse_concatenates_multiple_pages():
         ],
         "has_more": False,
     }
-    records = parse_search_response([page1, page2], "Foo", fx_jpy_per_usd=100.0)
+    records = records_from_pages([page1, page2], "Foo", fx_jpy_per_usd=100.0)
     assert [r["set"] for r in records] == ["A", "B"]
+
+
+@pytest.fixture
+def clean_memo():
+    scryfall._summaries_cache.clear()
+    scryfall._summaries_locks.clear()
+    yield
+    scryfall._summaries_cache.clear()
+    scryfall._summaries_locks.clear()
+
+
+def test_fetch_card_summaries_memoizes_shared_session(monkeypatch, clean_memo):
+    """Both TCGPlayer shops resolve the same card per search; the memo must
+    collapse that into one Scryfall walk (keyed on the normalized name)."""
+    calls: list[str] = []
+    monkeypatch.setattr(
+        scryfall, "_walk_summaries",
+        lambda name, session: calls.append(name) or [{"name": name}],
+    )
+    first = scryfall.fetch_card_summaries("Foo Bar")
+    second = scryfall.fetch_card_summaries("  foo   bar ")
+    assert first == second == [{"name": "Foo Bar"}]
+    assert calls == ["Foo Bar"]
+
+
+def test_fetch_card_summaries_custom_session_bypasses_memo(monkeypatch, clean_memo):
+    """Injected sessions (tests, error-path probes) must never read or
+    populate the shared memo."""
+    calls: list[str] = []
+    monkeypatch.setattr(
+        scryfall, "_walk_summaries",
+        lambda name, session: calls.append(name) or [],
+    )
+    sentinel_session = object()
+    scryfall.fetch_card_summaries("Foo", sentinel_session)
+    scryfall.fetch_card_summaries("Foo", sentinel_session)
+    assert calls == ["Foo", "Foo"]
+    assert scryfall._summaries_cache == {}

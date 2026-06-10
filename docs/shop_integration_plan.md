@@ -14,6 +14,7 @@ The candidate list comes from the shops that **Wisdom Guild's WONDER** price agg
 - BLACK FROG (`mtgcompare/scrapers/blackfrog.py`) — first ColorMe-platform shop (~119k indexed); legacy `/shop/shopbrand.html?search=…` URL, EUC-JP encoded
 - MINT MALL (`mtgcompare/scrapers/mintmall.py`) — multi-tenant ec-cube marketplace (~90k indexed); per-spec stock + price come from a `specificationTreeSearchProductsTree` JS const, not the listing markup
 - TokyoMTG (`mtgcompare/scrapers/tokyomtg.py`) — *not on the WONDER list, separate integration*
+- TCGPlayer market (`mtgcompare/scrapers/scryfall.py`) + TCGPlayer → JP (`mtgcompare/scrapers/tcgplayer.py`) — *US, not on the WONDER list, separate integrations.* The first reports Scryfall's TCGPlayer market price (reference only); the second finds the cheapest NM/LP offers that ship to Japan via the undocumented `mp-search-api` listings endpoint, carrying each offer's real shipping as `ship_jpy` (`marketplace=True` in the registry → excluded from decklist totals).
 
 **Skipped (data quality):**
 
@@ -209,6 +210,8 @@ Revised after the 2026-05-26 volume probe (see "Measured volume" above).
 ## Notes for whoever picks this up
 
 - Most Japanese shops list cards as `【英語版】<JP name>/<EN name> [<SET>-<color/rarity>]`. The `_clean_english_name` regex pattern in `singlestar.py:46` is a good starting point.
+- Every new shop gets a canary entry in `tests/test_canary.py` (daily HTML/API drift detection) — part of the definition of done.
+- Shops whose offers carry per-seller shipping (marketplace model, e.g. TCGPlayer → JP) set `marketplace=True` in `registry._SHOPS` and emit per-offer `ship_jpy` on each record. That one flag excludes them from decklist totals, pins their flat shipping to ¥0, and hides their shipping-override row in the UI.
 - Currency: all shops price in JPY; the existing `utils.get_fx("jpy")` path is reused.
 - Condition: most shops only sell NM English; a few (Toretoku, Cardrush) grade S/A/B/C/D — decide whether to filter to NM or surface grade in records.
 - Cloudflare-gated shops have separate considerations for *bulk* indexing (see "Scrape-on-search vs daily bulk" below).

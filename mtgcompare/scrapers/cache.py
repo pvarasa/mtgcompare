@@ -120,22 +120,30 @@ def read_listings(conn, shop: str, card_name: str) -> list[dict]:
     rows = conn.execute(
         text(
             "SELECT card_display, set_code, condition,"
-            "       price_jpy, price_usd, stock, url"
+            "       price_jpy, price_usd, ship_jpy, stock, url"
             " FROM shop_listings"
             " WHERE shop = :shop AND card_name = :card"
         ),
         {"shop": shop, "card": card_name},
     ).fetchall()
-    return [{
-        "shop": shop,
-        "card": r[0],
-        "set": r[1],
-        "condition": r[2],
-        "price_jpy": float(r[3]),
-        "price_usd": float(r[4]) if r[4] is not None else None,
-        "stock": int(r[5]) if r[5] is not None else None,
-        "link": r[6],
-    } for r in rows]
+    out = []
+    for r in rows:
+        record = {
+            "shop": shop,
+            "card": r[0],
+            "set": r[1],
+            "condition": r[2],
+            "price_jpy": float(r[3]),
+            "price_usd": float(r[4]) if r[4] is not None else None,
+            "stock": int(r[6]) if r[6] is not None else None,
+            "link": r[7],
+        }
+        # Only marketplace records carry per-offer shipping; mirror the
+        # fresh-scrape shape by omitting the key entirely otherwise.
+        if r[5] is not None:
+            record["ship_jpy"] = float(r[5])
+        out.append(record)
+    return out
 
 
 def replace_listings(
@@ -167,6 +175,7 @@ def replace_listings(
         "condition": r.get("condition") or "NM",
         "price_jpy": r["price_jpy"],
         "price_usd": r.get("price_usd"),
+        "ship_jpy": r.get("ship_jpy"),
         "stock": r.get("stock"),
         "url": r.get("link"),
         "last_checked": timestamp,

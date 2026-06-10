@@ -177,6 +177,9 @@ _shop_listings = Table(
     Column("condition", Text, nullable=False, server_default="NM"),
     Column("price_jpy", Numeric(12, 2), nullable=False),
     Column("price_usd", Numeric(12, 2)),
+    # Per-offer seller shipping (marketplace shops). NULL means "no
+    # per-offer shipping known — use the flat per-shop estimate".
+    Column("ship_jpy", Numeric(12, 2)),
     Column("stock", Integer),
     Column("url", Text),
     Column("last_checked", DateTime(timezone=True), nullable=False),
@@ -276,11 +279,26 @@ def _migrate(conn) -> None:
                     f"ALTER TABLE {table} ALTER COLUMN uuid TYPE UUID USING uuid::UUID"
                 ))
 
+        exists = conn.execute(text("""
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'shop_listings' AND column_name = 'ship_jpy'
+        """)).fetchone()
+        if not exists:
+            conn.execute(text(
+                "ALTER TABLE shop_listings ADD COLUMN ship_jpy NUMERIC(12,2)"
+            ))
+
     else:
         cols = {r[1] for r in conn.execute(text("PRAGMA table_info(inventory)")).fetchall()}
         if "user_id" not in cols:
             conn.execute(text(
                 "ALTER TABLE inventory ADD COLUMN user_id TEXT NOT NULL DEFAULT 'local'"
+            ))
+
+        cols = {r[1] for r in conn.execute(text("PRAGMA table_info(shop_listings)")).fetchall()}
+        if "ship_jpy" not in cols:
+            conn.execute(text(
+                "ALTER TABLE shop_listings ADD COLUMN ship_jpy NUMERIC(12,2)"
             ))
 
 

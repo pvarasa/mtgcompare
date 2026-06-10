@@ -31,6 +31,7 @@ import re
 from time import monotonic
 from typing import ClassVar
 
+import orjson
 import requests
 from requests.adapters import HTTPAdapter
 
@@ -70,6 +71,27 @@ class RateLimitedError(ScraperFetchError):
     "the fetch failed, don't cache" can ignore the distinction, while
     rate-limiter logic can pattern-match on the type.
     """
+
+
+def raise_for_response(resp: requests.Response, shop: str) -> None:
+    """Shared transport-status policy: 429 → RateLimitedError, any other
+    4xx/5xx → ScraperFetchError. Shop-specific statuses (Scryfall's
+    404-means-no-match, TCGPlayer's 403 bot wall) are handled by callers
+    before delegating here."""
+    if resp.status_code == 429:
+        raise RateLimitedError(f"{shop} returned 429 — being rate-limited")
+    if resp.status_code >= 400:
+        raise ScraperFetchError(f"{shop} HTTP {resp.status_code}")
+
+
+def decode_json_response(resp: requests.Response, shop: str) -> dict:
+    """Decode a JSON response body or raise ScraperFetchError."""
+    try:
+        # orjson is ~2-3× faster than stdlib json and feeds bytes
+        # directly (no Python str copy of the body).
+        return orjson.loads(resp.content)
+    except orjson.JSONDecodeError as e:
+        raise ScraperFetchError(f"{shop} JSON decode failed: {e}") from e
 
 
 def make_session(extra_headers: dict | None = None) -> requests.Session:
@@ -168,12 +190,5 @@ class HtmlSearchScrapper(MtgScrapper):
         except requests.RequestException as e:
             raise ScraperFetchError(f"{self.SHOP_NAME} fetch failed: {e}") from e
 
-        if resp.status_code == 429:
-            raise RateLimitedError(
-                f"{self.SHOP_NAME} returned 429 — being rate-limited"
-            )
-        if resp.status_code >= 400:
-            raise ScraperFetchError(
-                f"{self.SHOP_NAME} HTTP {resp.status_code}"
-            )
+        raise_for_response(resp, self.SHOP_NAME)
         return self.decode_response(resp)

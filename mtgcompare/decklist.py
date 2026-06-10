@@ -29,7 +29,12 @@ from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
-from .scrapers.registry import SHIPPING_JPY, collect_prices
+from .scrapers.registry import (
+    ACTIVE_SHOPS,
+    MARKETPLACE_SHOPS,
+    SHIPPING_JPY,
+    collect_prices,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +69,17 @@ _BASIC_LANDS = frozenset({
 
 def is_basic_land(name: str) -> bool:
     return name.strip().lower() in _BASIC_LANDS
+
+
+def effective_search_shops(enabled_shops: set[str] | None) -> set[str]:
+    """Shops a decklist fan-out actually queries.
+
+    Marketplace shops are dropped even when the form selected them: their
+    per-card landed prices (item + that seller's shipping) don't sum to
+    an order total. ``None`` means the default "all shops on" search.
+    """
+    base = set(ACTIVE_SHOPS) if enabled_shops is None else enabled_shops
+    return base - MARKETPLACE_SHOPS
 
 
 def strip_basic_lands(
@@ -150,7 +166,8 @@ def iter_decklist_prices(
     """
     if not names_to_search:
         return
-    shops_count = len(enabled_shops) if enabled_shops is not None else "all"
+    enabled_shops = effective_search_shops(enabled_shops)
+    shops_count = len(enabled_shops)
     workers = min(len(names_to_search), DECKLIST_FAN_OUT_WORKERS)
     with ThreadPoolExecutor(max_workers=workers) as executor:
         future_to_name = {

@@ -16,6 +16,7 @@ from mtgcompare.scrapers.mintmall import MintMallScrapper
 from mtgcompare.scrapers.scryfall import ScryfallScrapper
 from mtgcompare.scrapers.serra import CardshopSerraScrapper
 from mtgcompare.scrapers.singlestar import SingleStarScrapper
+from mtgcompare.scrapers.tcgplayer import TcgPlayerJpScrapper
 from mtgcompare.scrapers.tokyomtg import TokyoMtgScrapper
 from mtgcompare.utils import get_fx
 
@@ -38,7 +39,8 @@ _SHOPS = [
     pytest.param(EnndalGamesScrapper,     "ENNDAL GAMES",        "https://www.enndalgames.com/", id="enndal"),
     pytest.param(BlackFrogScrapper,       "BLACK FROG",          "https://blackfrog.jp/",        id="blackfrog"),
     pytest.param(MintMallScrapper,        "MINT MALL",           "https://www.mint-mall.net/",   id="mintmall"),
-    pytest.param(ScryfallScrapper,        "TCGPlayer (Scryfall)", "http",                         id="scryfall"),
+    pytest.param(ScryfallScrapper,        "TCGPlayer market",    "http",                         id="scryfall"),
+    pytest.param(TcgPlayerJpScrapper,     "TCGPlayer → JP",      "https://www.tcgplayer.com/product/", id="tcgplayer_jp"),
 ]
 
 

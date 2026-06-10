@@ -13,6 +13,7 @@ from .mintmall import MintMallScrapper
 from .scryfall import ScryfallScrapper
 from .serra import CardshopSerraScrapper
 from .singlestar import SingleStarScrapper
+from .tcgplayer import TcgPlayerJpScrapper
 from .tokyomtg import TokyoMtgScrapper
 
 _JP_FLAG = "\U0001F1EF\U0001F1F5"
@@ -28,19 +29,29 @@ _DEFAULT_INTL_SHIPPING = 2000
 
 
 # Single source of truth: every known shop with its display flag, default
-# shipping cost, enabled flag, and scraper factory. Derived dicts/lists
-# below stay in sync automatically — adding or disabling a shop is a one-
-# line edit here.
-_SHOPS: list[tuple[str, str, int, bool, Callable[[float], MtgScrapper]]] = [
-    # (display_name, flag, shipping_jpy, enabled, factory)
-    ("Hareruya",             _JP_FLAG, _DEFAULT_JP_SHIPPING,   True,  lambda fx: HareruyaScrapper(fx=fx)),
-    ("TCGPlayer (Scryfall)", _US_FLAG, _DEFAULT_INTL_SHIPPING, True,  lambda fx: ScryfallScrapper(fx=fx)),
-    ("SingleStar",           _JP_FLAG, _DEFAULT_JP_SHIPPING,   True,  lambda fx: SingleStarScrapper(fx=fx)),
-    ("TokyoMTG",             _JP_FLAG, _DEFAULT_JP_SHIPPING,   True,  lambda fx: TokyoMtgScrapper(fx=fx)),
-    ("Card Rush",            _JP_FLAG, _DEFAULT_JP_SHIPPING,   True,  lambda fx: CardRushScrapper(fx=fx)),
-    ("Cardshop Serra",       _JP_FLAG, _DEFAULT_JP_SHIPPING,   True,  lambda fx: CardshopSerraScrapper(fx=fx)),
-    ("BLACK FROG",           _JP_FLAG, _DEFAULT_JP_SHIPPING,   True,  lambda fx: BlackFrogScrapper(fx=fx)),
-    ("MINT MALL",            _JP_FLAG, _DEFAULT_JP_SHIPPING,   True,  lambda fx: MintMallScrapper(fx=fx)),
+# shipping cost, enabled flag, marketplace flag, and scraper factory.
+# Derived dicts/lists below stay in sync automatically — adding or
+# disabling a shop is a one-line edit here.
+#
+# marketplace=True marks shops whose records carry the offer's own
+# seller shipping as ship_jpy (the include-shipping sort uses it instead
+# of a flat per-shop estimate, so their flat shipping stays ¥0 and is
+# never user-editable), and whose per-offer shipping doesn't sum to an
+# order total (so decklist pricing skips them).
+_SHOPS: list[tuple[str, str, int, bool, bool, Callable[[float], MtgScrapper]]] = [
+    # (display_name, flag, shipping_jpy, enabled, marketplace, factory)
+    ("Hareruya",             _JP_FLAG, _DEFAULT_JP_SHIPPING,   True,  False, lambda fx: HareruyaScrapper(fx=fx)),
+    # Renamed from "TCGPlayer (Scryfall)" in v1.9 — shop_listings /
+    # shop_query_log rows under the old name are inert and can be purged.
+    ("TCGPlayer market",     _US_FLAG, _DEFAULT_INTL_SHIPPING, True,  False, lambda fx: ScryfallScrapper(fx=fx)),
+    # Cheapest listing that actually ships to Japan.
+    ("TCGPlayer → JP",       _US_FLAG, 0,                      True,  True,  lambda fx: TcgPlayerJpScrapper(fx=fx)),
+    ("SingleStar",           _JP_FLAG, _DEFAULT_JP_SHIPPING,   True,  False, lambda fx: SingleStarScrapper(fx=fx)),
+    ("TokyoMTG",             _JP_FLAG, _DEFAULT_JP_SHIPPING,   True,  False, lambda fx: TokyoMtgScrapper(fx=fx)),
+    ("Card Rush",            _JP_FLAG, _DEFAULT_JP_SHIPPING,   True,  False, lambda fx: CardRushScrapper(fx=fx)),
+    ("Cardshop Serra",       _JP_FLAG, _DEFAULT_JP_SHIPPING,   True,  False, lambda fx: CardshopSerraScrapper(fx=fx)),
+    ("BLACK FROG",           _JP_FLAG, _DEFAULT_JP_SHIPPING,   True,  False, lambda fx: BlackFrogScrapper(fx=fx)),
+    ("MINT MALL",            _JP_FLAG, _DEFAULT_JP_SHIPPING,   True,  False, lambda fx: MintMallScrapper(fx=fx)),
     # ENNDAL GAMES still disabled. Public resolvers recovered on 2026-05-26
     # (dig +short www.enndalgames.com @8.8.8.8 → 13.159.57.5 / 52.193.201.15),
     # but the *cluster's* upstream DNS still can't resolve www — an in-pod
@@ -50,18 +61,24 @@ _SHOPS: list[tuple[str, str, int, bool, Callable[[float], MtgScrapper]]] = [
     # log fast NameResolutionErrors and contribute nothing. Re-enable only
     # once `kubectl -n apps exec <pod> -- python -c
     # "import socket; socket.gethostbyname('www.enndalgames.com')"` succeeds.
-    ("ENNDAL GAMES",         _JP_FLAG, _DEFAULT_JP_SHIPPING,   False, lambda fx: EnndalGamesScrapper(fx=fx)),
+    ("ENNDAL GAMES",         _JP_FLAG, _DEFAULT_JP_SHIPPING,   False, False, lambda fx: EnndalGamesScrapper(fx=fx)),
 ]
 
 
 # All known shops keep entries in SHOP_FLAGS / SHIPPING_JPY (incl. disabled
 # ones) so cached or in-flight rows for a shop that has just been turned
 # off still render an emoji and can be re-enabled without a UI gap.
-SHOP_FLAGS: dict[str, str] = {name: flag for name, flag, _, _, _ in _SHOPS}
-SHIPPING_JPY: dict[str, int] = {name: ship for name, _, ship, _, _ in _SHOPS}
+SHOP_FLAGS: dict[str, str] = {name: flag for name, flag, _, _, _, _ in _SHOPS}
+SHIPPING_JPY: dict[str, int] = {name: ship for name, _, ship, _, _, _ in _SHOPS}
 
 # Active set drives the filter checkboxes and which scrapers actually run.
-ACTIVE_SHOPS: list[str] = [name for name, _, _, enabled, _ in _SHOPS if enabled]
+ACTIVE_SHOPS: list[str] = [name for name, _, _, enabled, _, _ in _SHOPS if enabled]
+
+# See the marketplace column above: ¥0-pinned shipping (already in the
+# price) + excluded from decklist pricing.
+MARKETPLACE_SHOPS: frozenset[str] = frozenset(
+    name for name, _, _, _, marketplace, _ in _SHOPS if marketplace
+)
 
 
 def shop_slug(name: str) -> str:
@@ -91,7 +108,7 @@ def build_scrapers(fx: float, enabled: set[str] | None = None) -> list:
     """
     raw = [
         (name, factory(fx))
-        for name, _flag, _ship, is_enabled, factory in _SHOPS
+        for name, _flag, _ship, is_enabled, _marketplace, factory in _SHOPS
         if is_enabled and (enabled is None or name in enabled)
     ]
     if not CACHE_ENABLED:

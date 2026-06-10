@@ -92,6 +92,22 @@ class TestStorage:
         prices = {r["set"]: r["price_jpy"] for r in rows_out}
         assert prices == {"2X2": 200.0, "MMQ": 180.0}
 
+    def test_ship_jpy_round_trips_only_when_present(self, test_db):
+        """Marketplace rows carry per-offer shipping; the cache must hand
+        it back, and must omit the key for everyone else so cached and
+        fresh records look identical."""
+        rows_in = [
+            {**_record(set_code="2X2"), "ship_jpy": 299.0},
+            _record(set_code="MMQ"),
+        ]
+        with test_db.get_conn() as conn:
+            replace_listings(conn, "FakeShop", "lightning bolt", rows_in)
+        with test_db.get_conn() as conn:
+            rows_out = read_listings(conn, "FakeShop", "lightning bolt")
+        by_set = {r["set"]: r for r in rows_out}
+        assert by_set["2X2"]["ship_jpy"] == 299.0
+        assert "ship_jpy" not in by_set["MMQ"]
+
     def test_replace_evicts_old_rows(self, test_db):
         with test_db.get_conn() as conn:
             replace_listings(conn, "FakeShop", "lightning bolt",

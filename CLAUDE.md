@@ -30,9 +30,11 @@ Repo-specific guidance for coding sessions.
   - `run_log.py` — bookkeeping for daily price-update runs (`price_update_runs`).
 - `mtgcompare/scrapers/`
   Scraper stack. `base.py` (the `MtgScrapper` ABC), `html_base.py`
-  (`HtmlSearchScrapper` convention base), `cache.py` (`CachedScrapper`
-  DB-cache wrapper), `registry.py` (shop registry + parallel
-  `collect_prices()` fan-out), and one module per shop.
+  (`HtmlSearchScrapper` convention base, plus the shared `make_session` /
+  `raise_for_response` / `decode_json_response` helpers the JSON scrapers
+  also use), `cache.py` (`CachedScrapper` DB-cache wrapper), `registry.py`
+  (shop registry incl. the `marketplace` flag + parallel `collect_prices()`
+  fan-out), and one module per shop.
 - `mtgcompare/inventory.py`
   Inventory storage and inventory CLI. All public functions accept a `user_id` parameter.
 - `mtgcompare/compare.py`
@@ -129,6 +131,26 @@ The `users` table is keyed on `workos_user_id`; inventory rows continue to key o
 
 - The Search page supports both single-card search and decklist search.
 - Single-card search can optionally include per-shop shipping overrides in sort order.
+- TCGPlayer appears as two shops: **TCGPlayer market** (Scryfall's `prices.usd`,
+  a US-centric reference price — not a purchasable offer) and **TCGPlayer → JP**
+  (`scrapers/tcgplayer.py`, the cheapest NM/LP English offers that ship to
+  Japan via the undocumented `mp-search-api` listings endpoint — the scraper
+  emits/caches up to two offers per printing, cheapest by item price and
+  cheapest by landed total, and `web._collapse_marketplace_offers` renders only
+  the active sort mode's winner so the shipping-off view never reflects
+  shipping). `price_jpy` is the item price like every other shop; the offer's
+  own seller shipping rides along as `ship_jpy` (persisted in
+  `shop_listings.ship_jpy`).
+  Both shops resolve printings through the same memoized Scryfall lookup
+  (`scryfall.fetch_card_summaries`) so one search costs one Scryfall pagination.
+- The `marketplace` flag in `registry._SHOPS` (derived set: `MARKETPLACE_SHOPS`)
+  marks shops whose records carry per-offer `ship_jpy`. Consequences, all
+  driven from that one flag: decklist pricing skips them
+  (`decklist.effective_search_shops`), `_shipping_config` never renders an
+  editable shipping override for them, the include-shipping sort
+  (`web._apply_shipping`) uses each row's own `ship_jpy` instead of a flat
+  estimate, and the decklist form hides their shop-filter checkbox via the
+  `marketplace_shops` Jinja global.
 - Market prices are cached in the `market_prices` table (global, not per-user).
 - The Market page does not fetch live prices on GET. Prices are populated via **Update prices** (`POST /market/history/download`), which downloads MTGJSON history and writes the latest price per mapped lot into `market_prices` as a side effect (`pricing.populate_market_prices_from_history`).
 - There is no separate Scryfall refresh; prices come from MTGJSON/TCGPlayer daily data.

@@ -68,7 +68,8 @@ Your inventory is stored in `~/Library/Application Support/mtgcompare/inventory.
 | MINT MALL | 🇯🇵 JP | Price + stock (multi-tenant marketplace) |
 | SingleStar | 🇯🇵 JP | Price + stock |
 | TokyoMTG | 🇯🇵 JP | Price + stock |
-| TCGPlayer (via Scryfall) | 🇺🇸 US | Market price (stock not available) |
+| TCGPlayer market (via Scryfall) | 🇺🇸 US | Market price (stock not available) |
+| TCGPlayer → JP | 🇺🇸 US | Cheapest NM/LP offers that ship to Japan — item price shown; each offer's real shipping is applied when *Include shipping* is on (single-card search only) |
 
 Prices are shown in both ¥ and $ using a live FX rate fetched at startup. Results are scoped to English printings.
 
@@ -148,14 +149,14 @@ uv run python -m mtgcompare.inventory stats
 
 ```json
 {
-  "shop": "TCGPlayer (Scryfall)",
+  "shop": "TCGPlayer market",
   "card": "Force of Will",
   "set": "SOA",
   "price_jpy": 10605.15,
   "price_usd": 66.65,
   "stock": null,
   "condition": "NM",
-  "link": "https://partner.tcgplayer.com/..."
+  "link": "https://www.tcgplayer.com/product/...?Language=English&Printing=Normal"
 }
 ```
 
@@ -197,9 +198,9 @@ mtgcompare/
     run_log.py        daily price-update run bookkeeping
   scrapers/       Scraper stack
     base.py           MtgScrapper ABC
-    html_base.py      HtmlSearchScrapper convention base
+    html_base.py      HtmlSearchScrapper convention base + shared session/error/JSON helpers
     cache.py          CachedScrapper DB-cache wrapper
-    registry.py       shop registry + collect_prices()
+    registry.py       shop registry (incl. marketplace flag) + collect_prices()
     <shop>.py         per-shop implementations
   inventory.py    Inventory storage + CSV import (per-user scoping)
   auth.py         WorkOS AuthKit Blueprint (auth gate + login/callback/logout/me + webhook)
@@ -218,7 +219,7 @@ docker-compose.yml  Local dev stack (app + postgres)
 
 - FX is fetched once from `yfinance` and cached for the process lifetime.
 - Card matching is case-insensitive exact match — fuzzy matching is not supported.
-- Scryfall's USD price reflects TCGPlayer market price, not the cheapest individual listing.
+- Scryfall's USD price reflects TCGPlayer market price, not the cheapest individual listing; the **TCGPlayer → JP** shop covers the listing side, but only for single-card search — marketplace per-card shipping doesn't sum into decklist totals.
 - Shipping is a per-order flat estimate, not a live checkout quote.
 - Tax, import duties, and cross-shop order splitting are not modeled.
 - Cached prices age out after 24 h, but FX drift inside that window can introduce 1–2 % error on the USD column. The JPY column is always exactly what the shop charged at scrape time.

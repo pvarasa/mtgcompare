@@ -42,7 +42,14 @@ from .log_context import (
     install_record_factory,
 )
 from .pricing import market_repo, meta, run_log
-from .scrapers.registry import ACTIVE_SHOPS, SHIPPING_JPY, SHOP_FLAGS, collect_prices, shop_slug
+from .scrapers.registry import (
+    ACTIVE_SHOPS,
+    MARKETPLACE_SHOPS,
+    SHIPPING_JPY,
+    SHOP_FLAGS,
+    collect_prices,
+    shop_slug,
+)
 from .utils import get_fx
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -252,6 +259,12 @@ def _inject_current_user():
     }
 
 
+# Marketplace shops are skipped by decklist pricing (see registry), so the
+# decklist form hides their shop-filter checkbox. (Their shipping-override
+# rows are already absent everywhere via _shipping_config.)
+app.jinja_env.globals["marketplace_shops"] = MARKETPLACE_SHOPS
+
+
 def _render_error(code: int, title: str, message: str):
     """Render the branded error template. Falls back to plain text if the
     template itself somehow fails (e.g. base.html context processor blew
@@ -382,6 +395,53 @@ def _shop_filter_config(enabled: set[str] | None) -> list[dict]:
     ]
 
 
+def _landed_jpy(r: dict) -> float:
+    """Item price plus the row's own shipping (0 when unknown/absent)."""
+    return r["price_jpy"] + (r.get("ship_jpy") or 0)
+
+
+def _collapse_marketplace_offers(
+    results: list[dict],
+    include_shipping: bool,
+) -> list[dict]:
+    """Show one marketplace row per (shop, card, set): the active sort
+    mode's winner.
+
+    Marketplace scrapers emit both the cheapest-by-item-price and the
+    cheapest-by-landed-total offer, because each sort mode has a
+    different true cheapest. Rendering both at once reads as duplicate
+    rows — and with the shipping toggle off, the landed-cost row would
+    leak shipping into a view that promised not to consider it.
+    """
+    metric = _landed_jpy if include_shipping else (lambda r: r["price_jpy"])
+
+    kept: list[dict] = []
+    winners: dict[tuple, dict] = {}
+    for r in results:
+        if r["shop"] not in MARKETPLACE_SHOPS:
+            kept.append(r)
+            continue
+        key = (r["shop"], r["card"], r["set"])
+        current = winners.get(key)
+        if current is None or metric(r) < metric(current):
+            winners[key] = r
+    kept.extend(winners.values())
+    return kept
+
+
+def _apply_shipping(results: list[dict], overrides_jpy: dict[str, int]) -> None:
+    """Fill per-row shipping, compute the landed total, sort by it.
+
+    Marketplace rows arrive with their offer's real ``ship_jpy``;
+    every other row gets the flat per-shop estimate.
+    """
+    for r in results:
+        if r.get("ship_jpy") is None:
+            r["ship_jpy"] = overrides_jpy.get(r["shop"], 0)
+        r["price_jpy_with_shipping"] = _landed_jpy(r)
+    results.sort(key=lambda r: r["price_jpy_with_shipping"])
+
+
 @app.route("/")
 def index():
     q = request.args.get("q", "").strip()
@@ -394,6 +454,7 @@ def index():
 
     results: list[dict] = []
     error: str | None = None
+    timed_out_shops: set[str] = set()
 
     if q:
         t0 = monotonic()
@@ -401,20 +462,22 @@ def index():
         if fx is None:
             error = "Could not fetch FX rate; try again later."
         else:
-            results = collect_prices(q, fx, enabled=enabled_shops, logger=app.logger)
+            results = collect_prices(
+                q, fx, enabled=enabled_shops, logger=app.logger,
+                timeouts_out=timed_out_shops,
+            )
+            results = _collapse_marketplace_offers(results, include_shipping)
             if include_shipping:
-                for r in results:
-                    r["ship_jpy"] = shipping_overrides_jpy.get(r["shop"], 0)
-                    r["price_jpy_with_shipping"] = r["price_jpy"] + r["ship_jpy"]
-                results.sort(key=lambda r: r["price_jpy_with_shipping"])
+                _apply_shipping(results, shipping_overrides_jpy)
             else:
                 results.sort(key=lambda r: r["price_jpy"])
         app.logger.info(
             "event=search_query q=%r shops_enabled=%s include_shipping=%d "
-            "result_count=%d duration_ms=%d",
+            "result_count=%d timed_out_shops=%s duration_ms=%d",
             q,
             len(enabled_shops) if enabled_shops is not None else "all",
             int(include_shipping), len(results),
+            ",".join(sorted(timed_out_shops)) or "none",
             int((monotonic() - t0) * 1000),
         )
 
@@ -429,12 +492,17 @@ def index():
         include_shipping=include_shipping,
         shop_filter_config=shop_filter_cfg,
         shop_filter_active=shop_filter_active,
+        timed_out_shops=sorted(timed_out_shops),
         active="search",
     )
 
 
 def _shipping_config(overrides_jpy: dict | None = None) -> list[dict]:
-    """Build the per-shop shipping config list passed to templates."""
+    """Build the per-shop shipping config list passed to templates.
+
+    Marketplace shops never appear: their seller shipping is already in
+    the price, so an editable flat override would double count.
+    """
     return [
         {
             "shop": shop,
@@ -442,6 +510,7 @@ def _shipping_config(overrides_jpy: dict | None = None) -> list[dict]:
             "cost_jpy": int((overrides_jpy or {}).get(shop, SHIPPING_JPY.get(shop, 0))),
         }
         for shop in SHIPPING_JPY
+        if shop not in MARKETPLACE_SHOPS
     ]
 
 
@@ -577,7 +646,7 @@ def decklist_search():
         "names_searched=%d inventory_hits=%d shops_enabled=%s use_inventory=%d "
         "rows_with_match=%d skipped_basics=%d timed_out_shops=%s duration_ms=%d",
         total_cards, len(name_qty), len(names_to_search), inventory_hits,
-        len(enabled_shops) if enabled_shops is not None else "all",
+        len(decklist.effective_search_shops(enabled_shops)),
         int(use_inventory), rows_with_match, skipped_basics,
         ",".join(timed_out_sorted) or "none",
         int((monotonic() - t0) * 1000),
@@ -769,7 +838,7 @@ def _produce_decklist_events(prep: decklist.DecklistPrep, q: queue.Queue) -> Non
             "rows_with_match=%d skipped_basics=%d timed_out_shops=%s "
             "transport=sse duration_ms=%d",
             prep.total_cards, len(prep.name_qty), len(prep.names_to_search), prep.inventory_hits,
-            len(prep.enabled_shops) if prep.enabled_shops is not None else "all",
+            len(decklist.effective_search_shops(prep.enabled_shops)),
             int(prep.use_inventory), rows_with_match, prep.skipped_basics,
             ",".join(sorted(timed_out)) or "none",
             duration_ms,
