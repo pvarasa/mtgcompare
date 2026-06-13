@@ -114,7 +114,11 @@ class PostgresPriceStore(PriceHistoryStore):
         # A (uuid, finish, qty) VALUES list joined onto price_rows, so the
         # weighted sum happens in-engine. The first VALUES row carries casts
         # (price_rows.uuid is UUID); the rest inherit those column types.
-        values_rows, params = [], {"uuids": sorted({uuid for uuid, _f, _q in weights})}
+        values_rows: list[str] = []
+        # Mixed value types (the uuid-array param plus per-row str/int binds),
+        # so annotate explicitly — otherwise the initializer pins params to
+        # dict[str, list[str]] and the str/int binds below fail type-checking.
+        params: dict[str, object] = {"uuids": sorted({uuid for uuid, _f, _q in weights})}
         for i, (uuid, finish, qty) in enumerate(weights):
             if i == 0:
                 values_rows.append(f"(CAST(:u{i} AS uuid), CAST(:f{i} AS text), CAST(:q{i} AS integer))")

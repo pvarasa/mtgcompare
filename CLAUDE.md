@@ -266,12 +266,18 @@ The `users` table is keyed on `workos_user_id`; inventory rows continue to key o
 
 - Always ask for confirmation before running `git commit` or `git push`.
 - **Always run static analysis and tests locally before every commit
-  and every push** — don't rely on CI to catch what `ruff` and
-  `pytest` would catch on this machine in a few seconds. Concretely:
-  `uv run pytest -q` (must pass) and `uv run ruff check` (must be
-  clean). CI is the safety net, not the first detector — a failed CI
-  run after push wastes a release cycle and forces a re-tag if a tag
-  has already been pushed.
+  and every push** — don't rely on CI to catch what runs on this
+  machine in a few seconds. CI runs four gates; mirror all of them:
+  `uv run pytest -q` (must pass), `uv run ruff check` (must be clean),
+  and `uv run pyright` (must be clean — the `typecheck` job; a missed
+  type error here failed CI for v1.10.1). The fourth gate is `e2e`,
+  which is slower; the first three are the fast pre-commit musts.
+  Note: a bare `uv run pyright` locally also flags `launcher.py`'s
+  `pystray`/`PIL` imports unless the `desktop` group is synced — CI
+  installs it, so those two are environment noise, not real errors.
+  CI is the safety net, not the first detector — a failed CI run after
+  push wastes a release cycle and forces a re-tag if a tag has already
+  been pushed.
 
 ## What "ship" means
 
@@ -280,6 +286,7 @@ they mean run the **full release pipeline end-to-end**, in this order:
 
 1. **Confirm tests pass** — `uv run pytest` clean.
 2. **Confirm lint passes** — `uv run ruff check mtgcompare/ tests/` clean.
+   **and types** — `uv run pyright` clean (CI's `typecheck` job).
 3. **Commit** with a message that explains the *why*.
 4. **Push** to `origin/master`.
 5. **Tag** the next semver version (`vX.Y.Z`) and push the tag — this
