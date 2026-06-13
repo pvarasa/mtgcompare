@@ -173,6 +173,7 @@ The `users` table is keyed on `workos_user_id`; inventory rows continue to key o
 - Full rebuild: `history_import.rebuild_history_pg()` — detects empty table and uses direct COPY (fastest path); subsequent runs use temp-table upsert.
 - Incremental update: `history_import.merge_today_prices_pg()` — always uses temp-table upsert.
 - `pricing.has_price_history()` checks `price_rows` row count instead of DuckDB file existence.
+- **Portfolio-query performance** depends on three things together (any one missing → the planner falls back to a seq-scan of the whole ~19M-row table, seconds per query): (1) the covering index `price_rows_covering (uuid, finish, market_date) INCLUDE (price_usd)` in `db.py` — `INCLUDE` keeps `price_usd` in the leaf so the value query is an *index-only* scan; (2) the `WHERE uuid = ANY(:uuids)` predicate in `PostgresPriceStore.portfolio_value_series` (logically redundant with the join, but it's the sargable condition the planner needs to choose the index); (3) `VACUUM (ANALYZE) price_rows` after every rebuild/merge (`_vacuum_analyze_price_rows`) so the visibility map is set — without it the index-only scan still does heap fetches. With all three, a 3000-lot portfolio is ~0.5 s instead of ~7 s.
 
 ### Shared
 

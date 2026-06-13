@@ -419,6 +419,25 @@ def _csv_to_postgres(csv_path: Path, engine, *, initial: bool) -> None:
     )
 
 
+def _vacuum_analyze_price_rows(engine) -> None:
+    """VACUUM (ANALYZE) price_rows after a bulk load.
+
+    Sets the visibility map so the ``price_rows_covering`` index can serve
+    index-only scans with zero heap fetches (the portfolio value query is
+    ~10x slower without this) and refreshes planner stats. VACUUM cannot run
+    inside a transaction, hence the AUTOCOMMIT connection. Best-effort: a
+    failure here only costs query speed, never the import itself.
+    """
+    from sqlalchemy import text as _text
+    t0 = monotonic()
+    try:
+        with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+            conn.execute(_text("VACUUM (ANALYZE) price_rows"))
+        logger.info("event=phase_done phase=vacuum_price_rows duration_ms=%d", int((monotonic() - t0) * 1000))
+    except Exception as exc:
+        logger.warning("event=vacuum_price_rows_failed class=%s", type(exc).__name__)
+
+
 def rebuild_history_pg(
     xz_path: Path,
     engine,
@@ -468,6 +487,10 @@ def rebuild_history_pg(
     csv_path.unlink(missing_ok=True)
 
     if progress_cb:
+        progress_cb(90, "Optimizing", "VACUUM (ANALYZE) price_rows for index-only scans...")
+    _vacuum_analyze_price_rows(engine)
+
+    if progress_cb:
         progress_cb(92, "Finishing import", f"PostgreSQL price_rows updated with {row_count:,} price points.")
 
     logger.info(
@@ -513,6 +536,10 @@ def merge_today_prices_pg(
 
     _csv_to_postgres(csv_path, engine, initial=False)
     csv_path.unlink(missing_ok=True)
+
+    if progress_cb:
+        progress_cb(90, "Optimizing", "VACUUM (ANALYZE) price_rows for index-only scans...")
+    _vacuum_analyze_price_rows(engine)
 
     if progress_cb:
         progress_cb(95, "Done", f"Merged {row_count:,} price points into PostgreSQL.")

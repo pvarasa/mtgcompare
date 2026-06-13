@@ -112,7 +112,16 @@ _price_rows = Table(
     Column("price_usd", Numeric(10, 4)),
     PrimaryKeyConstraint("uuid", "finish", "market_date"),
 )
-Index("price_rows_uuid_date", _price_rows.c.uuid, _price_rows.c.finish, _price_rows.c.market_date)
+# Covering index for the whole-portfolio value query (sum price_usd over a set
+# of uuids, grouped by date): with price_usd in the leaf via INCLUDE, Postgres
+# satisfies it with an index-only scan and never touches the 19M-row heap.
+# INCLUDE is Postgres-only; on the (unused) SQLite price_rows it degrades to a
+# plain key index, which is harmless. Supersedes the old price_rows_uuid_date.
+Index(
+    "price_rows_covering",
+    _price_rows.c.uuid, _price_rows.c.finish, _price_rows.c.market_date,
+    postgresql_include=["price_usd"],
+)
 
 _mtgjson_card_map = Table(
     "mtgjson_card_map", metadata,
@@ -287,6 +296,18 @@ def _migrate(conn) -> None:
             conn.execute(text(
                 "ALTER TABLE shop_listings ADD COLUMN ship_jpy NUMERIC(12,2)"
             ))
+
+        # Covering index for the portfolio value query, and drop of the
+        # narrower index it supersedes. Non-concurrent CREATE is safe here:
+        # in deployed environments the index already exists (built once via
+        # CONCURRENTLY, so this no-ops), and a fresh price_rows is empty so
+        # the build is instant. Both statements are idempotent across the
+        # per-startup _migrate run.
+        conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS price_rows_covering "
+            "ON price_rows (uuid, finish, market_date) INCLUDE (price_usd)"
+        ))
+        conn.execute(text("DROP INDEX IF EXISTS price_rows_uuid_date"))
 
     else:
         cols = {r[1] for r in conn.execute(text("PRAGMA table_info(inventory)")).fetchall()}

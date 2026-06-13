@@ -114,7 +114,7 @@ class PostgresPriceStore(PriceHistoryStore):
         # A (uuid, finish, qty) VALUES list joined onto price_rows, so the
         # weighted sum happens in-engine. The first VALUES row carries casts
         # (price_rows.uuid is UUID); the rest inherit those column types.
-        values_rows, params = [], {}
+        values_rows, params = [], {"uuids": sorted({uuid for uuid, _f, _q in weights})}
         for i, (uuid, finish, qty) in enumerate(weights):
             if i == 0:
                 values_rows.append(f"(CAST(:u{i} AS uuid), CAST(:f{i} AS text), CAST(:q{i} AS integer))")
@@ -125,12 +125,17 @@ class PostgresPriceStore(PriceHistoryStore):
         with db.get_conn() as conn:
             rows = conn.execute(
                 # VALUES placeholders are :u0/:f0/:q0…; user values bound via `params`.
+                # The `p.uuid = ANY(:uuids)` predicate is logically redundant with
+                # the join, but it is the sargable condition the planner needs to
+                # pick the `price_rows_covering` index-only scan. Without it the
+                # planner seq-scans all of price_rows (≈19M rows, seconds); with it
+                # the same query is sub-second. See db.py `price_rows_covering`.
                 text(f"""
                     SELECT p.market_date, SUM(w.qty * p.price_usd) AS total
                     FROM price_rows p
                     JOIN (VALUES {values_sql}) AS w(uuid, finish, qty)
                       ON p.uuid = w.uuid AND p.finish = w.finish
-                    WHERE p.price_usd IS NOT NULL
+                    WHERE p.uuid = ANY(:uuids) AND p.price_usd IS NOT NULL
                     GROUP BY p.market_date
                     ORDER BY p.market_date
                 """),  # noqa: S608
