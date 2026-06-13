@@ -192,3 +192,33 @@ def test_merge_today_prices_pg_cleans_up_temp_files(price_rows_table, pg_engine,
 
     assert not (tmp_path / "AllPricesToday.ndjson").exists()
     assert not (tmp_path / "AllPricesToday_flat.csv").exists()
+
+
+def test_pg_portfolio_value_series_sums_weighted_by_day(
+    price_rows_table, pg_engine, tmp_path, monkeypatch,
+):
+    """The DB-side weighted SUM..GROUP BY works against real Postgres,
+    including the UUID cast in the VALUES weight list."""
+    import mtgcompare.db as db
+    from mtgcompare.pricing.history_store import PostgresPriceStore
+
+    xz_path = tmp_path / "AllPrices.json.xz"
+    _make_xz(xz_path, _SAMPLE_PRICES)
+    history_import.rebuild_history_pg(xz_path, pg_engine)
+
+    # Point the store's db.get_conn() at this test engine.
+    monkeypatch.setattr(db, "engine", pg_engine)
+    monkeypatch.setattr(db, "IS_POSTGRES", True)
+
+    series = PostgresPriceStore().portfolio_value_series([
+        (_UUID_A, "normal", 2),
+        (_UUID_A, "foil", 1),
+        (_UUID_B, "etched", 4),
+    ])
+
+    assert set(series) == {"2026-04-20", "2026-04-21"}
+    # 04-20: 2*1.5 + 1*3.0 + 4*2.5 = 16.0
+    assert series["2026-04-20"] == pytest.approx(16.0)
+    # 04-21: only _UUID_A normal is priced → 2*1.6 = 3.2 (no forward-fill)
+    assert series["2026-04-21"] == pytest.approx(3.2)
+    assert PostgresPriceStore().portfolio_value_series([]) == {}

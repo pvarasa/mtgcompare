@@ -20,6 +20,7 @@ import lzma
 import math
 import os
 import re
+from collections import defaultdict
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -46,6 +47,7 @@ __all__ = [
     "candidate_uuid_map",
     "collector_sort_key",
     "compute_market_ctx",
+    "compute_portfolio_history",
     "densify_daily_points",
     "download_file",
     "download_mtgjson_set_file",
@@ -71,6 +73,7 @@ __all__ = [
     "paginate_market_rows",
     "persist_card_map_and_meta",
     "populate_market_prices_from_history",
+    "portfolio_value_series",
     "price_store",
     "query_history",
     "resolve_candidate_uuid",
@@ -236,6 +239,16 @@ def query_history(uuid: str, finish: str) -> dict[str, float]:
     return price_store().query(uuid, finish)
 
 
+def portfolio_value_series(weights: list[tuple[str, str, int]]) -> dict[str, float]:
+    """Whole-portfolio USD value per market day, summed in the DB.
+
+    ``weights`` is ``[(uuid, finish, quantity), ...]``; returns
+    ``{date-string: total_usd}``. Delegates to the price store so the
+    weighted aggregation runs in-engine rather than in Python.
+    """
+    return price_store().portfolio_value_series(weights)
+
+
 # --- inventory lot → MTGJSON UUID mapping ----------------------------------
 
 def candidate_uuid_map(cards: list[dict], set_code: str) -> dict[tuple[str, str, str], dict[str, str]]:
@@ -309,14 +322,34 @@ def row_key_for_mapping(row: dict) -> tuple[str, str, str, int]:
     )
 
 
-def load_existing_card_map() -> dict[tuple[str, str, str, int], str]:
-    """Read mtgjson_card_map keyed by row identity for fast lookup."""
-    with db.get_conn() as conn:
-        existing_rows = market_repo.load_card_map(conn)
+def _index_card_map(rows: list[dict]) -> dict[tuple[str, str, str, int], str]:
+    """Index card-map rows by lot identity. The key shape MUST stay in lock-step
+    with ``row_key_for_mapping`` — that is how callers look uuids up."""
     return {
         (r["card_name"].lower(), r["set_code"], r["card_number"], r["is_foil"]): r["uuid"]
-        for r in existing_rows
+        for r in rows
     }
+
+
+def load_existing_card_map() -> dict[tuple[str, str, str, int], str]:
+    """Read the whole mtgjson_card_map keyed by row identity for fast lookup."""
+    with db.get_conn() as conn:
+        return _index_card_map(market_repo.load_card_map(conn))
+
+
+def load_card_map_for_inventory(inventory_rows: list[dict]) -> dict[tuple[str, str, str, int], str]:
+    """Card-map lookup narrowed to just the sets present in ``inventory_rows``.
+
+    Unlike ``load_existing_card_map`` (whole table, every user), this only
+    scans the bounded set of set codes the portfolio actually touches —
+    there are <1000 MTG sets total, so the ``IN`` list is always small.
+    """
+    set_codes = sorted({
+        normalize_set_code(row["set_code"], upper=True)
+        for row in inventory_rows if row.get("set_code")
+    })
+    with db.get_conn() as conn:
+        return _index_card_map(market_repo.load_card_map_for_sets(conn, set_codes))
 
 
 def resolve_inventory_uuids(
@@ -755,6 +788,74 @@ def densify_daily_points(
         })
         current += timedelta(days=1)
     return points
+
+
+def compute_portfolio_history(
+    inventory_rows: list[dict],
+    *,
+    card_map: dict[tuple[str, str, str, int], str] | None = None,
+    value_series: Callable[[list[tuple[str, str, int]]], dict[str, float]] = portfolio_value_series,
+) -> dict:
+    """Whole-portfolio USD value across MTGJSON price history.
+
+    A deliberate simplification: the *current* inventory (current lots and
+    quantities) is valued at every day MTGJSON has a price, ignoring when
+    each lot was actually bought or sold.
+
+    The heavy lifting is pushed into the database: lots are collapsed to a
+    ``(uuid, finish, quantity)`` weight list and handed to ``value_series``,
+    which returns one pre-summed total per priced day — so a 5000-lot
+    portfolio is one ``GROUP BY`` query, not millions of price rows pulled
+    into Python. ``densify_daily_points`` then fills calendar gaps with
+    ``None`` (no forward-fill: a day with no priced holding is blank, like
+    the per-card chart). The payload mirrors the per-card
+    ``/market/history`` shape — ``points`` is ``[{market_date, price_usd}]``
+    where ``price_usd`` is the whole-portfolio value — so the same renderer
+    draws it. ``card_map``/``value_series`` are injectable for tests.
+    """
+    if card_map is None:
+        card_map = load_card_map_for_inventory(inventory_rows)
+
+    # Collapse lots to unique (uuid, finish), weighted by total quantity, so
+    # one printing held across several lots is valued once.
+    qty_by_series: dict[tuple[str, str], int] = defaultdict(int)
+    mapped_count = 0
+    for row in inventory_rows:
+        qty = row.get("quantity") or 0
+        if qty <= 0:
+            continue
+        uuid = card_map.get(row_key_for_mapping(row))
+        if not uuid:
+            continue
+        finish = "foil" if is_foil(row.get("printing")) else "normal"
+        qty_by_series[(uuid, finish)] += qty
+        mapped_count += 1
+
+    empty = {
+        "points": [],
+        "lot_count": len(inventory_rows),
+        "mapped_count": mapped_count,
+        "has_history": False,
+        "available_since": None,
+    }
+    if not qty_by_series:
+        return empty
+
+    weights = [(uuid, finish, qty) for (uuid, finish), qty in qty_by_series.items()]
+    totals = value_series(weights)  # {date-string: total_usd}, one row per priced day
+    if not totals:
+        return empty
+
+    points = densify_daily_points(totals)
+    return {
+        "points": points,
+        "lot_count": len(inventory_rows),
+        "mapped_count": mapped_count,
+        "has_history": True,
+        # densify spans [min priced day, max priced day]; the first point is
+        # always priced, so it marks when coverage begins.
+        "available_since": points[0]["market_date"],
+    }
 
 
 def paginate_market_rows(priced: list[dict], params: dict) -> tuple[list[dict], int, int]:

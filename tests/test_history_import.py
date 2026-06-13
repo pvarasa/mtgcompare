@@ -101,6 +101,37 @@ def _query_price_rows(duckdb_path) -> list[tuple]:
         conn.close()
 
 
+def test_duckdb_portfolio_value_series_sums_weighted_by_day(tmp_path):
+    from mtgcompare.pricing.history_store import DuckDbPriceStore
+
+    xz_path = tmp_path / "AllPrices.json.xz"
+    _make_xz(xz_path, _SAMPLE_PRICES)
+    duckdb_path = tmp_path / "AllPricesHistory.duckdb"
+    history_import.rebuild_history_db(xz_path, duckdb_path)
+
+    store = DuckDbPriceStore(duckdb_path)
+    # 2x uuid-a normal, 1x uuid-a foil, 4x uuid-b etched — one DB-side query.
+    series = store.portfolio_value_series([
+        ("uuid-a", "normal", 2),
+        ("uuid-a", "foil", 1),
+        ("uuid-b", "etched", 4),
+    ])
+
+    assert set(series) == {"2026-04-20", "2026-04-21"}
+    # 04-20: 2*1.5 + 1*3.0 + 4*2.5 = 16.0
+    assert series["2026-04-20"] == pytest.approx(16.0)
+    # 04-21: only uuid-a normal is priced → 2*1.6 = 3.2 (no forward-fill)
+    assert series["2026-04-21"] == pytest.approx(3.2)
+    assert store.portfolio_value_series([]) == {}
+
+
+def test_duckdb_portfolio_value_series_empty_when_db_absent(tmp_path):
+    from mtgcompare.pricing.history_store import DuckDbPriceStore
+
+    store = DuckDbPriceStore(tmp_path / "missing.duckdb")
+    assert store.portfolio_value_series([("uuid-a", "normal", 1)]) == {}
+
+
 def test_rebuild_history_db_produces_duckdb(tmp_path):
     xz_path = tmp_path / "AllPrices.json.xz"
     _make_xz(xz_path, _SAMPLE_PRICES)

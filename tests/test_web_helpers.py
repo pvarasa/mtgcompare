@@ -634,6 +634,141 @@ def test_densify_daily_points_fills_gaps():
     ]
 
 
+def test_compute_portfolio_history_weights_lots_and_densifies():
+    inventory = [
+        {"card_name": "Sol Ring", "set_code": "C21", "card_number": "263",
+         "printing": "Normal", "quantity": 2},
+        {"card_name": "Mana Crypt", "set_code": "2XM", "card_number": "270",
+         "printing": "Foil", "quantity": 1},
+    ]
+    card_map = {
+        ("sol ring", "C21", "263", 0): "uuid-sol",
+        ("mana crypt", "2XM", "270", 1): "uuid-crypt-foil",
+    }
+    captured = {}
+
+    def fake_value_series(weights):
+        # The DB-side weighted sum is mocked; we assert the weights the
+        # function hands it, then return a totals map with a calendar gap.
+        captured["weights"] = sorted(weights)
+        return {"2026-01-01": 4.0, "2026-01-03": 106.0}
+
+    result = pricing.compute_portfolio_history(
+        inventory, card_map=card_map, value_series=fake_value_series,
+    )
+
+    assert captured["weights"] == [
+        ("uuid-crypt-foil", "foil", 1),
+        ("uuid-sol", "normal", 2),
+    ]
+    assert result["has_history"] is True
+    assert result["lot_count"] == 2
+    assert result["mapped_count"] == 2
+    assert result["available_since"] == "2026-01-01"
+    # densify fills the missing 2026-01-02 with a blank (no forward-fill).
+    assert result["points"] == [
+        {"market_date": "2026-01-01", "price_usd": 4.0},
+        {"market_date": "2026-01-02", "price_usd": None},
+        {"market_date": "2026-01-03", "price_usd": 106.0},
+    ]
+
+
+def test_compute_portfolio_history_aggregates_quantity_for_same_printing():
+    # Two lots of the same printing (different conditions) collapse to one
+    # weighted entry, so the DB query values it once.
+    inventory = [
+        {"card_name": "Sol Ring", "set_code": "C21", "card_number": "263",
+         "printing": "Normal", "quantity": 2, "condition": "NM"},
+        {"card_name": "Sol Ring", "set_code": "C21", "card_number": "263",
+         "printing": "Normal", "quantity": 3, "condition": "LP"},
+    ]
+    captured = {}
+
+    def fake_value_series(weights):
+        captured["weights"] = list(weights)
+        return {"2026-01-01": 50.0}
+
+    result = pricing.compute_portfolio_history(
+        inventory,
+        card_map={("sol ring", "C21", "263", 0): "uuid-sol"},
+        value_series=fake_value_series,
+    )
+
+    assert captured["weights"] == [("uuid-sol", "normal", 5)]
+    assert result["mapped_count"] == 2
+    assert result["points"] == [{"market_date": "2026-01-01", "price_usd": 50.0}]
+
+
+def test_compute_portfolio_history_no_mapped_lots_skips_query():
+    def boom(weights):
+        raise AssertionError("value_series should not run with no mapped lots")
+
+    result = pricing.compute_portfolio_history(
+        [{"card_name": "Nope", "set_code": "ZZZ", "card_number": "1",
+          "printing": "Normal", "quantity": 1}],
+        card_map={},
+        value_series=boom,
+    )
+
+    assert result["points"] == []
+    assert result["has_history"] is False
+    assert result["mapped_count"] == 0
+    assert result["lot_count"] == 1
+    assert result["available_since"] is None
+
+
+def test_load_card_map_for_sets_filters_by_set(test_db):
+    from mtgcompare.pricing import market_repo
+    from mtgcompare.pricing import service as pricing_service
+
+    with db_module.get_conn() as conn:
+        market_repo.upsert_card_map(conn, [
+            {"card_name": "Sol Ring", "set_code": "C21", "card_number": "263",
+             "is_foil": 0, "uuid": "u-sol", "updated_at": "t"},
+            {"card_name": "Mana Crypt", "set_code": "2XM", "card_number": "270",
+             "is_foil": 1, "uuid": "u-crypt", "updated_at": "t"},
+        ])
+        rows = market_repo.load_card_map_for_sets(conn, ["C21"])
+        assert {r["uuid"] for r in rows} == {"u-sol"}  # 2XM not scanned
+        assert market_repo.load_card_map_for_sets(conn, []) == []
+
+    # The service wrapper narrows by the inventory's own sets and indexes by
+    # the same key shape callers resolve with.
+    card_map = pricing_service.load_card_map_for_inventory([
+        {"card_name": "Sol Ring", "set_code": "C21", "card_number": "263", "printing": "Normal"},
+    ])
+    assert card_map == {("sol ring", "C21", "263", 0): "u-sol"}
+
+
+def test_market_history_portfolio_endpoint_wires_mapping_path(test_db):
+    # No DuckDB price file exists in SQLite test mode, so the store reports
+    # no history — but the route's full mapping path still runs.
+    inv.add_one({"card_name": "Sol Ring", "set_code": "C21", "card_number": "263",
+                 "quantity": 2, "condition": "NM", "printing": "Normal",
+                 "language": "English", "price_bought": 1.0, "date_bought": "2025-01-01"})
+    inv.add_one({"card_name": "Unmapped", "set_code": "C21", "card_number": "999",
+                 "quantity": 1, "condition": "NM", "printing": "Normal",
+                 "language": "English", "price_bought": 1.0, "date_bought": "2025-01-01"})
+    with db_module.get_conn() as conn:
+        from mtgcompare.pricing import market_repo
+        market_repo.upsert_card_map(conn, [
+            {"card_name": "Sol Ring", "set_code": "C21", "card_number": "263",
+             "is_foil": 0, "uuid": "u-sol", "updated_at": "t"},
+        ])
+
+    with web.app.test_client() as client:
+        resp = client.get("/market/history/portfolio")
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["ok"] is True
+    assert data["lot_count"] == 2
+    assert data["mapped_count"] == 1            # only Sol Ring is in the card map
+    assert data["has_history"] is False         # no DuckDB price file in test mode
+    assert data["points"] == []
+    assert data["default_period"] == "all"
+
+
 def test_mtgjson_set_candidates_include_trimmed_variants():
     assert pricing.mtgjson_set_candidates("FMB1")[:2] == ["FMB1", "FMB"]
 

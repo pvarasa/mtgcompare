@@ -2,7 +2,7 @@
 
 Local (SQLite) deployments keep price history in a single DuckDB file;
 remote (PostgreSQL) deployments keep it in the ``price_rows`` table. Both
-expose the same five operations through ``PriceHistoryStore`` so the web
+expose the same operations through ``PriceHistoryStore`` so the web
 layer stops repeating ``if db.IS_POSTGRES:`` at every call site — the one
 place that branch survives is ``get_store()``.
 
@@ -48,6 +48,21 @@ class PriceHistoryStore:
         """Full {date-string: price_usd} series for one (uuid, finish)."""
         raise NotImplementedError
 
+    def portfolio_value_series(
+        self, weights: list[tuple[str, str, int]],
+    ) -> dict[str, float]:
+        """Whole-portfolio USD value per market day, aggregated in the DB.
+
+        ``weights`` is ``[(uuid, finish, quantity), ...]``. Returns
+        ``{date-string: total_usd}`` from a single weighted
+        ``SUM(qty * price_usd) ... GROUP BY market_date`` — the rows never
+        leave the database un-summed, so a 5000-lot portfolio costs one
+        query returning one row per priced day, not millions of price rows.
+        No forward-fill: a day is only present if at least one held printing
+        was priced on it.
+        """
+        raise NotImplementedError
+
     def latest_prices(
         self, uuids: list[str],
     ) -> dict[tuple[str, str], float | None] | None:
@@ -87,6 +102,39 @@ class PostgresPriceStore(PriceHistoryStore):
                 text("SELECT market_date, price_usd FROM price_rows"
                      " WHERE uuid = :uuid AND finish = :finish ORDER BY market_date ASC"),
                 {"uuid": uuid, "finish": finish},
+            ).fetchall()
+        return {
+            (r[0].isoformat() if isinstance(r[0], date) else str(r[0])): float(r[1])
+            for r in rows if r[1] is not None
+        }
+
+    def portfolio_value_series(self, weights: list[tuple[str, str, int]]) -> dict[str, float]:
+        if not weights:
+            return {}
+        # A (uuid, finish, qty) VALUES list joined onto price_rows, so the
+        # weighted sum happens in-engine. The first VALUES row carries casts
+        # (price_rows.uuid is UUID); the rest inherit those column types.
+        values_rows, params = [], {}
+        for i, (uuid, finish, qty) in enumerate(weights):
+            if i == 0:
+                values_rows.append(f"(CAST(:u{i} AS uuid), CAST(:f{i} AS text), CAST(:q{i} AS integer))")
+            else:
+                values_rows.append(f"(:u{i}, :f{i}, :q{i})")
+            params[f"u{i}"], params[f"f{i}"], params[f"q{i}"] = uuid, finish, qty
+        values_sql = ", ".join(values_rows)
+        with db.get_conn() as conn:
+            rows = conn.execute(
+                # VALUES placeholders are :u0/:f0/:q0…; user values bound via `params`.
+                text(f"""
+                    SELECT p.market_date, SUM(w.qty * p.price_usd) AS total
+                    FROM price_rows p
+                    JOIN (VALUES {values_sql}) AS w(uuid, finish, qty)
+                      ON p.uuid = w.uuid AND p.finish = w.finish
+                    WHERE p.price_usd IS NOT NULL
+                    GROUP BY p.market_date
+                    ORDER BY p.market_date
+                """),  # noqa: S608
+                params,
             ).fetchall()
         return {
             (r[0].isoformat() if isinstance(r[0], date) else str(r[0])): float(r[1])
@@ -148,6 +196,37 @@ class DuckDbPriceStore(PriceHistoryStore):
             finally:
                 conn.close()
         return {row[0]: row[1] for row in rows if row[1] is not None}
+
+    def portfolio_value_series(self, weights: list[tuple[str, str, int]]) -> dict[str, float]:
+        if not weights or not self.duckdb_path.exists():
+            return {}
+        # Same shape as the Postgres path: a (uuid, finish, qty) VALUES list
+        # joined onto price_rows so DuckDB does the weighted sum. uuid is
+        # VARCHAR here; the first row's casts pin the VALUES column types.
+        values_rows, binds = [], []
+        for i, (uuid, finish, qty) in enumerate(weights):
+            values_rows.append("(?::VARCHAR, ?::VARCHAR, ?::INTEGER)" if i == 0 else "(?, ?, ?)")
+            binds.extend((uuid, finish, qty))
+        values_sql = ", ".join(values_rows)
+        with _duckdb_lock:
+            conn = duckdb.connect(str(self.duckdb_path), read_only=True)
+            try:
+                rows = conn.execute(
+                    # VALUES placeholders are positional `?`; values bound via `binds`.
+                    f"""
+                    SELECT p.market_date, SUM(w.qty * p.price_usd) AS total
+                    FROM price_rows p
+                    JOIN (VALUES {values_sql}) AS w(uuid, finish, qty)
+                      ON p.uuid = w.uuid AND p.finish = w.finish
+                    WHERE p.price_usd IS NOT NULL
+                    GROUP BY p.market_date
+                    ORDER BY p.market_date
+                    """,  # noqa: S608
+                    binds,
+                ).fetchall()
+            finally:
+                conn.close()
+        return {row[0]: float(row[1]) for row in rows if row[1] is not None}
 
     def latest_prices(self, uuids: list[str]) -> dict[tuple[str, str], float | None] | None:
         if not self.duckdb_path.exists():

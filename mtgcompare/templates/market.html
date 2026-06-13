@@ -7,7 +7,7 @@
     align-items: center;
     justify-content: space-between;
     gap: 1rem;
-    margin-bottom: 1.4rem;
+    margin-bottom: 1rem;
     flex-wrap: wrap;
   }
   .mkt-header .refresh-info {
@@ -72,12 +72,18 @@
   }
   .mkt-first-time p { margin: 0 0 1rem; font-size: .95rem; }
 
-  .mkt-summary {
+  /* The summary stat cards and the history action tile share one wrapping
+     row. #mkt-summary uses display:contents so its cards flow as direct
+     children of the bar — keeping the tile a sibling that survives the
+     partial summary swaps (which replace #mkt-summary's innerHTML). */
+  .mkt-summary-bar {
     display: flex;
     flex-wrap: wrap;
     gap: .6rem;
-    margin-bottom: 1.5rem;
+    align-items: stretch;
+    margin-bottom: 1rem;
   }
+  .mkt-summary { display: contents; }
   .mkt-stat {
     background: var(--bg-alt);
     border: 1px solid var(--border);
@@ -113,7 +119,52 @@
   .mkt-note {
     font-size: .78rem;
     color: var(--muted);
-    margin-bottom: 1.2rem;
+    margin-bottom: .85rem;
+  }
+
+  /* History action tile: shaped like a stat card but a button. Sits at the
+     end of the summary row so the portfolio chart is one click from the
+     numbers it visualizes — no extra full-width row of chrome. */
+  .mkt-history-tile {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: .25rem;
+    text-align: left;
+    cursor: pointer;
+    background: var(--bg-alt);
+    border: 1px solid var(--border);
+    border-top: 2px solid var(--gold);
+    border-radius: 8px;
+    padding: .65rem 1rem;
+    min-width: 11rem;
+    flex: 0 1 13rem;
+    color: var(--fg);
+    font-family: inherit;
+    transition: border-color .15s ease, background .15s ease;
+  }
+  .mkt-history-tile:hover,
+  .mkt-history-tile:focus-visible {
+    border-color: var(--gold);
+    background: var(--bg);
+    outline: none;
+  }
+  .mkt-history-tile .tile-title {
+    display: flex;
+    align-items: center;
+    gap: .45rem;
+    font-size: 1.05rem;
+    font-weight: 700;
+  }
+  .mkt-history-tile .tile-title svg {
+    width: 1.15rem;
+    height: 1.15rem;
+    flex: none;
+    stroke: var(--gold);
+  }
+  .mkt-history-tile .tile-sub {
+    font-size: .78rem;
+    color: var(--muted);
   }
 
   /* Filter form (server-driven; JS upgrades it to instant fragment fetches). */
@@ -461,14 +512,27 @@
     </div>
 
   {% else %}
-    <div class="mkt-summary" id="mkt-summary">
-      {% include "_market_summary.html" %}
+    <div class="mkt-summary-bar">
+      <div class="mkt-summary" id="mkt-summary">
+        {% include "_market_summary.html" %}
+      </div>
+      <button type="button" id="mkt-portfolio-history-btn" class="mkt-history-tile"
+              title="Chart the whole portfolio's value over time">
+        <span class="tile-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M3 3v18h18"/>
+            <path d="M7 14l4-4 3 3 5-6"/>
+          </svg>
+          Portfolio history
+        </span>
+        <span class="tile-sub">Value over time &rsaquo;</span>
+      </button>
     </div>
 
     <p class="mkt-note">
-      Prices sourced from MTGJSON / TCGPlayer daily data.
+      Prices from MTGJSON / TCGPlayer daily data.
       {% if fx %}FX JPY {{ '%.2f'|format(fx) }} per $1.{% endif %}
-      Charts show blank days when there's no price for that date.
     </p>
 
     {# Filter form. Plain GET works without JS; the page JS upgrades it
@@ -544,6 +608,7 @@
     <script>
       (function () {
         const historyUrl = {{ url_for('market_history')|tojson }};
+        const portfolioHistoryUrl = {{ url_for('market_history_portfolio')|tojson }};
         const isFirstDownload = {{ (not history_db_exists)|tojson }};
         const historyDownloadUrl = {{ url_for('market_history_download')|tojson }};
         const historyStatusUrl = {{ url_for('market_history_download_status')|tojson }};
@@ -714,7 +779,7 @@
           setDelta(stats.delta);
 
           if (!activeHistory.has_history) {
-            stageEl.innerHTML = '<div class="market-chart-empty">No MTGJSON history has been downloaded for this card yet.<br>Use <strong>Update prices</strong> to import it.</div>';
+            stageEl.innerHTML = '<div class="market-chart-empty">No MTGJSON price history is available yet.<br>Use <strong>Update prices</strong> to import it.</div>';
           } else if (!priced.length) {
             stageEl.innerHTML = '<div class="market-chart-empty">There is no priced data in this range.<br>Blank days are preserved when MTGJSON has no value.</div>';
           } else if (priced.length === 1) {
@@ -742,6 +807,41 @@
           if (event.key === 'Escape') closeModal();
         });
 
+        // Reset the modal chrome to a fresh "loading" state before a fetch.
+        function resetModalChrome(title, subtitle) {
+          openModal();
+          titleEl.textContent = title;
+          subtitleEl.textContent = subtitle || '';
+          currentEl.textContent = '-';
+          lowEl.textContent = '-';
+          setDelta(null);
+          controlsEl.innerHTML = '';
+          stageEl.innerHTML = '<div class="market-chart-loading">Loading chart...</div>';
+          footnoteEl.textContent = '';
+        }
+
+        // Wire a history response (per-card or portfolio — same payload
+        // shape) into the chart: store it, build the period buttons, render.
+        function renderHistory(data, subtitleFor) {
+          activeHistory = data;
+          if (subtitleFor) subtitleEl.textContent = subtitleFor(data);
+          controlsEl.innerHTML = data.available_periods.map(period => `
+            <button type="button" class="market-chart-range${period === data.default_period ? ' active' : ''}" data-period="${period}">
+              ${period.toUpperCase()}
+            </button>
+          `).join('');
+          controlsEl.querySelectorAll('.market-chart-range').forEach(rangeButton => {
+            rangeButton.addEventListener('click', () => renderPeriod(rangeButton.dataset.period));
+          });
+          renderPeriod(data.default_period || '1m');
+        }
+
+        function loadHistoryError(message) {
+          activeHistory = null;
+          stageEl.innerHTML = `<div class="market-chart-empty">${message}</div>`;
+          footnoteEl.textContent = 'Download history first if MTGJSON data is not available locally.';
+        }
+
         // Delegate chart clicks on the wrapper, not the tbody — the
         // tbody is replaced on every filter/sort/pagination fetch, but
         // the wrapper stays put for the page's lifetime.
@@ -749,15 +849,10 @@
         (mktWrapper || document).addEventListener('click', event => {
           const btn = event.target.closest('.market-chart-trigger');
           if (!btn) return;
-          openModal();
-          titleEl.textContent = btn.dataset.chartCard;
-          subtitleEl.textContent = `${btn.dataset.chartSet}${btn.dataset.chartPrinting.toLowerCase() === 'foil' ? ' / Foil' : ' / Non-foil'}`;
-          currentEl.textContent = '-';
-          lowEl.textContent = '-';
-          setDelta(null);
-          controlsEl.innerHTML = '';
-          stageEl.innerHTML = '<div class="market-chart-loading">Loading chart...</div>';
-          footnoteEl.textContent = '';
+          resetModalChrome(
+            btn.dataset.chartCard,
+            `${btn.dataset.chartSet}${btn.dataset.chartPrinting.toLowerCase() === 'foil' ? ' / Foil' : ' / Non-foil'}`,
+          );
 
           const params = new URLSearchParams({
             card_name: btn.dataset.chartCard,
@@ -771,24 +866,29 @@
             .then(response => response.json())
             .then(data => {
               if (!data.ok) throw new Error(data.error || 'History fetch failed');
-              activeHistory = data;
-              subtitleEl.textContent = `${data.set_code}${data.card_number ? ` #${data.card_number}` : ''}${data.is_foil ? ' / Foil' : ' / Non-foil'}${data.available_since ? ` / tracking since ${formatDate(data.available_since)}` : ''}`;
-              controlsEl.innerHTML = data.available_periods.map(period => `
-                <button type="button" class="market-chart-range${period === data.default_period ? ' active' : ''}" data-period="${period}">
-                  ${period.toUpperCase()}
-                </button>
-              `).join('');
-              controlsEl.querySelectorAll('.market-chart-range').forEach(rangeButton => {
-                rangeButton.addEventListener('click', () => renderPeriod(rangeButton.dataset.period));
-              });
-              renderPeriod(data.default_period || '1m');
+              renderHistory(data, d =>
+                `${d.set_code}${d.card_number ? ` #${d.card_number}` : ''}${d.is_foil ? ' / Foil' : ' / Non-foil'}${d.available_since ? ` / tracking since ${formatDate(d.available_since)}` : ''}`,
+              );
             })
-            .catch(() => {
-              activeHistory = null;
-              stageEl.innerHTML = '<div class="market-chart-empty">Could not load market history for this card.</div>';
-              footnoteEl.textContent = 'Download history first if MTGJSON data is not available locally.';
-            });
+            .catch(() => loadHistoryError('Could not load market history for this card.'));
         });
+
+        const portfolioBtn = document.getElementById('mkt-portfolio-history-btn');
+        if (portfolioBtn) {
+          portfolioBtn.addEventListener('click', () => {
+            resetModalChrome('Portfolio total', 'Whole-portfolio value across MTGJSON history');
+            fetch(portfolioHistoryUrl)
+              .then(response => response.json())
+              .then(data => {
+                if (!data.ok) throw new Error(data.error || 'History fetch failed');
+                renderHistory(data, d => {
+                  const since = d.available_since ? ` / since ${formatDate(d.available_since)}` : '';
+                  return `${d.mapped_count} of ${d.lot_count} lot${d.lot_count === 1 ? '' : 's'} tracked${since}`;
+                });
+              })
+              .catch(() => loadHistoryError('Could not load portfolio history.'));
+          });
+        }
 
         if (downloadBtn) {
           function setProgress(job) {

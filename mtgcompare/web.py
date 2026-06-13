@@ -1121,6 +1121,42 @@ def market_history():
     })
 
 
+@app.route("/market/history/portfolio")
+def market_history_portfolio():
+    user_id = _get_user_id()
+    inventory_rows = inv.list_all(user_id)
+    with db.get_conn() as conn:
+        downloaded_at = meta.read(conn, "mtgjson_history_downloaded_at")
+
+    result = pricing.compute_portfolio_history(inventory_rows)
+    points = result["points"]
+
+    return jsonify({
+        "ok": True,
+        # The whole series is the point of this view; default to ALL but keep
+        # the period buttons so the per-card chart JS can slice client-side.
+        "default_period": "all",
+        "period": "all",
+        "available_periods": list(pricing.MARKET_HISTORY_PERIODS),
+        "period_days": pricing.MARKET_HISTORY_PERIODS,
+        "available_since": result["available_since"],
+        "downloaded_at": downloaded_at,
+        "has_history": result["has_history"],
+        "lot_count": result["lot_count"],
+        "mapped_count": result["mapped_count"],
+        "source": {
+            "label": "MTGJSON / TCGplayer retail",
+            "detail": (
+                "Whole-portfolio value summed across MTGJSON daily prices, using"
+                " current quantities. Days with no MTGJSON value for a held card"
+                " show as blanks rather than being carried forward."
+            ),
+        },
+        "points": points,
+        "all_points_count": len(points),
+    })
+
+
 _PER_PAGE_CHOICES = (25, 50, 100, 200)
 
 

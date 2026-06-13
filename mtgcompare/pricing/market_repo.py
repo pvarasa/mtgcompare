@@ -42,6 +42,25 @@ def load_card_map(conn) -> list[dict]:
     ).mappings().all()]
 
 
+def load_card_map_for_sets(conn, set_codes) -> list[dict]:
+    """Card-map rows for the given (normalized, upper) set codes only.
+
+    The read-path counterpart to ``load_card_map``: a portfolio touches a
+    bounded handful of sets, so this filters the scan instead of pulling
+    every mapped printing for every user. A no-op for an empty collection.
+    Columns: card_name, set_code, card_number, is_foil, uuid.
+    """
+    set_codes = list(set_codes)
+    if not set_codes:
+        return []
+    return [db.row_to_dict(r) for r in conn.execute(
+        text("""SELECT card_name, set_code, card_number, is_foil, uuid
+                FROM mtgjson_card_map WHERE set_code IN :sets""")
+        .bindparams(bindparam("sets", expanding=True)),
+        {"sets": set_codes},
+    ).mappings().all()]
+
+
 def find_card_uuid(conn, *, card_name: str, set_code: str,
                    card_number: str, is_foil: int) -> str | None:
     """Resolve one lot's MTGJSON UUID by exact identity, or None."""
