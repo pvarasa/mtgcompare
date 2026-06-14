@@ -22,7 +22,7 @@ import re
 
 from selectolax.parser import HTMLParser
 
-from .html_base import HtmlSearchScrapper, node_text_ws
+from .html_base import HtmlSearchScrapper, node_text_ws, to_usd
 
 BASE_URL = "https://cardshop-serra.com"
 SEARCH_URL = f"{BASE_URL}/mtg/products/list"
@@ -116,7 +116,7 @@ def parse_search_html(html: str | bytes, card_name: str, fx_jpy_per_usd: float) 
                 "card": en,
                 "set": m.group("set").strip(),
                 "price_jpy": price_jpy,
-                "price_usd": round(price_jpy / fx_jpy_per_usd, 2),
+                "price_usd": to_usd(price_jpy, fx_jpy_per_usd),
                 "stock": stock,
                 "condition": "NM",
                 "link": link,

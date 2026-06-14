@@ -54,6 +54,7 @@ from .html_base import (
     ScraperFetchError,
     decode_json_response,
     raise_for_response,
+    to_jpy,
 )
 from .html_base import make_session as _make_session
 from .scryfall import TCGPLAYER_PRODUCT_URL, fetch_card_summaries
@@ -168,9 +169,9 @@ def build_record(
         "shop": SHOP_NAME,
         "card": card_name,
         "set": set_code,
-        "price_jpy": round(price_usd * fx_jpy_per_usd, 2),
+        "price_jpy": to_jpy(price_usd, fx_jpy_per_usd),
         "price_usd": round(price_usd, 2),
-        "ship_jpy": round(ship_usd * fx_jpy_per_usd, 2),
+        "ship_jpy": to_jpy(ship_usd, fx_jpy_per_usd),
         "stock": int(qty) if isinstance(qty, int | float) else None,
         "condition": _CONDITION_ABBR.get(condition, condition),
         "link": link,

@@ -17,7 +17,7 @@ from selectolax.parser import HTMLParser
 
 from ..utils import get_fx
 from .base import MtgScrapper
-from .html_base import RateLimitedError, ScraperFetchError
+from .html_base import RateLimitedError, ScraperFetchError, to_usd
 from .html_base import make_session as _make_session
 
 BASE_URL = "https://www.hareruyamtg.com"
@@ -74,7 +74,7 @@ def parse_lazy_html(html: str | bytes, card_name: str, fx_jpy_per_usd: float) ->
             continue
 
         price_jpy = float(price_match.group(1).replace(",", ""))
-        price_usd = round(price_jpy / fx_jpy_per_usd, 2)
+        price_usd = to_usd(price_jpy, fx_jpy_per_usd)
 
         href = (name_el.attributes.get("href") or "").strip()
         link = f"{BASE_URL}{href}" if href.startswith("/") else href

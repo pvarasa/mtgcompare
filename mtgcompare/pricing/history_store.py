@@ -65,12 +65,12 @@ class PriceHistoryStore:
 
     def latest_prices(
         self, uuids: list[str],
-    ) -> dict[tuple[str, str], float | None] | None:
+    ) -> dict[tuple[str, str], float | None]:
         """Latest price per (uuid, finish) for the given uuids.
 
-        Returns ``None`` to signal "no history store present, skip" — only
-        the local backend does this, when the DuckDB file is absent. An
-        empty dict means "history present, no rows for these uuids".
+        Always a dict — an empty one when there are no matching rows.
+        Callers that must distinguish "no history at all" gate on
+        ``has_history()`` first rather than on the return value.
         """
         raise NotImplementedError
 
@@ -237,10 +237,8 @@ class DuckDbPriceStore(PriceHistoryStore):
                 conn.close()
         return {row[0]: float(row[1]) for row in rows if row[1] is not None}
 
-    def latest_prices(self, uuids: list[str]) -> dict[tuple[str, str], float | None] | None:
-        if not self.duckdb_path.exists():
-            return None
-        if not uuids:
+    def latest_prices(self, uuids: list[str]) -> dict[tuple[str, str], float | None]:
+        if not self.duckdb_path.exists() or not uuids:
             return {}
         placeholders = ", ".join("?" for _ in uuids)
         with _duckdb_lock:

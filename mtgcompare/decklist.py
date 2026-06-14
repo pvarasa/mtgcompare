@@ -21,18 +21,26 @@ Pipeline:
 ``prepare_decklist_search`` ties parse → strip → size-check → consolidate
 → deduct → FX into a single validation step returning either a
 ``DecklistPrep`` (happy path) or a ``DecklistReject``.
+
+``produce_decklist_events`` (bottom of the file) drives the same pipeline for
+the streaming ``/decklist/stream`` route: it runs the fan-out and pushes
+``(event_type, payload)`` tuples onto a queue as rows/timeouts/totals arrive.
+The web layer owns only the SSE transport; this owns the event production.
 """
 import logging
 import os
+import queue
 import re
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from time import monotonic
 
 from .scrapers.registry import (
     ACTIVE_SHOPS,
     MARKETPLACE_SHOPS,
     SHIPPING_JPY,
+    SHOP_FLAGS,
     collect_prices,
 )
 
@@ -421,3 +429,184 @@ def prepare_decklist_search(
         shipping_overrides_jpy=shipping_overrides_jpy,
         use_inventory=use_inventory,
     )
+
+
+# --- streaming (SSE) event production --------------------------------------
+#
+# The /decklist/stream route runs a single-request Server-Sent-Events search.
+# The Flask layer owns the transport (the text/event-stream Response, the
+# keepalive comments, the per-user in-flight cap); this is the domain side.
+# `produce_decklist_events` runs the same parse→deduct→fan-out as the
+# synchronous handler but pushes (event_type, payload) tuples onto a queue as
+# each card row, shop timeout, and debounced running total arrives — the
+# route drains the queue and frames each tuple as an SSE event. Web-layer
+# state is injected (the pre-loaded Jinja row template, the collect_prices
+# reference, the logger) so this stays free of Flask app/request context.
+
+_TOTALS_DEBOUNCE_S = 0.5
+
+
+def _emit_meta(prep: DecklistPrep, q: queue.Queue) -> None:
+    q.put(("meta", {
+        "total_cards": prep.total_cards,
+        "skipped_basics": prep.skipped_basics,
+        "distinct_names": len(prep.name_qty),
+        "inventory_hits": prep.inventory_hits,
+        "names_to_search": len(prep.names_to_search),
+        "use_inventory": prep.use_inventory,
+        "fx": prep.fx,
+        "shop_filter_active": prep.enabled_shops is not None,
+    }))
+
+
+def _emit_card_row(
+    name: str,
+    prep: DecklistPrep,
+    rows: list[dict],
+    row_template,
+    q: queue.Queue,
+) -> None:
+    # Pre-render the <tr> server-side so the client can just innerHTML-append.
+    # render() runs in the producer thread (no Flask app context), but the
+    # Jinja env is process-global and thread-safe to read from — template
+    # loading + render takes no Flask state.
+    row = build_one_card_row(
+        name, prep.name_qty, prep.name_canonical,
+        prep.name_inv_qty, prep.name_needed, rows,
+    )
+    row_html = row_template.render(
+        row=row,
+        use_inventory=prep.use_inventory,
+        shop_flags=SHOP_FLAGS,
+    )
+    q.put(("row", {
+        "key": name,
+        "html": row_html,
+        "qty_needed": row["qty_needed"],
+        "has_best": row["best"] is not None,
+    }))
+
+
+def _emit_totals(
+    prep: DecklistPrep,
+    prices_by_name: dict[str, list[dict]],
+    q: queue.Queue,
+) -> list[dict]:
+    """Snapshot card_rows + shop_totals and enqueue one ``totals`` event.
+
+    Returns the freshly-built card_rows so the caller can reuse them for
+    final logging without re-running ``build_card_rows`` twice.
+    """
+    card_rows = build_card_rows(
+        prep.name_qty, prep.name_canonical, prep.name_inv_qty,
+        prep.name_needed, prices_by_name,
+    )
+    shop_list, totals = compute_shop_totals(
+        card_rows, prep.shipping_overrides_jpy, prep.fx,
+    )
+    q.put(("totals", {"shop_list": shop_list, **totals}))
+    return card_rows
+
+
+def _emit_inventory_only_rows(
+    prep: DecklistPrep, row_template, q: queue.Queue,
+) -> None:
+    # Inventory-covered cards never enter the fan-out (qty_needed is 0) so the
+    # streamed table would otherwise drop them silently, while the synchronous
+    # /decklist path shows them as "✓ in inventory" rows. Emit in canonical
+    # alphabetical order so the inventory section is stable from first paint.
+    searched_set = set(prep.names_to_search)
+    inventory_only = sorted(
+        (n for n in prep.name_qty if n not in searched_set),
+        key=lambda x: prep.name_canonical[x].lower(),
+    )
+    for name in inventory_only:
+        _emit_card_row(name, prep, [], row_template, q)
+
+
+def _run_fanout(
+    prep: DecklistPrep,
+    prices_by_name: dict[str, list[dict]],
+    timed_out: set[str],
+    row_template,
+    q: queue.Queue,
+    *,
+    collect: Callable[..., list[dict]],
+    logger: logging.Logger,
+) -> None:
+    """Drive the per-card fan-out, emitting row + shop_timeout + debounced
+    totals events as results stream in."""
+    if prep.fx is None:
+        return
+    timed_out_emitted: set[str] = set()
+    last_totals_emit = 0.0
+    for name, rows in iter_decklist_prices(
+        prep.names_to_search, prep.name_canonical, prep.fx, prep.enabled_shops,
+        timeouts_out=timed_out, collect=collect, logger=logger,
+    ):
+        prices_by_name[name] = rows
+        _emit_card_row(name, prep, rows, row_template, q)
+
+        for shop in sorted(timed_out - timed_out_emitted):
+            q.put(("shop_timeout", {"shop": shop}))
+            timed_out_emitted.add(shop)
+
+        now = monotonic()
+        if now - last_totals_emit > _TOTALS_DEBOUNCE_S:
+            _emit_totals(prep, prices_by_name, q)
+            last_totals_emit = now
+
+
+def produce_decklist_events(
+    prep: DecklistPrep,
+    q: queue.Queue,
+    *,
+    row_template,
+    collect: Callable[..., list[dict]] = collect_prices,
+    logger: logging.Logger = logger,
+) -> None:
+    """Run the decklist fan-out and push (event_type, payload) tuples to
+    ``q``. Terminal sentinel is ``None``. Runs in a daemon thread driven by
+    the SSE response generator in the web layer.
+
+    Mirrors the synchronous /decklist handler's behavior but yields each card
+    row, each shop timeout, and debounced running totals as they arrive
+    instead of bundling them into one rendered page. ``row_template`` is the
+    pre-loaded Jinja ``_decklist_row.html`` template; ``collect`` and
+    ``logger`` are injected by the web layer.
+    """
+    t0 = monotonic()
+    prices_by_name: dict[str, list[dict]] = {n: [] for n in prep.name_qty}
+    timed_out: set[str] = set()
+    try:
+        _emit_meta(prep, q)
+        _emit_inventory_only_rows(prep, row_template, q)
+        _run_fanout(
+            prep, prices_by_name, timed_out, row_template, q,
+            collect=collect, logger=logger,
+        )
+
+        card_rows = _emit_totals(prep, prices_by_name, q)
+        rows_with_match = sum(1 for r in card_rows if r["best"] is not None)
+        duration_ms = int((monotonic() - t0) * 1000)
+        q.put(("done", {
+            "duration_ms": duration_ms,
+            "rows_with_match": rows_with_match,
+            "timed_out_shops": sorted(timed_out),
+        }))
+        logger.info(
+            "event=decklist_search status=ok size=%d distinct_names=%d "
+            "names_searched=%d inventory_hits=%d shops_enabled=%s use_inventory=%d "
+            "rows_with_match=%d skipped_basics=%d timed_out_shops=%s "
+            "transport=sse duration_ms=%d",
+            prep.total_cards, len(prep.name_qty), len(prep.names_to_search), prep.inventory_hits,
+            len(effective_search_shops(prep.enabled_shops)),
+            int(prep.use_inventory), rows_with_match, prep.skipped_basics,
+            ",".join(sorted(timed_out)) or "none",
+            duration_ms,
+        )
+    except Exception:
+        logger.exception("event=decklist_search_stream_failed")
+        q.put(("error", {"message": "Internal error during search."}))
+    finally:
+        q.put(None)

@@ -28,7 +28,7 @@ import re
 import requests
 from selectolax.parser import HTMLParser
 
-from .html_base import HtmlSearchScrapper
+from .html_base import HtmlSearchScrapper, to_usd
 
 BASE_URL = "https://blackfrog.jp"
 SEARCH_URL = f"{BASE_URL}/shop/shopbrand.html"
@@ -108,7 +108,7 @@ def parse_search_html(html: str | bytes, card_name: str, fx_jpy_per_usd: float) 
             "card": en,
             "set": m.group("set"),
             "price_jpy": price_jpy,
-            "price_usd": round(price_jpy / fx_jpy_per_usd, 2),
+            "price_usd": to_usd(price_jpy, fx_jpy_per_usd),
             "stock": None,  # BLACK FROG list view doesn't expose stock counts
             "condition": "NM",
             "link": link,

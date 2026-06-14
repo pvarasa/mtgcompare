@@ -8,7 +8,7 @@ from sqlalchemy import text
 
 import mtgcompare.auth as auth_module
 import mtgcompare.db as db_module
-from mtgcompare import decklist, pricing, web
+from mtgcompare import decklist, pricing, search, web
 from mtgcompare import inventory as inv
 
 # ``test_db`` fixture (SQLite-temp engine swap) lives in tests/conftest.py.
@@ -160,11 +160,11 @@ def test_collapse_marketplace_offers_picks_the_active_modes_winner():
                  "price_jpy": 2064.0, "ship_jpy": 300.0}
     other = {"shop": "Hareruya", "card": "Foo", "set": "MH3", "price_jpy": 1090.0}
 
-    off = web._collapse_marketplace_offers([by_item, by_landed, other], False)
+    off = search.collapse_marketplace_offers([by_item, by_landed, other], False)
     assert other in off
     assert [r for r in off if r["shop"] == "TCGPlayer → JP"] == [by_item]
 
-    on = web._collapse_marketplace_offers([by_item, by_landed, other], True)
+    on = search.collapse_marketplace_offers([by_item, by_landed, other], True)
     assert other in on
     assert [r for r in on if r["shop"] == "TCGPlayer → JP"] == [by_landed]
 
@@ -174,7 +174,7 @@ def test_collapse_keeps_marketplace_offers_of_distinct_printings():
          "price_jpy": 562.0, "ship_jpy": 3000.0}
     b = {"shop": "TCGPlayer → JP", "card": "Foo", "set": "PLST",
          "price_jpy": 700.0, "ship_jpy": 300.0}
-    out = web._collapse_marketplace_offers([a, b], False)
+    out = search.collapse_marketplace_offers([a, b], False)
     assert len(out) == 2
 
 
@@ -186,7 +186,7 @@ def test_apply_shipping_prefers_row_level_over_flat_override():
     free_ship_row = {"shop": "TCGPlayer → JP", "price_jpy": 2000.0, "ship_jpy": 0.0}
     results = [marketplace_row, flat_row, free_ship_row]
 
-    web._apply_shipping(results, {"Hareruya": 385})
+    search.apply_shipping(results, {"Hareruya": 385})
 
     assert marketplace_row["price_jpy_with_shipping"] == 3562.0
     assert flat_row["ship_jpy"] == 385
@@ -718,8 +718,8 @@ def test_compute_portfolio_history_no_mapped_lots_skips_query():
 
 
 def test_load_card_map_for_sets_filters_by_set(test_db):
+    from mtgcompare.pricing import common as pricing_common
     from mtgcompare.pricing import market_repo
-    from mtgcompare.pricing import service as pricing_service
 
     with db_module.get_conn() as conn:
         market_repo.upsert_card_map(conn, [
@@ -732,9 +732,9 @@ def test_load_card_map_for_sets_filters_by_set(test_db):
         assert {r["uuid"] for r in rows} == {"u-sol"}  # 2XM not scanned
         assert market_repo.load_card_map_for_sets(conn, []) == []
 
-    # The service wrapper narrows by the inventory's own sets and indexes by
+    # The common wrapper narrows by the inventory's own sets and indexes by
     # the same key shape callers resolve with.
-    card_map = pricing_service.load_card_map_for_inventory([
+    card_map = pricing_common.load_card_map_for_inventory([
         {"card_name": "Sol Ring", "set_code": "C21", "card_number": "263", "printing": "Normal"},
     ])
     assert card_map == {("sol ring", "C21", "263", 0): "u-sol"}
@@ -1245,6 +1245,11 @@ def test_populate_market_prices_handles_postgres_types(monkeypatch):
                 class FakeResult:
                     def fetchall(self_):
                         return [(uuid.UUID(raw_uuid), "normal", Decimal("1.23"))]
+
+                    def fetchone(self_):
+                        # has_history()'s "SELECT 1 FROM price_rows LIMIT 1"
+                        # gate — non-None means history is present.
+                        return (1,)
                 return FakeResult()
 
         @contextlib.contextmanager

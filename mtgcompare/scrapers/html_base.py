@@ -108,6 +108,23 @@ def make_session(extra_headers: dict | None = None) -> requests.Session:
     return s
 
 
+def to_usd(price_jpy: float, fx_jpy_per_usd: float) -> float:
+    """Convert a JPY price to USD at the given JPY-per-USD rate, rounded to cents.
+
+    The single place the per-shop record-building conversion + rounding
+    convention lives, shared by every JPY-sourced scraper.
+    """
+    return round(price_jpy / fx_jpy_per_usd, 2)
+
+
+def to_jpy(price_usd: float, fx_jpy_per_usd: float) -> float:
+    """Convert a USD price to JPY at the given JPY-per-USD rate, rounded to cents.
+
+    The inverse of ``to_usd``, for the USD-sourced shops (TCGPlayer / Scryfall).
+    """
+    return round(price_usd * fx_jpy_per_usd, 2)
+
+
 class HtmlSearchScrapper(MtgScrapper):
     """Convention-based base for one-GET HTML-search shops.
 

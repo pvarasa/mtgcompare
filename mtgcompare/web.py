@@ -33,7 +33,7 @@ from flask import (
 )
 from flask.json.provider import JSONProvider
 
-from . import auth, db, decklist, pricing
+from . import auth, db, decklist, jobs, pricing, search
 from . import inventory as inv
 from .log_context import (
     REQUEST_ID_HEADER,
@@ -338,8 +338,6 @@ def _condition_abbr(value: str) -> str:
 
 _fx: float | None = None
 _fx_lock = Lock()
-_download_jobs: dict[str, dict] = {}
-_download_jobs_lock = Lock()
 
 
 def _get_fx() -> float | None:
@@ -395,53 +393,6 @@ def _shop_filter_config(enabled: set[str] | None) -> list[dict]:
     ]
 
 
-def _landed_jpy(r: dict) -> float:
-    """Item price plus the row's own shipping (0 when unknown/absent)."""
-    return r["price_jpy"] + (r.get("ship_jpy") or 0)
-
-
-def _collapse_marketplace_offers(
-    results: list[dict],
-    include_shipping: bool,
-) -> list[dict]:
-    """Show one marketplace row per (shop, card, set): the active sort
-    mode's winner.
-
-    Marketplace scrapers emit both the cheapest-by-item-price and the
-    cheapest-by-landed-total offer, because each sort mode has a
-    different true cheapest. Rendering both at once reads as duplicate
-    rows — and with the shipping toggle off, the landed-cost row would
-    leak shipping into a view that promised not to consider it.
-    """
-    metric = _landed_jpy if include_shipping else (lambda r: r["price_jpy"])
-
-    kept: list[dict] = []
-    winners: dict[tuple, dict] = {}
-    for r in results:
-        if r["shop"] not in MARKETPLACE_SHOPS:
-            kept.append(r)
-            continue
-        key = (r["shop"], r["card"], r["set"])
-        current = winners.get(key)
-        if current is None or metric(r) < metric(current):
-            winners[key] = r
-    kept.extend(winners.values())
-    return kept
-
-
-def _apply_shipping(results: list[dict], overrides_jpy: dict[str, int]) -> None:
-    """Fill per-row shipping, compute the landed total, sort by it.
-
-    Marketplace rows arrive with their offer's real ``ship_jpy``;
-    every other row gets the flat per-shop estimate.
-    """
-    for r in results:
-        if r.get("ship_jpy") is None:
-            r["ship_jpy"] = overrides_jpy.get(r["shop"], 0)
-        r["price_jpy_with_shipping"] = _landed_jpy(r)
-    results.sort(key=lambda r: r["price_jpy_with_shipping"])
-
-
 @app.route("/")
 def index():
     q = request.args.get("q", "").strip()
@@ -466,9 +417,9 @@ def index():
                 q, fx, enabled=enabled_shops, logger=app.logger,
                 timeouts_out=timed_out_shops,
             )
-            results = _collapse_marketplace_offers(results, include_shipping)
+            results = search.collapse_marketplace_offers(results, include_shipping)
             if include_shipping:
-                _apply_shipping(results, shipping_overrides_jpy)
+                search.apply_shipping(results, shipping_overrides_jpy)
             else:
                 results.sort(key=lambda r: r["price_jpy"])
         app.logger.info(
@@ -690,166 +641,6 @@ def _format_sse(event_type: str, payload: dict) -> str:
     return f"event: {event_type}\ndata: {orjson.dumps(payload).decode()}\n\n"
 
 
-_TOTALS_DEBOUNCE_S = 0.5
-
-
-def _emit_decklist_meta(prep: decklist.DecklistPrep, q: queue.Queue) -> None:
-    q.put(("meta", {
-        "total_cards": prep.total_cards,
-        "skipped_basics": prep.skipped_basics,
-        "distinct_names": len(prep.name_qty),
-        "inventory_hits": prep.inventory_hits,
-        "names_to_search": len(prep.names_to_search),
-        "use_inventory": prep.use_inventory,
-        "fx": prep.fx,
-        "shop_filter_active": prep.enabled_shops is not None,
-    }))
-
-
-def _emit_decklist_row(
-    name: str,
-    prep: decklist.DecklistPrep,
-    rows: list[dict],
-    row_template,
-    q: queue.Queue,
-) -> None:
-    # Pre-render the <tr> server-side so the client can just innerHTML-append.
-    # We can't call render_template from the worker thread (no Flask app
-    # context), but the Jinja env is process-global and thread-safe to read
-    # from — template loading + render takes no Flask state.
-    row = decklist.build_one_card_row(
-        name, prep.name_qty, prep.name_canonical,
-        prep.name_inv_qty, prep.name_needed, rows,
-    )
-    row_html = row_template.render(
-        row=row,
-        use_inventory=prep.use_inventory,
-        shop_flags=SHOP_FLAGS,
-    )
-    q.put(("row", {
-        "key": name,
-        "html": row_html,
-        "qty_needed": row["qty_needed"],
-        "has_best": row["best"] is not None,
-    }))
-
-
-def _emit_decklist_totals(
-    prep: decklist.DecklistPrep,
-    prices_by_name: dict[str, list[dict]],
-    q: queue.Queue,
-) -> list[dict]:
-    """Snapshot card_rows + shop_totals and enqueue one ``totals`` event.
-
-    Returns the freshly-built card_rows so the caller can reuse them for
-    final logging without re-running ``decklist.build_card_rows`` twice.
-    """
-    card_rows = decklist.build_card_rows(
-        prep.name_qty, prep.name_canonical, prep.name_inv_qty,
-        prep.name_needed, prices_by_name,
-    )
-    shop_list, totals = decklist.compute_shop_totals(
-        card_rows, prep.shipping_overrides_jpy, prep.fx,
-    )
-    q.put(("totals", {"shop_list": shop_list, **totals}))
-    return card_rows
-
-
-def _emit_inventory_only_rows(
-    prep: decklist.DecklistPrep, row_template, q: queue.Queue,
-) -> None:
-    # Inventory-covered cards never enter the fan-out (qty_needed is 0)
-    # so the streamed table would otherwise drop them silently, while the
-    # synchronous /decklist path shows them as "✓ in inventory" rows.
-    # Emit in canonical alphabetical order so the inventory section is
-    # stable from the first paint.
-    searched_set = set(prep.names_to_search)
-    inventory_only = sorted(
-        (n for n in prep.name_qty if n not in searched_set),
-        key=lambda x: prep.name_canonical[x].lower(),
-    )
-    for name in inventory_only:
-        _emit_decklist_row(name, prep, [], row_template, q)
-
-
-def _run_decklist_fanout(
-    prep: decklist.DecklistPrep,
-    prices_by_name: dict[str, list[dict]],
-    timed_out: set[str],
-    row_template,
-    q: queue.Queue,
-) -> None:
-    """Drive the per-card fan-out, emitting row + shop_timeout + debounced
-    totals events as results stream in."""
-    if prep.fx is None:
-        return
-    timed_out_emitted: set[str] = set()
-    last_totals_emit = 0.0
-    for name, rows in _iter_decklist_prices(
-        prep.names_to_search, prep.name_canonical, prep.fx, prep.enabled_shops,
-        timeouts_out=timed_out,
-    ):
-        prices_by_name[name] = rows
-        _emit_decklist_row(name, prep, rows, row_template, q)
-
-        for shop in sorted(timed_out - timed_out_emitted):
-            q.put(("shop_timeout", {"shop": shop}))
-            timed_out_emitted.add(shop)
-
-        now = monotonic()
-        if now - last_totals_emit > _TOTALS_DEBOUNCE_S:
-            _emit_decklist_totals(prep, prices_by_name, q)
-            last_totals_emit = now
-
-
-def _produce_decklist_events(prep: decklist.DecklistPrep, q: queue.Queue) -> None:
-    """Run the decklist fan-out and push (event_type, payload) tuples to
-    ``q``. Terminal sentinel is ``None``. Runs in a daemon thread driven
-    by the SSE response generator below.
-
-    Mirrors the synchronous /decklist handler's behavior but yields each
-    card row, each shop timeout, and debounced running totals as they
-    arrive instead of bundling them into one rendered page.
-    """
-    t0 = monotonic()
-    # Cache the template once per search — render() is called per row
-    # (~up to 100/decklist), so we don't want to re-look-up the env on
-    # each emit. Jinja already caches compiled templates by name, but
-    # the auto-reload check + dict lookup is non-trivial in a hot loop.
-    row_template = app.jinja_env.get_template("_decklist_row.html")
-    prices_by_name: dict[str, list[dict]] = {n: [] for n in prep.name_qty}
-    timed_out: set[str] = set()
-    try:
-        _emit_decklist_meta(prep, q)
-        _emit_inventory_only_rows(prep, row_template, q)
-        _run_decklist_fanout(prep, prices_by_name, timed_out, row_template, q)
-
-        card_rows = _emit_decklist_totals(prep, prices_by_name, q)
-        rows_with_match = sum(1 for r in card_rows if r["best"] is not None)
-        duration_ms = int((monotonic() - t0) * 1000)
-        q.put(("done", {
-            "duration_ms": duration_ms,
-            "rows_with_match": rows_with_match,
-            "timed_out_shops": sorted(timed_out),
-        }))
-        app.logger.info(
-            "event=decklist_search status=ok size=%d distinct_names=%d "
-            "names_searched=%d inventory_hits=%d shops_enabled=%s use_inventory=%d "
-            "rows_with_match=%d skipped_basics=%d timed_out_shops=%s "
-            "transport=sse duration_ms=%d",
-            prep.total_cards, len(prep.name_qty), len(prep.names_to_search), prep.inventory_hits,
-            len(decklist.effective_search_shops(prep.enabled_shops)),
-            int(prep.use_inventory), rows_with_match, prep.skipped_basics,
-            ",".join(sorted(timed_out)) or "none",
-            duration_ms,
-        )
-    except Exception:
-        app.logger.exception("event=decklist_search_stream_failed")
-        q.put(("error", {"message": "Internal error during search."}))
-    finally:
-        q.put(None)
-
-
 @app.route("/decklist/stream", methods=["POST"])
 def decklist_stream():
     """Single-request SSE search. Validates the form, then streams the
@@ -883,10 +674,21 @@ def decklist_stream():
             }), 429
         _in_flight_by_user[user_id] = active + 1
 
+    # Pre-load the row template once per search (render() runs per card,
+    # ~up to 100/decklist) while we still hold the Flask app context; the
+    # producer thread can't reach app.jinja_env. collect_prices is read
+    # here so test monkeypatches on web.collect_prices still apply.
+    row_template = app.jinja_env.get_template("_decklist_row.html")
+
     def generate() -> Iterator[str]:
         q: queue.Queue = queue.Queue()
         Thread(
-            target=_produce_decklist_events, args=(prep, q), daemon=True,
+            target=decklist.produce_decklist_events,
+            kwargs={
+                "prep": prep, "q": q, "row_template": row_template,
+                "collect": collect_prices, "logger": app.logger,
+            },
+            daemon=True,
         ).start()
         try:
             while True:
@@ -932,34 +734,6 @@ def _compute_market_ctx(user_id: str, params: dict) -> dict:
     return pricing.compute_market_ctx(
         user_id, params, get_fx=_get_fx, per_page_choices=_PER_PAGE_CHOICES,
     )
-
-
-def _init_download_job(job_id: str) -> None:
-    with _download_jobs_lock:
-        _download_jobs[job_id] = {
-            "id": job_id,
-            "state": "running",
-            "phase": "Queued",
-            "detail": "Waiting to start...",
-            "progress": 0,
-            "updated_at": datetime.now(UTC).isoformat(timespec="seconds"),
-            "error": None,
-        }
-
-
-def _set_download_job(job_id: str, **updates) -> None:
-    with _download_jobs_lock:
-        job = _download_jobs.get(job_id)
-        if not job:
-            return
-        job.update(updates)
-        job["updated_at"] = datetime.now(UTC).isoformat(timespec="seconds")
-
-
-def _get_download_job(job_id: str) -> dict | None:
-    with _download_jobs_lock:
-        job = _download_jobs.get(job_id)
-        return dict(job) if job else None
 
 
 @app.route("/market")
@@ -1011,21 +785,20 @@ def market_history_download():
     # Use global inventory so all users' cards get UUID-mapped and priced.
     inventory_rows = inv.list_all_global()
 
-    with _download_jobs_lock:
-        running = next((job for job in _download_jobs.values() if job["state"] == "running"), None)
+    running = jobs.find_running()
     if running:
         return jsonify({"ok": True, "job_id": running["id"], "already_running": True})
 
     job_id = uuid4().hex
-    _init_download_job(job_id)
+    jobs.init(job_id)
 
     def _progress(progress: int, phase: str, detail: str) -> None:
-        _set_download_job(job_id, progress=progress, phase=phase, detail=detail)
+        jobs.update(job_id, progress=progress, phase=phase, detail=detail)
 
     def _worker(snapshot_rows: list[dict]) -> None:
         try:
             mapped_count, point_count = pricing.import_mtgjson_history(snapshot_rows, progress_cb=_progress)
-            _set_download_job(
+            jobs.update(
                 job_id,
                 state="done",
                 progress=100,
@@ -1037,7 +810,7 @@ def market_history_download():
                 "event=history_download_failed job_id=%s class=%s",
                 job_id, type(exc).__name__,
             )
-            _set_download_job(
+            jobs.update(
                 job_id,
                 state="error",
                 phase="Failed",
@@ -1054,7 +827,7 @@ def market_history_download_status():
     job_id = request.args.get("job_id", "").strip()
     if not job_id:
         return jsonify({"ok": False, "error": "job_id is required"}), 400
-    job = _get_download_job(job_id)
+    job = jobs.get(job_id)
     if not job:
         return jsonify({"ok": False, "error": "job not found"}), 404
     return jsonify({"ok": True, **job})
@@ -1455,13 +1228,12 @@ def cron_update_prices():
             return jsonify({"ok": False, "error": "Unauthorized"}), 401
 
 
-    with _download_jobs_lock:
-        running = next((j for j in _download_jobs.values() if j["state"] == "running"), None)
+    running = jobs.find_running()
     if running:
         return jsonify({"ok": True, "job_id": running["id"], "already_running": True})
 
     job_id = uuid4().hex
-    _init_download_job(job_id)
+    jobs.init(job_id)
     run_id = run_log.record_start(triggered_at, trigger_source, job_id)
     app.logger.info(
         "Daily price update started run_id=%s job_id=%s source=%s",
@@ -1469,7 +1241,7 @@ def cron_update_prices():
     )
 
     def _progress(progress: int, phase: str, detail: str) -> None:
-        _set_download_job(job_id, progress=progress, phase=phase, detail=detail)
+        jobs.update(job_id, progress=progress, phase=phase, detail=detail)
 
     def _worker() -> None:
         t0 = monotonic()
@@ -1478,7 +1250,7 @@ def cron_update_prices():
                 pricing.run_daily_price_update(progress_cb=_progress)
             )
             duration_ms = int((monotonic() - t0) * 1000)
-            _set_download_job(
+            jobs.update(
                 job_id, state="done", progress=100, phase="Done",
                 detail=f"Updated {rows_inserted:,} price points for {mapped_count} lot(s).",
             )
@@ -1495,8 +1267,8 @@ def cron_update_prices():
         except Exception as exc:
             duration_ms = int((monotonic() - t0) * 1000)
             app.logger.exception("Daily price update failed run_id=%s", run_id)
-            _set_download_job(job_id, state="error", phase="Failed",
-                              detail="Daily price update failed.", error=str(exc))
+            jobs.update(job_id, state="error", phase="Failed",
+                        detail="Daily price update failed.", error=str(exc))
             run_log.record_finish(
                 run_id=run_id, status="failed", duration_ms=duration_ms,
                 error_message=str(exc),

@@ -20,7 +20,7 @@ import re
 
 from selectolax.parser import HTMLParser
 
-from .html_base import HtmlSearchScrapper, node_text_ws
+from .html_base import HtmlSearchScrapper, node_text_ws, to_usd
 
 BASE_URL = "https://www.cardrush-mtg.jp"
 SEARCH_URL = f"{BASE_URL}/product-list"
@@ -96,7 +96,7 @@ def parse_search_html(html: str | bytes, card_name: str, fx_jpy_per_usd: float) 
         if not price_match:
             continue
         price_jpy = float(price_match.group(1).replace(",", ""))
-        price_usd = round(price_jpy / fx_jpy_per_usd, 2)
+        price_usd = to_usd(price_jpy, fx_jpy_per_usd)
 
         href = (link_el.attributes.get("href") or "").strip()
         link = href if href.startswith("http") else f"{BASE_URL}{href}"

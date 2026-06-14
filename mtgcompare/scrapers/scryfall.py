@@ -31,6 +31,7 @@ from .html_base import (
     ScraperFetchError,
     decode_json_response,
     raise_for_response,
+    to_jpy,
 )
 from .html_base import make_session as _make_session
 
@@ -106,7 +107,7 @@ def record_from_summary(summary: dict, fx_jpy_per_usd: float) -> dict | None:
         "shop": "TCGPlayer market",
         "card": summary["name"],
         "set": summary["set"],
-        "price_jpy": round(usd * fx_jpy_per_usd, 2),
+        "price_jpy": to_jpy(usd, fx_jpy_per_usd),
         "price_usd": usd,
         "stock": None,
         "condition": "NM",

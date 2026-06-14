@@ -7,19 +7,43 @@ Repo-specific guidance for coding sessions.
 - `mtgcompare/`
   Main application package.
 - `mtgcompare/web.py`
-  Flask layer only: routes, middleware, SSE plumbing, and the in-memory
-  download-job registry. Domain logic lives in the modules below — handlers
-  parse the request, call a domain/service function, then render. Keeps a
-  few thin wrappers that inject web-layer state (`_get_fx`, `collect_prices`,
-  the inventory map) into the otherwise Flask-free domain functions.
+  Flask layer only: routes, middleware, SSE transport (the
+  `text/event-stream` response + keepalive + per-user in-flight cap), and
+  config/bootstrap. Domain logic lives in the modules below — handlers parse
+  the request, call a domain/service function, then render. Keeps a few thin
+  wrappers that inject web-layer state (`_get_fx`, `collect_prices`, the
+  inventory map) into the otherwise Flask-free domain functions.
 - `mtgcompare/decklist.py`
   Decklist pricing domain (Flask-free): parse → strip basics → consolidate
-  → deduct inventory → per-card×shop fan-out → row/shop-total building.
+  → deduct inventory → per-card×shop fan-out → row/shop-total building. Also
+  owns the SSE event production (`produce_decklist_events` + the `_emit_*` /
+  `_run_fanout` helpers): the route hands it a queue + the pre-loaded row
+  template + injected `collect`/`logger`, and it pushes `(event_type,
+  payload)` tuples back for the route to frame.
+- `mtgcompare/search.py`
+  Single-card search result post-processing (Flask-free): collapse each
+  marketplace shop's offers to the active sort mode's winner
+  (`collapse_marketplace_offers`) and the include-shipping landed-total sort
+  (`apply_shipping`).
+- `mtgcompare/jobs.py`
+  In-memory registry for background import/price-update jobs (`init` /
+  `update` / `get` / `find_running`), guarded by a lock. Used by the
+  download + cron routes; not persisted.
 - `mtgcompare/pricing/`
-  Market + MTGJSON price-history package. `pricing/__init__.py` re-exports
-  `service`'s public API so callers use `pricing.<name>`.
-  - `service.py` — orchestration (MTGJSON set-file download, inventory-lot→UUID
-    mapping, the import pipeline) + the `/market` render computation and caches.
+  Market + MTGJSON price-history package. The logic is split across three
+  modules sharing a small `common` core; `pricing/__init__.py` re-exports
+  all of their public APIs so callers use `pricing.<name>`.
+  - `common.py` — shared by both halves: card-identity helpers
+    (`normalize_set_code`, `is_foil`), the MTGJSON cache dir / DuckDB path,
+    the `price_store()` factory + read wrappers, and the inventory-lot →
+    `mtgjson_card_map` lookups.
+  - `import_service.py` — the write side: MTGJSON set-file download,
+    inventory-lot→UUID mapping, the import pipeline, and the daily cron
+    price update.
+  - `market_service.py` — the read side: the `/market` render computation
+    (`compute_market_ctx` + price/PnL projection + summary + pagination),
+    its process-wide caches, and the per-card / whole-portfolio history
+    series.
   - `history_store.py` — `PriceHistoryStore` with two backends
     (`PostgresPriceStore`, `DuckDbPriceStore`) and `get_store()`, the single
     place the local-DuckDB-vs-Postgres branch lives.
@@ -32,9 +56,10 @@ Repo-specific guidance for coding sessions.
   Scraper stack. `base.py` (the `MtgScrapper` ABC), `html_base.py`
   (`HtmlSearchScrapper` convention base, plus the shared `make_session` /
   `raise_for_response` / `decode_json_response` helpers the JSON scrapers
-  also use), `cache.py` (`CachedScrapper` DB-cache wrapper), `registry.py`
-  (shop registry incl. the `marketplace` flag + parallel `collect_prices()`
-  fan-out), and one module per shop.
+  also use, and the `to_usd` / `to_jpy` FX conversion helpers every shop
+  builds records with), `cache.py` (`CachedScrapper` DB-cache wrapper),
+  `registry.py` (the `Shop` NamedTuple registry incl. the `marketplace`
+  flag + parallel `collect_prices()` fan-out), and one module per shop.
 - `mtgcompare/inventory.py`
   Inventory storage and inventory CLI. All public functions accept a `user_id` parameter.
 - `mtgcompare/compare.py`
@@ -136,8 +161,8 @@ The `users` table is keyed on `workos_user_id`; inventory rows continue to key o
   (`scrapers/tcgplayer.py`, the cheapest NM/LP English offers that ship to
   Japan via the undocumented `mp-search-api` listings endpoint — the scraper
   emits/caches up to two offers per printing, cheapest by item price and
-  cheapest by landed total, and `web._collapse_marketplace_offers` renders only
-  the active sort mode's winner so the shipping-off view never reflects
+  cheapest by landed total, and `search.collapse_marketplace_offers` renders
+  only the active sort mode's winner so the shipping-off view never reflects
   shipping). `price_jpy` is the item price like every other shop; the offer's
   own seller shipping rides along as `ship_jpy` (persisted in
   `shop_listings.ship_jpy`).
@@ -148,7 +173,7 @@ The `users` table is keyed on `workos_user_id`; inventory rows continue to key o
   driven from that one flag: decklist pricing skips them
   (`decklist.effective_search_shops`), `_shipping_config` never renders an
   editable shipping override for them, the include-shipping sort
-  (`web._apply_shipping`) uses each row's own `ship_jpy` instead of a flat
+  (`search.apply_shipping`) uses each row's own `ship_jpy` instead of a flat
   estimate, and the decklist form hides their shop-filter checkbox via the
   `marketplace_shops` Jinja global.
 - Market prices are cached in the `market_prices` table (global, not per-user).
@@ -177,7 +202,7 @@ The `users` table is keyed on `workos_user_id`; inventory rows continue to key o
 
 ### Shared
 
-- Both backends are reached through `pricing.history_store.PriceHistoryStore` (`PostgresPriceStore` / `DuckDbPriceStore`), selected once by `pricing.history_store.get_store()`. The orchestration that calls them (`import_mtgjson_history`, `run_daily_price_update`, UUID mapping, `market_prices` population) lives in `pricing/service.py`.
+- Both backends are reached through `pricing.history_store.PriceHistoryStore` (`PostgresPriceStore` / `DuckDbPriceStore`), selected once by `pricing.history_store.get_store()`. The orchestration that calls them — `import_mtgjson_history`, `run_daily_price_update`, UUID mapping, `market_prices` population — lives in `pricing/import_service.py`; the price-store factory + read wrappers it shares with the `/market` read path live in `pricing/common.py`.
 - Card-to-UUID mapping lives in the `mtgjson_card_map` table (data access via `market_repo`); only sets with unmapped lots are reprocessed.
 - The `/market/history/download` route uses `inv.list_all_global()` so all users' cards get mapped and priced; the work runs in `pricing.import_mtgjson_history()`.
 
