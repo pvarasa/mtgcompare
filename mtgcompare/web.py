@@ -11,6 +11,7 @@ import queue
 import re
 import tempfile
 from collections.abc import Collection, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Lock, Thread
@@ -180,6 +181,16 @@ if db.IS_POSTGRES and not _CRON_SECRET:
         "(otherwise /internal/cron/update-prices has no authentication)."
     )
 
+# The webhook's HMAC signature is its only authentication (the route is
+# public-prefixed and CSRF-exempt). With an empty secret the signature is
+# computable by anyone, and a forged user.deleted event deletes that
+# user's inventory rows.
+if auth.WORKOS_ENABLED and not auth.WORKOS_WEBHOOK_SECRET:
+    raise RuntimeError(
+        "WORKOS_WEBHOOK_SECRET must be set when WorkOS is enabled "
+        "(otherwise /webhooks/workos accepts forged events)."
+    )
+
 
 inv.init_schema()
 
@@ -338,19 +349,41 @@ def _condition_abbr(value: str) -> str:
 
 _fx: float | None = None
 _fx_lock = Lock()
+_fx_failed_at: float | None = None
+_FX_RETRY_S = 60.0    # back off this long after a failed fetch
+_FX_TIMEOUT_S = 10.0  # wall-clock cap on one yfinance fetch
 
 
 def _get_fx() -> float | None:
-    """Fetch the JPY/USD rate once per process."""
-    global _fx
+    """Fetch the JPY/USD rate once per process.
+
+    The network call runs outside the lock and under a wall-clock cap, so
+    a hung upstream can't serialize every request behind one socket.
+    Failures are remembered for ``_FX_RETRY_S`` so an outage costs one
+    bounded fetch per window instead of one per request.
+    """
+    global _fx, _fx_failed_at
     with _fx_lock:
-        if _fx is None:
-            try:
-                _fx = get_fx("jpy")
-            except Exception as exc:
-                app.logger.error("FX lookup failed: %s", exc)
-                return None
-        return _fx
+        if _fx is not None:
+            return _fx
+        if _fx_failed_at is not None and monotonic() - _fx_failed_at < _FX_RETRY_S:
+            return None
+    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="fx")
+    try:
+        rate = executor.submit(get_fx, "jpy").result(timeout=_FX_TIMEOUT_S)
+    except Exception as exc:
+        # TimeoutError stringifies to "" — log the class so the reason shows.
+        app.logger.error("FX lookup failed: %s: %s", type(exc).__name__, exc)
+        with _fx_lock:
+            _fx_failed_at = monotonic()
+        return None
+    finally:
+        # Never wait on a hung fetch; the stray worker thread exits on its
+        # own once the underlying socket finally gives up.
+        executor.shutdown(wait=False)
+    with _fx_lock:
+        _fx = rate
+    return rate
 
 
 def _parse_shipping_overrides(source) -> dict[str, int]:
@@ -463,21 +496,6 @@ def _shipping_config(overrides_jpy: dict | None = None) -> list[dict]:
         for shop in SHIPPING_JPY
         if shop not in MARKETPLACE_SHOPS
     ]
-
-
-def _iter_decklist_prices(
-    names_to_search: list[str],
-    name_canonical: dict[str, str],
-    fx: float,
-    enabled_shops: set[str] | None,
-    timeouts_out: set[str] | None = None,
-) -> Iterator[tuple[str, list[dict]]]:
-    """Inject the (monkeypatchable) ``collect_prices`` reference and the
-    Flask app logger into the pure ``decklist.iter_decklist_prices``."""
-    return decklist.iter_decklist_prices(
-        names_to_search, name_canonical, fx, enabled_shops,
-        timeouts_out=timeouts_out, collect=collect_prices, logger=app.logger,
-    )
 
 
 def _fetch_decklist_prices(

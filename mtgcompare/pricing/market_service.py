@@ -23,7 +23,7 @@ from cachetools import TTLCache
 
 from .. import db
 from .. import inventory as inv
-from . import market_repo, meta
+from . import market_repo
 from .common import (
     has_price_history,
     is_foil,
@@ -110,7 +110,6 @@ _PRICE_CACHE_MAX_AGE_S = 3600
 _price_cache_state: dict = {
     "dict": None,                    # {(card_name_lower, set_code_lower, is_foil): price_usd}
     "last_fetched_at": None,
-    "mtgjson_downloaded_at": None,
     "built_at_mono": 0.0,
 }
 _price_cache_lock = Lock()
@@ -142,12 +141,11 @@ def market_cache_clear() -> None:
     with _price_cache_lock:
         _price_cache_state["dict"] = None
         _price_cache_state["last_fetched_at"] = None
-        _price_cache_state["mtgjson_downloaded_at"] = None
         _price_cache_state["built_at_mono"] = 0.0
 
 
-def get_price_cache() -> tuple[dict, str | None, str | None]:
-    """Return (price_dict, last_fetched_at, mtgjson_downloaded_at).
+def get_price_cache() -> tuple[dict, str | None]:
+    """Return (price_dict, last_fetched_at).
 
     Lazily built per worker process on first /market request after a boot
     or cache clear. The price dict maps
@@ -160,13 +158,12 @@ def get_price_cache() -> tuple[dict, str | None, str | None]:
     with _price_cache_lock:
         snap = _price_cache_state
         if snap["dict"] is not None and now - snap["built_at_mono"] < _PRICE_CACHE_MAX_AGE_S:
-            return snap["dict"], snap["last_fetched_at"], snap["mtgjson_downloaded_at"]
+            return snap["dict"], snap["last_fetched_at"]
 
     # Build outside the lock — readers concurrently can still serve from
     # a stale snapshot via the early return above until we publish.
     with db.get_conn() as conn:
         cache_rows = market_repo.load_market_prices(conn)
-        mtgjson_downloaded_at = meta.read(conn, "mtgjson_history_downloaded_at")
 
     price_dict: dict[tuple, float | None] = {}
     last_fetched_at: str | None = None
@@ -179,9 +176,8 @@ def get_price_cache() -> tuple[dict, str | None, str | None]:
     with _price_cache_lock:
         _price_cache_state["dict"] = price_dict
         _price_cache_state["last_fetched_at"] = last_fetched_at
-        _price_cache_state["mtgjson_downloaded_at"] = mtgjson_downloaded_at
         _price_cache_state["built_at_mono"] = monotonic()
-    return price_dict, last_fetched_at, mtgjson_downloaded_at
+    return price_dict, last_fetched_at
 
 
 def sort_key_market(col: str, descending: bool):
@@ -397,13 +393,12 @@ def compute_market_ctx(
     # Process-wide cached price dict. The lazy rebuild on first call /
     # invalidation handles freshness; on the hot path this is an in-RAM
     # dict lookup, not a `SELECT * FROM market_prices`.
-    price_cache, last_fetched_at, mtgjson_downloaded_at = get_price_cache()
+    price_cache, last_fetched_at = get_price_cache()
     has_cache = bool(price_cache)
     history_db_exists = has_price_history()
 
     common = {
         "last_refreshed": format_ago(last_fetched_at),
-        "mtgjson_last_downloaded": format_ago(mtgjson_downloaded_at) if history_db_exists else None,
         "history_db_exists": history_db_exists,
         "allow_price_update": not db.IS_POSTGRES,
         "active": "market",

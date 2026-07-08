@@ -88,7 +88,7 @@ def test_decklist_search_accepts_at_cap():
         web._get_fx = original
 
 
-def test_iter_decklist_prices_yields_one_per_name(monkeypatch):
+def test_iter_decklist_prices_yields_one_per_name():
     """The generator emits one tuple per requested name, even on failure,
     and rows are sorted ascending by price_jpy."""
     def fake_collect(name, fx, *, enabled, logger, timeouts_out):
@@ -102,11 +102,12 @@ def test_iter_decklist_prices_yields_one_per_name(monkeypatch):
             {"price_jpy": 100, "shop": "A", "card": name, "set": "X",
              "price_usd": 0.7, "stock": 1, "condition": "NM", "link": ""},
         ]
-    monkeypatch.setattr(web, "collect_prices", fake_collect)
 
     names = ["sol ring", "boom", "force of will"]
     canonical = {n: n.title() for n in names}
-    out = dict(web._iter_decklist_prices(names, canonical, fx=150.0, enabled_shops=None))
+    out = dict(decklist.iter_decklist_prices(
+        names, canonical, fx=150.0, enabled_shops=None, collect=fake_collect,
+    ))
 
     assert set(out) == set(names)
     # Failed name yields an empty list, not raises.
@@ -117,7 +118,7 @@ def test_iter_decklist_prices_yields_one_per_name(monkeypatch):
         assert prices == sorted(prices)
 
 
-def test_iter_decklist_prices_drops_marketplace_shops(monkeypatch):
+def test_iter_decklist_prices_drops_marketplace_shops():
     """Decklist fan-outs never query marketplace shops — their per-card
     landed prices don't sum to an order total."""
     from mtgcompare.scrapers.registry import ACTIVE_SHOPS, MARKETPLACE_SHOPS
@@ -126,19 +127,20 @@ def test_iter_decklist_prices_drops_marketplace_shops(monkeypatch):
     def fake_collect(name, fx, *, enabled, logger, timeouts_out):
         captured["enabled"] = enabled
         return []
-    monkeypatch.setattr(web, "collect_prices", fake_collect)
     # Literal name on purpose: a rename that loses the marketplace flag
     # must fail here, not silently re-enter decklist totals.
     assert "TCGPlayer → JP" in MARKETPLACE_SHOPS
 
     # Default "all shops" search: every active shop except marketplaces.
-    list(web._iter_decklist_prices(["x"], {"x": "X"}, fx=150.0, enabled_shops=None))
+    list(decklist.iter_decklist_prices(
+        ["x"], {"x": "X"}, fx=150.0, enabled_shops=None, collect=fake_collect,
+    ))
     assert captured["enabled"] == set(ACTIVE_SHOPS) - MARKETPLACE_SHOPS
 
     # Explicit selection that includes a marketplace shop: still dropped.
-    list(web._iter_decklist_prices(
+    list(decklist.iter_decklist_prices(
         ["x"], {"x": "X"}, fx=150.0,
-        enabled_shops={"Hareruya", "TCGPlayer → JP"},
+        enabled_shops={"Hareruya", "TCGPlayer → JP"}, collect=fake_collect,
     ))
     assert captured["enabled"] == {"Hareruya"}
 
@@ -196,15 +198,16 @@ def test_apply_shipping_prefers_row_level_over_flat_override():
     assert results == [flat_row, free_ship_row, marketplace_row]
 
 
-def test_iter_decklist_prices_empty_input_is_empty_iter(monkeypatch):
+def test_iter_decklist_prices_empty_input_is_empty_iter():
     """Edge case — caller passed no names; generator yields nothing
     and never spawns a thread pool."""
-    monkeypatch.setattr(web, "collect_prices",
-                        lambda *a, **kw: pytest.fail("should not be called"))
-    assert list(web._iter_decklist_prices([], {}, fx=150.0, enabled_shops=None)) == []
+    assert list(decklist.iter_decklist_prices(
+        [], {}, fx=150.0, enabled_shops=None,
+        collect=lambda *a, **kw: pytest.fail("should not be called"),
+    )) == []
 
 
-def test_iter_decklist_prices_populates_timeouts_out(monkeypatch):
+def test_iter_decklist_prices_populates_timeouts_out():
     """Caller-supplied timeouts_out set is forwarded into collect_prices
     so streaming consumers can build the live timeout-warning list."""
     captured = []
@@ -213,11 +216,11 @@ def test_iter_decklist_prices_populates_timeouts_out(monkeypatch):
         if timeouts_out is not None:
             timeouts_out.add("Slow Shop")
         return []
-    monkeypatch.setattr(web, "collect_prices", fake_collect)
 
     timeouts: set[str] = set()
-    list(web._iter_decklist_prices(
+    list(decklist.iter_decklist_prices(
         ["x"], {"x": "X"}, fx=150.0, enabled_shops=None, timeouts_out=timeouts,
+        collect=fake_collect,
     ))
     assert "Slow Shop" in timeouts
     assert captured[0] is timeouts
@@ -1187,6 +1190,9 @@ def test_index_renders_for_authenticated_user(monkeypatch):
     assert resp.status_code == 200
     assert b"Alice Tester" in resp.data
     assert b"user_01TEST" not in resp.data  # must not fall back to user_id
+    # The Sign-out form must render for WorkOS users — it silently vanished
+    # once before (76bd33a) because nothing asserted its presence.
+    assert b"Sign out" in resp.data
 
 
 def test_index_falls_back_to_email_when_name_missing(monkeypatch):
