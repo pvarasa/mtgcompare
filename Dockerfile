@@ -1,5 +1,16 @@
 # syntax=docker/dockerfile:1
-FROM python:3.12-slim AS builder
+
+# Base image is digest-pinned so a given git tag always builds on the same
+# layers — a floating tag meant two builds of the same commit could differ.
+# The tag is kept alongside the digest for readability; the digest is what
+# actually resolves. This is the multi-arch index digest, not a per-platform
+# one, so it stays portable.
+#
+# To refresh (picks up Debian security updates, which is the only way they
+# reach this image — there is no apt-get upgrade below):
+#   docker manifest inspect python:3.12-slim | head
+# then update BOTH FROM lines together.
+FROM python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de AS builder
 
 RUN pip install uv
 
@@ -8,7 +19,8 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-group desktop
 
 # ── runtime ──────────────────────────────────────────────────────────────────
-FROM python:3.12-slim
+# Same digest as the builder stage above — keep them in lockstep.
+FROM python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de
 
 # Run as a non-root user. UID matches the deployment manifest's
 # securityContext.runAsUser so volume permissions line up.
