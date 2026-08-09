@@ -25,9 +25,19 @@ _FX = 150.0
 
 # Per-shop probe-card overrides for shops where Force of Will is too thin in
 # stock to be a reliable canary signal. These need to be cards that are
-# routinely listed in plain English NM (no foil, no variant).
+# routinely listed in plain English NM (no foil, no variant) *and* priced
+# above the 50-yen floor asserted below — bulk commons like Cultivate or
+# Giant Growth have the stock depth but sell for 10–50 yen, which trips the
+# plausible-range check.
+#
+# SingleStar and BLACK FROG were added here after both reported a false
+# canary failure on 2026-08-09: their parsers were fine, but every English
+# NM Force of Will listing had sold out, so the probe returned zero rows and
+# read as HTML drift.
 _PROBE_CARD_BY_SHOP = {
     "MINT MALL": "Sol Ring",
+    "SingleStar": "Swords to Plowshares",
+    "BLACK FROG": "Swords to Plowshares",
 }
 
 _SHOPS = [

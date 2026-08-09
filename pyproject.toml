@@ -16,7 +16,10 @@ dependencies = [
     "pyjwt[crypto]>=2.8",
     "requests>=2.33",
     "sqlalchemy>=2.0",
-    "workos>=5.0",
+    # >=10.1.1 is a security floor, not a feature one: every workos 9.x pins
+    # cryptography~=49.0, which hard-blocks the CVE-2026-69247 fix that only
+    # lands in cryptography 50.0.0.
+    "workos>=10.1.1",
     "yfinance>=1.3",
 ]
 
