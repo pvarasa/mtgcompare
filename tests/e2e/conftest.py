@@ -113,8 +113,8 @@ def seed_market_data(clean_inventory, monkeypatch):
     page enters the `has_cache=True` branch (which renders the chart-trigger
     JS and the modal).
 
-    Also pins _get_fx() to a constant so the page doesn't depend on Yahoo
-    Finance reachability.
+    Also pins _get_fx() to a constant so the page doesn't depend on the FX
+    providers' reachability.
     """
     monkeypatch.setattr(web_module, "_fx", 150.0)
     monkeypatch.setattr(web_module, "_get_fx", lambda: 150.0)

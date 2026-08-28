@@ -217,7 +217,8 @@ docker-compose.yml  Local dev stack (app + postgres)
 
 ### Limitations
 
-- FX is fetched once from `yfinance` and cached for the process lifetime.
+- FX is fetched once from the ECB reference rate (Frankfurter, with
+  open.er-api.com as fallback) and cached for the process lifetime.
 - Card matching is case-insensitive exact match — fuzzy matching is not supported.
 - Scryfall's USD price reflects TCGPlayer market price, not the cheapest individual listing; the **TCGPlayer → JP** shop covers the listing side, but only for single-card search — marketplace per-card shipping doesn't sum into decklist totals.
 - Shipping is a per-order flat estimate, not a live checkout quote.

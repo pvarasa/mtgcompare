@@ -1,7 +1,7 @@
 """Canary tests — smoke-test all live shop endpoints and shared dependencies.
 
 Detects when a shop changes its API, URL structure, or HTML layout, or when
-a shared dependency (yfinance FX, MTGJSON) stops responding.
+a shared dependency (the FX providers, MTGJSON) stops responding.
 
 Run:  uv run pytest -m canary
 """
@@ -18,7 +18,7 @@ from mtgcompare.scrapers.serra import CardshopSerraScrapper
 from mtgcompare.scrapers.singlestar import SingleStarScrapper
 from mtgcompare.scrapers.tcgplayer import TcgPlayerJpScrapper
 from mtgcompare.scrapers.tokyomtg import TokyoMtgScrapper
-from mtgcompare.utils import get_fx
+from mtgcompare.utils import _from_er_api, _from_frankfurter, get_fx
 
 _DEFAULT_PROBE_CARD = "Force of Will"
 _FX = 150.0
@@ -94,12 +94,30 @@ def test_fx_rate_is_plausible():
     try:
         rate = get_fx("jpy")
     except Exception as exc:
-        pytest.fail(f"get_fx failed — yfinance API may have changed: {exc}")
+        pytest.fail(f"get_fx failed — every FX provider is down or has changed shape: {exc}")
 
     assert isinstance(rate, (int, float)), \
         f"get_fx returned {type(rate).__name__}, expected a number"
     assert 50 < rate < 500, \
-        f"JPY/USD rate {rate} is implausible — yfinance ticker or field name may have changed"
+        f"JPY/USD rate {rate} is implausible — an FX provider's response shape may have changed"
+
+
+@pytest.mark.canary
+@pytest.mark.parametrize("source", [_from_frankfurter, _from_er_api])
+def test_each_fx_source_is_healthy(source):
+    """Probe both providers separately.
+
+    ``get_fx`` falls back to the second source, so testing it alone would
+    stay green while the primary quietly rots. Each provider gets its own
+    assertion so drift shows up in the one that broke.
+    """
+    try:
+        rate = source("JPY")
+    except Exception as exc:
+        pytest.fail(f"{source.__name__} failed — endpoint or response shape may have changed: {exc}")
+
+    assert 50 < rate < 500, \
+        f"{source.__name__} returned an implausible JPY/USD rate: {rate}"
 
 
 @pytest.mark.canary

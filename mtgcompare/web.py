@@ -351,7 +351,7 @@ _fx: float | None = None
 _fx_lock = Lock()
 _fx_failed_at: float | None = None
 _FX_RETRY_S = 60.0    # back off this long after a failed fetch
-_FX_TIMEOUT_S = 10.0  # wall-clock cap on one yfinance fetch
+_FX_TIMEOUT_S = 10.0  # wall-clock cap on one FX fetch
 
 
 def _get_fx() -> float | None:

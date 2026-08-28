@@ -43,7 +43,7 @@ _SHARED_SESSION = make_session()
 def parse_lazy_html(html: str | bytes, card_name: str, fx_jpy_per_usd: float) -> list[dict]:
     """Extract price records from the HTML returned by /unisearch/lazy.
 
-    fx_jpy_per_usd: JPY per 1 USD (yfinance "JPY=X" previousClose).
+    fx_jpy_per_usd: JPY per 1 USD (ECB daily reference rate via utils.get_fx).
     """
     tree = HTMLParser(html)
     target = card_name.strip().lower()

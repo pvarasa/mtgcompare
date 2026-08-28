@@ -13,11 +13,6 @@ Use the platform build scripts to zip and package:
 """
 import os
 import sys
-from PyInstaller.utils.hooks import collect_all
-
-# yfinance and pandas use dynamic imports that the static analyser misses.
-yf_datas,     yf_binaries,     yf_hidden     = collect_all("yfinance")
-pandas_datas, pandas_binaries, pandas_hidden = collect_all("pandas")
 
 _hidden = [
     # Belt-and-suspenders: shops.py imports each scraper module statically
@@ -33,7 +28,7 @@ _hidden = [
     "mtgcompare.scrappers.serra",
     "mtgcompare.scrappers.singlestar",
     "mtgcompare.scrappers.tokyomtg",
-] + yf_hidden + pandas_hidden
+]
 
 # Bundle version pulled from MTGCOMPARE_VERSION when set by the release
 # workflow (it strips the leading "v" from the git tag), otherwise a
@@ -47,12 +42,12 @@ if sys.platform == "darwin":
 a = Analysis(
     ["mtgcompare/launcher.py"],
     pathex=[],
-    binaries=yf_binaries + pandas_binaries,
+    binaries=[],
     datas=[
         ("mtgcompare/templates", "mtgcompare/templates"),
         ("mtgcompare/static",    "mtgcompare/static"),
         ("logging.conf",         "."),
-    ] + yf_datas + pandas_datas,
+    ],
     hiddenimports=_hidden,
     hookspath=[],
     runtime_hooks=[],
