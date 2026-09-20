@@ -10,7 +10,7 @@
 # reach this image — there is no apt-get upgrade below):
 #   docker manifest inspect python:3.12-slim | head
 # then update BOTH FROM lines together.
-FROM python:3.12-slim@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea AS builder
+FROM python:3.12-slim@sha256:2f17fc044b579bab302c2e8054d3a686e2cb9a83de48e70534b94cd8ebbe06a9 AS builder
 
 RUN pip install uv
 
@@ -20,7 +20,7 @@ RUN uv sync --frozen --no-dev --no-group desktop
 
 # ── runtime ──────────────────────────────────────────────────────────────────
 # Same digest as the builder stage above — keep them in lockstep.
-FROM python:3.12-slim@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea
+FROM python:3.12-slim@sha256:2f17fc044b579bab302c2e8054d3a686e2cb9a83de48e70534b94cd8ebbe06a9
 
 # Run as a non-root user. UID matches the deployment manifest's
 # securityContext.runAsUser so volume permissions line up.
