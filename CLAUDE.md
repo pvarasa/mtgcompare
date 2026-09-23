@@ -250,6 +250,13 @@ The `users` table is keyed on `workos_user_id`; inventory rows continue to key o
   # → ~30 s build + ~10 s push + ~10 s rollout
   # → https://mtg-stg.vpablo.dev now runs your code
   ```
+  Without a local Docker engine, build in CI instead (commit + push
+  first; the ref must be a branch, tag or full SHA):
+  ```sh
+  gh workflow run dev-image.yml -f ref=master
+  # pushes :dev and :dev-<12-char sha>; then
+  kubectl -n apps set image deploy/mtgcompare-stg mtgcompare=ghcr.io/pvarasa/mtgcompare:dev-<sha>
+  ```
 - **First-time setup**:
   1. Docker engine reachable from this shell (`docker info` works).
   2. GHCR push login: `echo $GHCR_PAT | docker login ghcr.io -u pvarasa --password-stdin`
