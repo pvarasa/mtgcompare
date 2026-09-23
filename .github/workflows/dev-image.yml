@@ -2,7 +2,7 @@
 # and an immutable :dev-<sha> for the chosen ref. The CI counterpart of
 # scripts/dev-push.sh, for when no local Docker engine is available.
 #
-#   gh workflow run dev-image.yml -f ref=<branch-or-sha>
+#   gh workflow run dev-image.yml -f ref=<branch, tag or full 40-char SHA>
 #
 # Then point stg at it (from ../server_admin):
 #   kubectl -n apps set image deploy/mtgcompare-stg mtgcompare=ghcr.io/pvarasa/mtgcompare:dev-<sha>
@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: Branch, tag or SHA to build
+        description: Branch, tag or full SHA to build (actions/checkout rejects short SHAs)
         default: master
         required: true
 
