@@ -1,6 +1,7 @@
 """Data access for the market-pricing tables.
 
-``market_prices`` holds the latest price per (card_name, set_code, is_foil);
+``market_prices`` holds the latest price per (card_name, set_code,
+card_number, is_foil);
 ``mtgjson_card_map`` maps an inventory lot's identity to its MTGJSON UUID.
 Both are populated by the price-import pipeline and read by the /market
 views. Functions take a live connection so callers can compose them inside
@@ -10,7 +11,12 @@ from sqlalchemy import bindparam, text
 
 from .. import db
 
-_MARKET_PRICES_CONFLICT = ["card_name", "set_code", "is_foil"]
+_MARKET_PRICES_CONFLICT = ["card_name", "set_code", "card_number", "is_foil"]
+
+# app_meta key bumped whenever market_prices is rewritten. Each worker's
+# in-memory price dict compares against it, so an import on one process (or
+# pod) invalidates the others instead of leaving them stale for an hour.
+PRICES_VERSION_KEY = "market_prices_version"
 _CARD_MAP_CONFLICT = ["card_name", "set_code", "card_number", "is_foil"]
 
 
@@ -19,10 +25,11 @@ _CARD_MAP_CONFLICT = ["card_name", "set_code", "card_number", "is_foil"]
 def load_market_prices(conn) -> list[dict]:
     """All market_prices rows as plain dicts.
 
-    Columns: card_name, set_code, is_foil, price_usd, fetched_at.
+    Columns: card_name, set_code, card_number, is_foil, price_usd, fetched_at.
     """
     return [db.row_to_dict(r) for r in conn.execute(
-        text("SELECT card_name, set_code, is_foil, price_usd, fetched_at FROM market_prices")
+        text("SELECT card_name, set_code, card_number, is_foil, price_usd, fetched_at"
+             " FROM market_prices")
     ).mappings().all()]
 
 

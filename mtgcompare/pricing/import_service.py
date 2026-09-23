@@ -17,6 +17,7 @@ import json
 import logging
 import lzma
 import re
+import time
 from collections.abc import Callable
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -118,10 +119,17 @@ def download_or_unavailable(url: str, target: Path, unavailable_msg: str) -> Non
         raise
 
 
+# A cached set file is reused for this long before re-downloading. Set files
+# are only fetched for sets with unmapped lots, and a set's file keeps growing
+# through preview season — reusing one forever meant cards revealed after the
+# first download could never map.
+_SET_FILE_MAX_AGE_S = 24 * 3600
+
+
 def download_mtgjson_set_file(set_code: str) -> tuple[str, Path] | None:
     for candidate in mtgjson_set_candidates(set_code):
         path = mtgjson_set_path(candidate)
-        if path.exists():
+        if path.exists() and time.time() - path.stat().st_mtime < _SET_FILE_MAX_AGE_S:
             return candidate, path
         try:
             download_file(f"{MTGJSON_BASE_URL}/{candidate}.json.xz", path)
@@ -129,6 +137,9 @@ def download_mtgjson_set_file(set_code: str) -> tuple[str, Path] | None:
         except requests.HTTPError as exc:
             if exc.response is not None and exc.response.status_code == 404:
                 continue
+            if path.exists():
+                logger.warning("Refreshing MTGJSON set file %s failed (%s); using cached copy", candidate, exc)
+                return candidate, path
             raise
     return None
 
@@ -272,41 +283,37 @@ def populate_market_prices_from_history(
     if not card_maps:
         return
 
-    # Deduplicate to one market_prices row per (card_name, set_code, is_foil).
-    uuid_to_db_key: dict[tuple[str, str], tuple[str, str, int]] = {}
-    seen_db_keys: set[tuple[str, str, int]] = set()
-    for card_name, set_code, _card_number, is_foil_int, uuid, _ in card_maps:
+    # One market_prices row per printing: (card_name, set_code, card_number,
+    # is_foil). Keying without the collector number gave every variant in a
+    # set (showcase, borderless, ...) whichever variant's price came first.
+    lot_uuid: dict[tuple[str, str, str, int], tuple[str, str]] = {}
+    for card_name, set_code, card_number, is_foil_int, uuid, _ in card_maps:
         finish = "foil" if is_foil_int else "normal"
-        db_key = (card_name, set_code, is_foil_int)
-        if db_key not in seen_db_keys:
-            seen_db_keys.add(db_key)
-            uuid_to_db_key[(str(uuid), finish)] = db_key
-
-    if not uuid_to_db_key:
-        return
+        lot_uuid.setdefault((card_name, set_code, card_number, is_foil_int), (str(uuid), finish))
 
     # With no price history at all, skip the upsert entirely rather than
     # writing NULL prices for every lot. Once history exists, latest_prices
     # is always a dict — an empty result still writes NULL prices for lots
     # MTGJSON hasn't priced, matching the prior behaviour.
-    uuid_list = list({u for (u, _) in uuid_to_db_key})
     store = history_store.get_store(duckdb_path)
     if not store.has_history():
         return
-    latest = store.latest_prices(uuid_list)
+    latest = store.latest_prices(list({u for u, _ in lot_uuid.values()}))
 
     inserts = [
         {
             "card_name": card_name,
             "set_code":  set_code,
+            "card_number": card_number,
             "is_foil":   is_foil_int,
-            "price_usd": latest.get((uuid, finish)),
+            "price_usd": latest.get(uuid_finish),
             "fetched_at": fetched_at,
         }
-        for (uuid, finish), (card_name, set_code, is_foil_int) in uuid_to_db_key.items()
+        for (card_name, set_code, card_number, is_foil_int), uuid_finish in lot_uuid.items()
     ]
     with db.get_conn() as conn:
         market_repo.upsert_market_prices(conn, inserts)
+        meta.write(conn, market_repo.PRICES_VERSION_KEY, datetime.now(UTC).isoformat())
 
 
 def ensure_history_loaded(
@@ -397,6 +404,9 @@ def import_mtgjson_history(rows: list[dict], *, progress_cb=None) -> tuple[int, 
         None if db.IS_POSTGRES else history_duckdb_path,
         downloaded_at,
     )
+    # New prices landed — flush this process's /market caches now; other
+    # workers notice via market_repo.PRICES_VERSION_KEY.
+    market_cache_clear()
 
     _progress(100, "Done", f"Indexed {history_row_count:,} MTGJSON price points and mapped {len(card_maps)} lot(s).")
     return len(card_maps), history_row_count
@@ -433,7 +443,4 @@ def run_daily_price_update(
     today_xz.unlink(missing_ok=True)
 
     mapped_count, _ = import_mtgjson_history(inventory_rows, progress_cb=_progress)
-    # New prices landed — flush the /market data cache so users don't
-    # keep seeing stale PnL for up to the TTL.
-    market_cache_clear()
     return mapped_count, rows_inserted, uuids_streamed, market_date

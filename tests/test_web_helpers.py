@@ -1268,7 +1268,11 @@ def test_populate_market_prices_handles_postgres_types(monkeypatch):
 
     monkeypatch.setattr(db_mod, "IS_POSTGRES", True)
     monkeypatch.setattr(db_mod, "get_conn", fake_get_conn)
-    monkeypatch.setattr(db_mod, "upsert", lambda conn, table, cols, rows: captured.update({"rows": rows}))
+    def fake_upsert(conn, table, cols, rows):
+        if table == "market_prices":
+            captured["rows"] = rows
+
+    monkeypatch.setattr(db_mod, "upsert", fake_upsert)
 
     pricing.populate_market_prices_from_history(card_maps, None, "2026-04-29T00:00:00+00:00")
 
@@ -1412,3 +1416,138 @@ def test_market_partial_tbody_returns_empty_fragments_when_no_price_cache(test_d
     assert resp.headers["Content-Type"].startswith("application/json")
     assert resp.get_json() == {"table_html": "", "summary_html": ""}
 
+
+
+# ---------------------------------------------------------------------------
+# market_prices per printing + cross-process invalidation
+# ---------------------------------------------------------------------------
+
+def _write_market_prices(rows, version):
+    with db_module.get_conn() as conn:
+        pricing.market_repo.upsert_market_prices(conn, [
+            {"card_name": n, "set_code": "MH2", "card_number": num, "is_foil": 0,
+             "price_usd": p, "fetched_at": "2026-09-23T00:00:00+00:00"}
+            for n, num, p in rows
+        ])
+        pricing.meta.write(conn, pricing.market_repo.PRICES_VERSION_KEY, version)
+
+
+def test_market_prices_are_keyed_per_collector_number(test_db):
+    """A borderless variant in the same set must not take the regular
+    printing's price (or vice versa)."""
+    pricing.market_cache_clear()
+    _write_market_prices([("Ragavan", "138", 50.0), ("Ragavan", "435", 90.0)], "v1")
+    lots = [
+        {"card_name": "Ragavan", "set_code": "MH2", "card_number": n,
+         "printing": "normal", "quantity": 1}
+        for n in ("138", "435")
+    ]
+    price_cache, _ = pricing.get_price_cache()
+    priced = pricing.attach_market_prices(lots, price_cache, 150.0, True)
+    assert [r["market_price_usd"] for r in priced] == [50.0, 90.0]
+
+
+def test_price_cache_rebuilds_when_another_process_imports(test_db):
+    """An import elsewhere bumps the version key; this worker's cached dict
+    must notice without its own market_cache_clear()."""
+    pricing.market_cache_clear()
+    _write_market_prices([("Ragavan", "138", 50.0)], "v1")
+    assert pricing.get_price_cache()[0][("ragavan", "mh2", "138", 0)] == 50.0
+    _write_market_prices([("Ragavan", "138", 55.0)], "v2")
+    assert pricing.get_price_cache()[0][("ragavan", "mh2", "138", 0)] == 55.0
+
+
+def test_migrate_recreates_market_prices_without_card_number(test_db):
+    with db_module.get_conn() as conn:
+        conn.execute(text("DROP TABLE market_prices"))
+        conn.execute(text(
+            "CREATE TABLE market_prices (card_name TEXT, set_code TEXT, is_foil INTEGER,"
+            " price_usd NUMERIC, fetched_at TEXT, PRIMARY KEY (card_name, set_code, is_foil))"
+        ))
+    db_module.init_schema()
+    with db_module.get_conn() as conn:
+        assert db_module._column_exists(conn, "market_prices", "card_number")
+
+
+# ---------------------------------------------------------------------------
+# decklist fan-out: cancellation + shared per-user cap
+# ---------------------------------------------------------------------------
+
+def test_iter_decklist_prices_stops_starting_cards_once_cancelled():
+    import threading
+
+    names = [f"card {i}" for i in range(60)]
+    calls = []
+
+    def slow_collect(name, fx, *, enabled, logger, timeouts_out):
+        calls.append(name)
+        time.sleep(0.05)
+        return []
+
+    cancel = threading.Event()
+    yielded = []
+    for n, _rows in decklist.iter_decklist_prices(
+        names, {n: n for n in names}, 150.0, None,
+        collect=slow_collect, cancel=cancel,
+    ):
+        yielded.append(n)
+        cancel.set()
+
+    assert len(yielded) == 1
+    assert len(calls) < len(names)
+
+
+def test_decklist_sync_endpoint_shares_the_per_user_cap(monkeypatch, _clean_in_flight):
+    web.app.config["WTF_CSRF_ENABLED"] = False
+    monkeypatch.setattr(web, "_get_fx", lambda: 150.0)
+    monkeypatch.setattr(web, "collect_prices", lambda *a, **kw: [])
+    web._in_flight_by_user["local"] = web._MAX_IN_FLIGHT_PER_USER
+    with web.app.test_client() as client:
+        assert client.post("/decklist", data={"decklist": "1 Sol Ring"}).status_code == 429
+        web._in_flight_by_user.clear()
+        assert client.post("/decklist", data={"decklist": "1 Sol Ring"}).status_code == 200
+    assert web._in_flight_by_user == {}
+
+
+# ---------------------------------------------------------------------------
+# MTGJSON set-file refresh
+# ---------------------------------------------------------------------------
+
+def test_set_file_is_refreshed_once_stale(tmp_path, monkeypatch):
+    import os
+
+    import requests
+
+    from mtgcompare.pricing import import_service
+
+    path = tmp_path / "MH2.json.xz"
+    path.write_bytes(b"old")
+    monkeypatch.setattr(import_service, "mtgjson_set_path", lambda _c: path)
+    downloads = []
+
+    def fake_download(url, target):
+        downloads.append(url)
+        target.write_bytes(b"new")
+
+    monkeypatch.setattr(import_service, "download_file", fake_download)
+
+    # Fresh copy: reused.
+    assert import_service.download_mtgjson_set_file("MH2") == ("MH2", path)
+    assert downloads == []
+
+    # Stale copy: re-downloaded.
+    old = time.time() - 2 * import_service._SET_FILE_MAX_AGE_S
+    os.utime(path, (old, old))
+    import_service.download_mtgjson_set_file("MH2")
+    assert len(downloads) == 1 and path.read_bytes() == b"new"
+
+    # Stale copy + failing refresh: fall back to the cached file.
+    os.utime(path, (old, old))
+
+    def failing_download(url, target):
+        resp = requests.Response()
+        resp.status_code = 503
+        raise requests.HTTPError(response=resp)
+
+    monkeypatch.setattr(import_service, "download_file", failing_download)
+    assert import_service.download_mtgjson_set_file("MH2") == ("MH2", path)

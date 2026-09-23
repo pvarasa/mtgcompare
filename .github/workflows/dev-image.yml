@@ -1,0 +1,50 @@
+# Builds the stg image without a release: pushes ghcr.io/pvarasa/mtgcompare:dev
+# and an immutable :dev-<sha> for the chosen ref. The CI counterpart of
+# scripts/dev-push.sh, for when no local Docker engine is available.
+#
+#   gh workflow run dev-image.yml -f ref=<branch-or-sha>
+#
+# Then point stg at it (from ../server_admin):
+#   kubectl -n apps set image deploy/mtgcompare-stg mtgcompare=ghcr.io/pvarasa/mtgcompare:dev-<sha>
+name: Dev image
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag or SHA to build
+        default: master
+        required: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  docker:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Resolve short SHA
+        id: sha
+        run: echo "short=$(git rev-parse --short=12 HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:dev
+            ghcr.io/${{ github.repository }}:dev-${{ steps.sha.outputs.short }}

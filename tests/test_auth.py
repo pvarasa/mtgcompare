@@ -294,3 +294,50 @@ def test_webhook_unknown_event_type_is_ignored(monkeypatch):
             "SELECT 1 FROM users WHERE workos_user_id = 'org_X'"
         )).first()
     assert row is None
+
+
+def test_auth_me_resolves_the_session_despite_the_public_prefix(monkeypatch):
+    """/auth/* skips the gate, so /auth/me must resolve the cookie itself."""
+    db_module.init_schema()
+    auth_module._upsert_user({"id": "user_ME", "email": "me@example.com"})
+    monkeypatch.setattr(auth_module, "verify_access_token", lambda _t: {"sub": "user_ME", "sid": "s"})
+
+    with web.app.test_client() as client:
+        assert client.get("/auth/me").status_code == 401
+        client.set_cookie(auth_module.ACCESS_TOKEN_COOKIE, "good-jwt")
+        resp = client.get("/auth/me")
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["authenticated"] is True
+    assert body["user"]["email"] == "me@example.com"
+
+
+def test_concurrent_refreshes_redeem_the_token_once(monkeypatch):
+    """WorkOS rotates refresh tokens on use; parallel requests carrying the
+    same expired pair must share one redemption, not race it."""
+    import threading
+    import time as _time
+
+    auth_module._refresh_memo.clear()
+    calls = []
+
+    def fake_refresh(rt):
+        calls.append(rt)
+        _time.sleep(0.2)
+        return {"user": {"id": "u"}, "access_token": "a2", "refresh_token": "r2"}
+
+    monkeypatch.setattr(auth_module, "refresh", fake_refresh)
+    results = []
+    threads = [
+        threading.Thread(target=lambda: results.append(auth_module.refresh_once("rt-shared")))
+        for _ in range(4)
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(5)
+
+    assert calls == ["rt-shared"]
+    assert [r["refresh_token"] for r in results] == ["r2"] * 4
+    auth_module._refresh_memo.clear()

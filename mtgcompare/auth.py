@@ -12,13 +12,18 @@ mints a new pair when the access token expires.
 """
 from __future__ import annotations
 
+import base64
 import functools
+import hashlib
+import json
 import os
 import secrets
+import threading
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import jwt
+from cryptography.fernet import Fernet
 from flask import (
     Blueprint,
     abort,
@@ -134,6 +139,82 @@ def _to_session(response) -> dict:
         "access_token": response.access_token,
         "refresh_token": response.refresh_token,
     }
+
+
+# --- refresh coordination ---------------------------------------------------
+#
+# WorkOS refresh tokens rotate on use, so when several requests arrive at
+# once carrying the same expired access token, only the first redemption
+# succeeds and the rest bounce the user to the login page. Every redemption
+# of a given refresh token therefore goes through one place: an in-process
+# lock + short memo covers concurrent requests on one worker, and on Postgres
+# a transaction-scoped advisory lock + a short-lived row in
+# ``auth_refresh_memo`` covers the other workers and pods. The memo row holds
+# the new token pair encrypted with a key derived from SECRET_KEY, and rows
+# are pruned after a few minutes.
+_REFRESH_REUSE = timedelta(seconds=60)
+_REFRESH_PRUNE = timedelta(minutes=5)
+_refresh_guard = threading.Lock()
+_refresh_locks: dict[str, threading.Lock] = {}
+_refresh_memo: dict[str, tuple[float, dict]] = {}
+
+
+def _memo_cipher() -> Fernet:
+    digest = hashlib.sha256(
+        b"mtgcompare-auth-refresh-memo:" + str(current_app.secret_key).encode()
+    ).digest()
+    return Fernet(base64.urlsafe_b64encode(digest))
+
+
+def _refresh_shared(key: str, refresh_token: str) -> dict:
+    """Redeem ``refresh_token`` at most once across processes (Postgres)."""
+    if not db.IS_POSTGRES:
+        return refresh(refresh_token)
+    now = datetime.now(UTC)
+    with db.get_conn() as conn:
+        conn.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": key})
+        row = conn.execute(
+            text("SELECT payload FROM auth_refresh_memo"
+                 " WHERE token_hash = :k AND created_at > :since"),
+            {"k": key, "since": now - _REFRESH_REUSE},
+        ).first()
+        if row is not None:
+            return json.loads(_memo_cipher().decrypt(row[0].encode()))
+        pair = refresh(refresh_token)
+        conn.execute(
+            text("DELETE FROM auth_refresh_memo WHERE created_at < :cutoff"),
+            {"cutoff": now - _REFRESH_PRUNE},
+        )
+        db.upsert(conn, "auth_refresh_memo", ["token_hash"], [{
+            "token_hash": key,
+            "payload": _memo_cipher().encrypt(json.dumps(pair).encode()).decode(),
+            "created_at": now,
+        }])
+        return pair
+
+
+def refresh_once(refresh_token: str) -> dict:
+    """``refresh`` for the auth gate: concurrent callers share one redemption."""
+    key = hashlib.sha256(refresh_token.encode()).hexdigest()
+    with _refresh_guard:
+        lock = _refresh_locks.setdefault(key, threading.Lock())
+    try:
+        with lock:
+            memo = _refresh_memo.get(key)
+            if memo is not None and time.monotonic() - memo[0] < _REFRESH_REUSE.total_seconds():
+                return memo[1]
+            pair = _refresh_shared(key, refresh_token)
+            with _refresh_guard:
+                _refresh_memo[key] = (time.monotonic(), pair)
+            return pair
+    finally:
+        with _refresh_guard:
+            cutoff = time.monotonic() - _REFRESH_REUSE.total_seconds()
+            for k in [k for k, (t, _) in _refresh_memo.items() if t < cutoff]:
+                del _refresh_memo[k]
+            for k in [k for k, lk in _refresh_locks.items()
+                      if k not in _refresh_memo and not lk.locked()]:
+                del _refresh_locks[k]
 
 
 @functools.lru_cache(maxsize=1024)
@@ -255,11 +336,8 @@ def _load_user_record(workos_user_id: str) -> dict | None:
 bp = Blueprint("auth", __name__)
 
 
-@bp.before_app_request
-def _auth_gate():
-    if not WORKOS_ENABLED or _is_public_path(request.path):
-        return None
-
+def _resolve_session() -> tuple[dict | None, dict | None]:
+    """(claims, refreshed_pair) from the session cookies; claims None if absent."""
     access_token = request.cookies.get(ACCESS_TOKEN_COOKIE)
     refresh_token = request.cookies.get(REFRESH_TOKEN_COOKIE)
     refreshed: dict | None = None
@@ -275,7 +353,7 @@ def _auth_gate():
         # Split the two failure modes so logs can distinguish "WorkOS API
         # rejected the refresh" from "the new access token didn't verify".
         try:
-            refreshed = refresh(refresh_token)
+            refreshed = refresh_once(refresh_token)
         except Exception as exc:
             current_app.logger.info(
                 "event=auth_refresh_fail reason=workos_error class=%s detail=%s",
@@ -292,18 +370,10 @@ def _auth_gate():
                 )
                 refreshed = None
                 claims = None
+    return claims, refreshed
 
-    if claims is None:
-        # Kick the user to AuthKit. Stash where they were heading so the
-        # callback can land them back there.
-        state = random_state()
-        resp = make_response(redirect(authorization_url(state=state)))
-        _set_transient_cookie(resp, STATE_COOKIE, state)
-        if request.method == "GET" and _is_safe_return_to(request.full_path):
-            _set_transient_cookie(resp, RETURN_TO_COOKIE, request.full_path)
-        current_app.logger.info("event=auth_login_start source=gated path=%r", request.path)
-        return resp
 
+def _bind_user(claims: dict, refreshed: dict | None) -> None:
     g.user_id = claims["sub"]
     record = _load_user_record(claims["sub"]) or {}
     g.user = {
@@ -315,6 +385,26 @@ def _auth_gate():
     }
     if refreshed is not None:
         g._refresh_pair = refreshed
+
+
+@bp.before_app_request
+def _auth_gate():
+    if not WORKOS_ENABLED or _is_public_path(request.path):
+        return None
+
+    claims, refreshed = _resolve_session()
+    if claims is None:
+        # Kick the user to AuthKit. Stash where they were heading so the
+        # callback can land them back there.
+        state = random_state()
+        resp = make_response(redirect(authorization_url(state=state)))
+        _set_transient_cookie(resp, STATE_COOKIE, state)
+        if request.method == "GET" and _is_safe_return_to(request.full_path):
+            _set_transient_cookie(resp, RETURN_TO_COOKIE, request.full_path)
+        current_app.logger.info("event=auth_login_start source=gated path=%r", request.path)
+        return resp
+
+    _bind_user(claims, refreshed)
 
 
 @bp.after_app_request
@@ -405,10 +495,13 @@ def logout():
 def me():
     if not WORKOS_ENABLED:
         abort(404)
-    user = getattr(g, "user", None)
-    if not user:
+    # /auth/* is public so the login flow can start, which means the gate
+    # never ran for this path — resolve the session here instead.
+    claims, refreshed = _resolve_session()
+    if claims is None:
         return jsonify({"authenticated": False}), 401
-    return jsonify({"authenticated": True, "user": user})
+    _bind_user(claims, refreshed)
+    return jsonify({"authenticated": True, "user": g.user})
 
 
 @bp.route("/webhooks/workos", methods=["POST"])

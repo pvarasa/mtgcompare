@@ -94,14 +94,17 @@ _inventory = Table(
 )
 Index("idx_inventory_user_card", _inventory.c.user_id, _inventory.c.card_name)
 
+# Keyed per printing (collector number included): a set's showcase or
+# borderless variant is priced separately from the regular card.
 _market_prices = Table(
     "market_prices", metadata,
     Column("card_name", Text, nullable=False),
     Column("set_code", Text, nullable=False),
+    Column("card_number", Text, nullable=False, server_default=""),
     Column("is_foil", Integer, nullable=False, server_default="0"),
     Column("price_usd", Numeric(10, 4)),
     Column("fetched_at", Text, nullable=False),
-    PrimaryKeyConstraint("card_name", "set_code", "is_foil"),
+    PrimaryKeyConstraint("card_name", "set_code", "card_number", "is_foil"),
 )
 
 _price_rows = Table(
@@ -132,6 +135,16 @@ _mtgjson_card_map = Table(
     Column("uuid", Text, nullable=False),
     Column("updated_at", Text, nullable=False),
     PrimaryKeyConstraint("card_name", "set_code", "card_number", "is_foil"),
+)
+
+# Short-lived, encrypted record of a refresh-token redemption so concurrent
+# requests on other workers/pods reuse it instead of re-redeeming a rotated
+# token (see auth.refresh_once). Rows are pruned after a few minutes.
+_auth_refresh_memo = Table(
+    "auth_refresh_memo", metadata,
+    Column("token_hash", Text, primary_key=True),
+    Column("payload", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
 )
 
 _app_meta = Table(
@@ -253,8 +266,26 @@ def upsert(conn, table_name: str, conflict_cols: list[str], rows: list[dict]) ->
     conn.execute(sql, rows)
 
 
+def _column_exists(conn, table: str, column: str) -> bool:
+    if IS_POSTGRES:
+        return conn.execute(text("""
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = :t AND column_name = :c
+        """), {"t": table, "c": column}).fetchone() is not None
+    cols = {r[1] for r in conn.execute(text(f"PRAGMA table_info({table})")).fetchall()}
+    return column in cols
+
+
 def _migrate(conn) -> None:
     """Add columns absent from older schema versions."""
+    # market_prices gained card_number in its primary key. The table is a
+    # derived cache the price import rewrites, so drop and recreate it
+    # rather than migrate rows keyed without a collector number; the next
+    # import (daily cron, or "Update prices") repopulates it.
+    if not _column_exists(conn, "market_prices", "card_number"):
+        conn.execute(text("DROP TABLE market_prices"))
+        _market_prices.create(conn)
+
     if IS_POSTGRES:
         exists = conn.execute(text("""
             SELECT 1 FROM information_schema.columns

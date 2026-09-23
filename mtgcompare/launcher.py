@@ -33,16 +33,33 @@ def _data_dir() -> Path:
 
 
 def _setup_logging() -> None:
-    """Route WARNING+ logs to %APPDATA%\\mtgcompare\app.log when frozen."""
+    """Route WARNING+ logs to %APPDATA%\\mtgcompare\\app.log when frozen.
+
+    ``import web`` has already applied logging.conf, whose console handler
+    is attached to root and to several propagate=0 loggers — and writes to
+    ``sys.stdout``, which is None in a windowed build. Swap that handler for
+    the file handler everywhere it is attached (basicConfig would be a no-op
+    here, since root already has a handler).
+    """
     if not getattr(sys, "frozen", False):
         return
     log_dir = _data_dir()
     log_dir.mkdir(parents=True, exist_ok=True)
-    logging.basicConfig(
-        level=logging.WARNING,
-        format="%(asctime)s %(name)s %(levelname)s %(message)s",
-        handlers=[logging.FileHandler(log_dir / "app.log", encoding="utf-8")],
+    file_handler = logging.FileHandler(log_dir / "app.log", encoding="utf-8")
+    file_handler.setLevel(logging.WARNING)
+    file_handler.setFormatter(
+        logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s")
     )
+    loggers = [logging.getLogger()] + [
+        lg for lg in logging.Logger.manager.loggerDict.values()
+        if isinstance(lg, logging.Logger)
+    ]
+    for lg in loggers:
+        console = [h for h in lg.handlers if type(h) is logging.StreamHandler]
+        for h in console:
+            lg.removeHandler(h)
+        if console or lg is logging.getLogger():
+            lg.addHandler(file_handler)
 
 
 def _make_icon() -> Image.Image:

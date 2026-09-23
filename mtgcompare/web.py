@@ -14,7 +14,7 @@ from collections.abc import Collection, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
-from threading import Lock, Thread
+from threading import Event, Lock, Thread
 from time import monotonic
 from uuid import uuid4
 
@@ -582,6 +582,21 @@ def decklist_search():
     if isinstance(prep, decklist.DecklistReject):
         return _early_return(prep.message, reason=prep.reason)
 
+    user_id = _get_user_id()
+    active = _acquire_search_slot(user_id)
+    if active is not None:
+        return _early_return(_too_many_searches_msg(active), reason="rate_limited"), 429
+    try:
+        return _run_decklist_search(prep, basics, ship_cfg, shop_filter_cfg, t0)
+    finally:
+        _release_search_slot(user_id)
+
+
+def _run_decklist_search(prep, basics, ship_cfg, shop_filter_cfg, t0):
+    use_inventory = basics.use_inventory
+    enabled_shops = basics.enabled_shops
+    shop_filter_active = enabled_shops is not None
+    shipping_overrides_jpy = basics.shipping_overrides_jpy
     text = prep.decklist_text
     skipped_basics = prep.skipped_basics
     total_cards = prep.total_cards
@@ -648,11 +663,42 @@ def decklist_search():
 # request from submit to done — no job_id, no sticky sessions required.
 
 
-# Per-user cap to bound concurrent SSE fan-outs. Per-process — with N
-# gunicorn workers the cluster-wide cap is 3×N.
+# Per-user cap on concurrent decklist fan-outs, shared by the sync and SSE
+# endpoints. Per-process — with N gunicorn workers the cluster-wide cap is
+# 3×N. A slot is held until the fan-out itself ends, not the HTTP response:
+# releasing on client disconnect let a connect-and-drop loop pile up
+# fan-outs without bound.
 _MAX_IN_FLIGHT_PER_USER = 3
 _in_flight_by_user: dict[str, int] = {}
 _in_flight_lock = Lock()
+
+
+def _acquire_search_slot(user_id: str) -> int | None:
+    """Take a slot; returns None on success, else the user's active count."""
+    with _in_flight_lock:
+        active = _in_flight_by_user.get(user_id, 0)
+        if active >= _MAX_IN_FLIGHT_PER_USER:
+            return active
+        _in_flight_by_user[user_id] = active + 1
+        return None
+
+
+def _release_search_slot(user_id: str) -> None:
+    # Drop the entry at zero so the dict doesn't accumulate one row per
+    # distinct user_id across the worker's lifetime.
+    with _in_flight_lock:
+        remaining = max(0, _in_flight_by_user.get(user_id, 0) - 1)
+        if remaining == 0:
+            _in_flight_by_user.pop(user_id, None)
+        else:
+            _in_flight_by_user[user_id] = remaining
+
+
+def _too_many_searches_msg(active: int) -> str:
+    return (
+        f"You already have {active} searches in flight. "
+        "Wait for one to finish before starting another."
+    )
 
 
 def _format_sse(event_type: str, payload: dict) -> str:
@@ -680,17 +726,9 @@ def decklist_stream():
         return jsonify({"error": prep.message, "reason": prep.reason}), 400
 
     user_id = _get_user_id()
-    with _in_flight_lock:
-        active = _in_flight_by_user.get(user_id, 0)
-        if active >= _MAX_IN_FLIGHT_PER_USER:
-            return jsonify({
-                "error": (
-                    f"You already have {active} searches in flight. "
-                    "Wait for one to finish before starting another."
-                ),
-                "reason": "rate_limited",
-            }), 429
-        _in_flight_by_user[user_id] = active + 1
+    active = _acquire_search_slot(user_id)
+    if active is not None:
+        return jsonify({"error": _too_many_searches_msg(active), "reason": "rate_limited"}), 429
 
     # Pre-load the row template once per search (render() runs per card,
     # ~up to 100/decklist) while we still hold the Flask app context; the
@@ -698,16 +736,20 @@ def decklist_stream():
     # here so test monkeypatches on web.collect_prices still apply.
     row_template = app.jinja_env.get_template("_decklist_row.html")
 
+    cancel = Event()
+
+    def produce(q: queue.Queue) -> None:
+        try:
+            decklist.produce_decklist_events(
+                prep=prep, q=q, row_template=row_template,
+                collect=collect_prices, logger=app.logger, cancel=cancel,
+            )
+        finally:
+            _release_search_slot(user_id)
+
     def generate() -> Iterator[str]:
         q: queue.Queue = queue.Queue()
-        Thread(
-            target=decklist.produce_decklist_events,
-            kwargs={
-                "prep": prep, "q": q, "row_template": row_template,
-                "collect": collect_prices, "logger": app.logger,
-            },
-            daemon=True,
-        ).start()
+        Thread(target=produce, args=(q,), daemon=True).start()
         try:
             while True:
                 try:
@@ -720,18 +762,9 @@ def decklist_stream():
                 evt_type, payload = item
                 yield _format_sse(evt_type, payload)
         finally:
-            # Decrement the per-user cap whether we exited cleanly or the
-            # client disconnected mid-stream. Without this a closed
-            # browser tab leaks a slot until the worker restarts. Drop
-            # the entry entirely when it hits zero so the dict doesn't
-            # accumulate one row per distinct user_id across the
-            # worker's lifetime.
-            with _in_flight_lock:
-                remaining = max(0, _in_flight_by_user.get(user_id, 0) - 1)
-                if remaining == 0:
-                    _in_flight_by_user.pop(user_id, None)
-                else:
-                    _in_flight_by_user[user_id] = remaining
+            # Client gone (or stream done): stop the fan-out from starting
+            # any more cards. The producer releases the slot when it exits.
+            cancel.set()
 
     return Response(
         stream_with_context(generate()),

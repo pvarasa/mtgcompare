@@ -174,3 +174,17 @@ def test_fetch_card_summaries_custom_session_bypasses_memo(monkeypatch, clean_me
     scryfall.fetch_card_summaries("Foo", sentinel_session)
     assert calls == ["Foo", "Foo"]
     assert scryfall._summaries_cache == {}
+
+
+def test_summaries_match_a_single_face_of_multi_face_cards():
+    # Scryfall names DFC/MDFC/split/adventure cards "Front // Back", and
+    # `!"Front"` returns them; a decklist line naming one face must match.
+    page = {"data": [
+        {"name": "Bonecrusher Giant // Stomp", "set": "eld",
+         "prices": {"usd": "0.50"}, "tcgplayer_id": 1},
+        {"name": "Bonecrusher Giantess", "set": "xxx",
+         "prices": {"usd": "9.00"}, "tcgplayer_id": 2},
+    ]}
+    for target in ("bonecrusher giant", "stomp", "bonecrusher giant // stomp"):
+        names = [s["name"] for s in summarize_page(page, target)]
+        assert names == ["Bonecrusher Giant // Stomp"], target

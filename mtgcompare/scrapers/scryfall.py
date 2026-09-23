@@ -59,6 +59,19 @@ def make_session() -> requests.Session:
 _SHARED_SESSION = make_session()
 
 
+def _name_matches(name: str, target_lower: str) -> bool:
+    """Exact match on the full name or on any face of a multi-face card.
+
+    Scryfall names double-faced, MDFC, split and adventure cards
+    ``Front // Back``, and its ``!"Front"`` search returns them — so a
+    decklist line naming one face must match that face too.
+    """
+    name = name.lower()
+    return name == target_lower or target_lower in (
+        face.strip() for face in name.split(" // ")
+    )
+
+
 def summarize_page(page: dict, target_lower: str) -> list[dict]:
     """Compact per-printing summaries for exact-name matches on one page.
 
@@ -70,7 +83,7 @@ def summarize_page(page: dict, target_lower: str) -> list[dict]:
     """
     summaries: list[dict] = []
     for card in page.get("data") or ():
-        if (card.get("name") or "").lower() != target_lower:
+        if not _name_matches(card.get("name") or "", target_lower):
             continue
         usd_raw = (card.get("prices") or {}).get("usd")
         try:

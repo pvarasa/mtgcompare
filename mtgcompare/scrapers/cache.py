@@ -5,7 +5,8 @@ Wraps any ``MtgScrapper`` so repeated searches for the same card within
 instead of re-hitting the shop. Negative results are cached too, so a shop
 that doesn't carry a card stops getting scraped on every lookup. Concurrent
 searches for the same ``(shop, card_name)`` coalesce via an in-process
-singleflight.
+singleflight shared by every wrapper instance (``build_scrapers`` makes
+fresh instances per search, so a per-instance one would never coalesce).
 """
 import logging
 import os
@@ -159,6 +160,16 @@ def replace_listings(
     or delisted stock gets evicted from the cache.
     """
     timestamp = now or _now()
+    if db.IS_POSTGRES:
+        # Serialize writers for this key across processes and pods. Without
+        # it two concurrent READ COMMITTED transactions each DELETE (seeing
+        # neither's uncommitted INSERT) and both row sets survive, doubling
+        # every listing until the TTL. The in-process singleflight can't
+        # help across gunicorn workers or replicas.
+        conn.execute(
+            text("SELECT pg_advisory_xact_lock(hashtext(:key))"),
+            {"key": f"shop_listings:{shop}:{card_name}"},
+        )
     conn.execute(
         text("DELETE FROM shop_listings WHERE shop = :shop AND card_name = :card"),
         {"shop": shop, "card": card_name},
@@ -228,6 +239,11 @@ class _Singleflight:
             return result
 
 
+# One per process: CachedScrapper instances are short-lived, so the
+# coalescing has to live above them. Keys carry the shop name.
+_SINGLEFLIGHT = _Singleflight()
+
+
 class CachedScrapper(MtgScrapper):
     """DB-backed cache around any MtgScrapper.
 
@@ -245,12 +261,11 @@ class CachedScrapper(MtgScrapper):
         self.scrapper = scrapper
         self.shop_name = shop_name
         self.ttl = ttl
-        self._sf = _Singleflight()
         self.logger = logging.getLogger(f"cache.{shop_name}")
 
     def get_prices(self, card_name: str) -> list[dict]:
         norm = _normalize(card_name)
-        return self._sf.do(f"{self.shop_name}::{norm}",
+        return _SINGLEFLIGHT.do(f"{self.shop_name}::{norm}",
                            lambda: self._fetch_or_cache(card_name, norm))
 
     def _fetch_or_cache(self, card_name: str, norm: str) -> list[dict]:

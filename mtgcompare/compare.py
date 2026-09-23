@@ -5,6 +5,7 @@ import logging
 import logging.config
 from pathlib import Path
 
+from .log_context import install_record_factory
 from .scrapers.registry import collect_prices
 from .utils import get_fx
 
@@ -55,5 +56,8 @@ def parse_args():
 
 
 if __name__ == "__main__":
+    # logging.conf's formatter references request_id/user_id; the factory
+    # gives records outside a web request their defaults.
+    install_record_factory()
     logging.config.fileConfig(LOGGING_CONF)
     main()

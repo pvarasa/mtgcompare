@@ -31,6 +31,7 @@ import logging
 import os
 import queue
 import re
+import threading
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -162,6 +163,7 @@ def iter_decklist_prices(
     *,
     collect: Callable[..., list[dict]] = collect_prices,
     logger: logging.Logger = logger,
+    cancel: threading.Event | None = None,
 ) -> Iterator[tuple[str, list[dict]]]:
     """Stream ``(lower_name, sorted_rows)`` per card in fan-out
     completion order. Per-name failures yield ``(name, [])`` rather than
@@ -171,6 +173,9 @@ def iter_decklist_prices(
     ``collect`` is the per-card shop fetcher (injected so the web layer
     can supply its monkeypatchable ``collect_prices`` reference); ``logger``
     is injected so log lines stay on the caller's logger namespace.
+
+    Setting ``cancel`` drops every card not yet started and stops yielding;
+    cards already in flight (at most ``DECKLIST_FAN_OUT_WORKERS``) finish.
     """
     if not names_to_search:
         return
@@ -187,6 +192,9 @@ def iter_decklist_prices(
             for n in names_to_search
         }
         for future in as_completed(future_to_name):
+            if cancel is not None and cancel.is_set():
+                executor.shutdown(wait=False, cancel_futures=True)
+                return
             n = future_to_name[future]
             try:
                 rows = future.result()
@@ -533,6 +541,7 @@ def _run_fanout(
     *,
     collect: Callable[..., list[dict]],
     logger: logging.Logger,
+    cancel: threading.Event | None = None,
 ) -> None:
     """Drive the per-card fan-out, emitting row + shop_timeout + debounced
     totals events as results stream in."""
@@ -542,7 +551,7 @@ def _run_fanout(
     last_totals_emit = 0.0
     for name, rows in iter_decklist_prices(
         prep.names_to_search, prep.name_canonical, prep.fx, prep.enabled_shops,
-        timeouts_out=timed_out, collect=collect, logger=logger,
+        timeouts_out=timed_out, collect=collect, logger=logger, cancel=cancel,
     ):
         prices_by_name[name] = rows
         _emit_card_row(name, prep, rows, row_template, q)
@@ -564,6 +573,7 @@ def produce_decklist_events(
     row_template,
     collect: Callable[..., list[dict]] = collect_prices,
     logger: logging.Logger = logger,
+    cancel: threading.Event | None = None,
 ) -> None:
     """Run the decklist fan-out and push (event_type, payload) tuples to
     ``q``. Terminal sentinel is ``None``. Runs in a daemon thread driven by
@@ -573,7 +583,8 @@ def produce_decklist_events(
     row, each shop timeout, and debounced running totals as they arrive
     instead of bundling them into one rendered page. ``row_template`` is the
     pre-loaded Jinja ``_decklist_row.html`` template; ``collect`` and
-    ``logger`` are injected by the web layer.
+    ``logger`` are injected by the web layer. The web layer sets ``cancel``
+    when the client disconnects, so an abandoned stream stops scraping.
     """
     t0 = monotonic()
     prices_by_name: dict[str, list[dict]] = {n: [] for n in prep.name_qty}
@@ -583,8 +594,11 @@ def produce_decklist_events(
         _emit_inventory_only_rows(prep, row_template, q)
         _run_fanout(
             prep, prices_by_name, timed_out, row_template, q,
-            collect=collect, logger=logger,
+            collect=collect, logger=logger, cancel=cancel,
         )
+        if cancel is not None and cancel.is_set():
+            logger.info("event=decklist_search status=cancelled transport=sse")
+            return
 
         card_rows = _emit_totals(prep, prices_by_name, q)
         rows_with_match = sum(1 for r in card_rows if r["best"] is not None)

@@ -457,3 +457,41 @@ class TestConcurrentScrape:
         for r in results:
             assert len(r) == 1
             assert r[0]["card"] == "Lightning Bolt"
+
+
+def test_singleflight_coalesces_across_wrapper_instances(test_db):
+    """build_scrapers() makes fresh CachedScrapper instances per search, so
+    two concurrent searches for one card must still share one fetch."""
+    import threading as _threading
+
+    from mtgcompare.scrapers.cache import CachedScrapper
+
+    started = _threading.Event()
+    release = _threading.Event()
+    calls = []
+
+    class SlowScrapper:
+        def get_prices(self, card_name):
+            calls.append(card_name)
+            started.set()
+            release.wait(5)
+            return [{"card": card_name, "set": "C21", "price_jpy": 100.0}]
+
+    results = []
+
+    def search():
+        results.append(CachedScrapper(SlowScrapper(), shop_name="Solo").get_prices("Sol Ring"))
+
+    first = _threading.Thread(target=search)
+    first.start()
+    assert started.wait(5)
+    second = _threading.Thread(target=search)
+    second.start()
+    import time as _time
+    _time.sleep(0.2)  # let the follower block on the leader's Future
+    release.set()
+    first.join(5)
+    second.join(5)
+
+    assert calls == ["Sol Ring"]
+    assert len(results) == 2 and results[0] == results[1]

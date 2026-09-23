@@ -23,7 +23,7 @@ from cachetools import TTLCache
 
 from .. import db
 from .. import inventory as inv
-from . import market_repo
+from . import market_repo, meta
 from .common import (
     has_price_history,
     is_foil,
@@ -108,9 +108,10 @@ _market_data_cache_lock = Lock()
 # price import. 1-hour soft TTL is a safety net for missed invalidations.
 _PRICE_CACHE_MAX_AGE_S = 3600
 _price_cache_state: dict = {
-    "dict": None,                    # {(card_name_lower, set_code_lower, is_foil): price_usd}
+    "dict": None,  # {(card_name_lower, set_code_lower, card_number, is_foil): price_usd}
     "last_fetched_at": None,
     "built_at_mono": 0.0,
+    "version": None,  # market_repo.PRICES_VERSION_KEY at build time
 }
 _price_cache_lock = Lock()
 
@@ -142,22 +143,29 @@ def market_cache_clear() -> None:
         _price_cache_state["dict"] = None
         _price_cache_state["last_fetched_at"] = None
         _price_cache_state["built_at_mono"] = 0.0
+        _price_cache_state["version"] = None
 
 
 def get_price_cache() -> tuple[dict, str | None]:
     """Return (price_dict, last_fetched_at).
 
     Lazily built per worker process on first /market request after a boot
-    or cache clear. The price dict maps
-    `(card_name_lower, set_code_lower, is_foil) -> price_usd`. Two
+    or cache clear, and rebuilt whenever the import has bumped
+    ``market_repo.PRICES_VERSION_KEY`` since (one primary-key lookup per
+    call) — so an import in any worker or pod reaches every worker. The
+    price dict maps
+    `(card_name_lower, set_code_lower, card_number, is_foil) -> price_usd`. Two
     threads can race to rebuild on expiry — that's benign (last writer
     wins, same data either way), but we don't hold the lock during the
     DB query so reader latency isn't gated on the rebuild.
     """
+    with db.get_conn() as conn:
+        version = meta.read(conn, market_repo.PRICES_VERSION_KEY)
     now = monotonic()
     with _price_cache_lock:
         snap = _price_cache_state
-        if snap["dict"] is not None and now - snap["built_at_mono"] < _PRICE_CACHE_MAX_AGE_S:
+        if (snap["dict"] is not None and snap["version"] == version
+                and now - snap["built_at_mono"] < _PRICE_CACHE_MAX_AGE_S):
             return snap["dict"], snap["last_fetched_at"]
 
     # Build outside the lock — readers concurrently can still serve from
@@ -168,7 +176,7 @@ def get_price_cache() -> tuple[dict, str | None]:
     price_dict: dict[tuple, float | None] = {}
     last_fetched_at: str | None = None
     for cr in cache_rows:
-        key = (cr["card_name"].lower(), cr["set_code"].lower(), cr["is_foil"])
+        key = (cr["card_name"].lower(), cr["set_code"].lower(), cr["card_number"], cr["is_foil"])
         price_dict[key] = cr["price_usd"]
         if last_fetched_at is None or cr["fetched_at"] > last_fetched_at:
             last_fetched_at = cr["fetched_at"]
@@ -177,6 +185,7 @@ def get_price_cache() -> tuple[dict, str | None]:
         _price_cache_state["dict"] = price_dict
         _price_cache_state["last_fetched_at"] = last_fetched_at
         _price_cache_state["built_at_mono"] = monotonic()
+        _price_cache_state["version"] = version
     return price_dict, last_fetched_at
 
 
@@ -206,7 +215,10 @@ def attach_market_prices(
     priced = []
     for row in inventory_rows:
         is_foil_int = int(is_foil(row.get("printing")))
-        key = (row["card_name"].lower(), normalize_set_code(row["set_code"]), is_foil_int)
+        key = (
+            row["card_name"].lower(), normalize_set_code(row["set_code"]),
+            (row.get("card_number") or "").strip(), is_foil_int,
+        )
         price_usd = price_cache.get(key) if has_cache else None
         priced.append({
             **row,
