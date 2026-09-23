@@ -233,9 +233,10 @@ The `users` table is keyed on `workos_user_id`; inventory rows continue to key o
   admin perimeter (terraform config: `apps.mtgcompare_stg` in
   `../server_admin/terraform/cloudflare/variables.tf`) so only the
   admin-group emails reach the cluster.
-- **Image**: floating tag `ghcr.io/pvarasa/mtgcompare:dev` with
-  `imagePullPolicy: Always`. No digest pinning, no GitHub release
-  pipeline. The deployment manifest lives at
+- **Image**: the committed manifest pins the current prod release by
+  digest; `scripts/dev-push.sh` pushes the floating `:dev` tag and
+  `kubectl set image`s stg onto it (`imagePullPolicy: Always`). No GitHub
+  release pipeline. Re-applying the manifest puts stg back on the release. The deployment manifest lives at
   `../server_admin/k8s/apps/mtgcompare-stg/02-deployment.yml`.
 - **Database**: same Postgres as prod. Same `mtgcompare-secret` and
   `mtgcompare-workos` secrets — so the WorkOS identity (and therefore

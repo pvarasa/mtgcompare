@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Build the current working tree, push as ghcr.io/pvarasa/mtgcompare:dev,
-# and roll the in-cluster stg deployment so kubelet pulls the new layer.
+# and point the in-cluster stg deployment at it so kubelet pulls the new
+# layer. The committed stg manifest pins the prod release; re-applying it
+# (../server_admin/k8s/apps/mtgcompare-stg/) puts stg back on that.
 #
 # Skips the GitHub release pipeline entirely — this is the fast path
 # for testing changes against the prod Postgres + cache from
@@ -45,7 +47,8 @@ echo "▸ pushing $IMAGE"
 docker push "$IMAGE"
 
 if [ "$restart" = "true" ]; then
-    echo "▸ rollout restart $NS/$DEPLOY"
+    echo "▸ pointing $NS/$DEPLOY at $IMAGE and restarting"
+    kubectl set image -n "$NS" deployment/"$DEPLOY" mtgcompare="$IMAGE"
     kubectl rollout restart -n "$NS" deployment/"$DEPLOY"
     kubectl rollout status  -n "$NS" deployment/"$DEPLOY" --timeout=180s
     echo
