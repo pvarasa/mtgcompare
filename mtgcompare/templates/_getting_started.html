@@ -1,0 +1,38 @@
+{# Empty-inventory explainer, shared by /inventory and /market. The caller
+   supplies `lead` (the page-specific first line) and `allow_price_update`
+   (desktop/SQLite mode, where prices are fetched on demand instead of by
+   the hosted daily job). #}
+<div class="getting-started">
+  <p class="getting-started-lead">{{ lead }}</p>
+  <div class="getting-started-cols">
+    <section>
+      <h3>Inventory</h3>
+      <p>
+        Your collection, one lot per printing you own: card, set, condition,
+        finish, language and quantity, plus what you paid and when if you
+        want profit tracking.
+      </p>
+      <p>
+        Add cards one at a time, paste a decklist, or import a
+        Deckbox/CardCastle-style CSV.
+      </p>
+    </section>
+    <section>
+      <h3>Market</h3>
+      <p>
+        Values every lot at its latest TCGPlayer market price (via MTGJSON)
+        and compares that with what you paid, giving cost basis, market value
+        and unrealized PnL. Each card, and the portfolio as a whole, has a
+        price-history chart.
+      </p>
+      <p>
+        {% if allow_price_update %}
+          Click <strong>Update prices</strong> on the Market page to download
+          prices.
+        {% else %}
+          Prices refresh automatically once a day.
+        {% endif %}
+      </p>
+    </section>
+  </div>
+</div>

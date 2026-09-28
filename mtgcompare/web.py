@@ -1076,6 +1076,8 @@ def inventory():
         "per_page_choices": _PER_PAGE_CHOICES,
         "set_choices": inv.distinct_sets(user_id),
         "condition_choices": inv.distinct_conditions(user_id),
+        # Only read by the empty-inventory explainer; same rule as /market.
+        "allow_price_update": not db.IS_POSTGRES,
         "active": "inventory",
     }
     if request.args.get("partial") == "tbody":

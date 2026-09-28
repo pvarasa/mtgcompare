@@ -501,9 +501,13 @@
     {% endif %}
   </div>
 
-  {% if not rows %}
+  {% if not rows and inventory_empty %}
+    {% set lead %}No inventory yet. <a href="{{ url_for('inventory') }}">Add cards</a> to see market values.{% endset %}
+    {% include "_getting_started.html" %}
+
+  {% elif not rows %}
     <div class="empty">
-      No inventory yet. <a href="{{ url_for('inventory') }}">Add cards</a> to see market values.
+      No lots match these filters. <a href="{{ url_for('market') }}">Clear filters</a>
     </div>
 
   {% elif not has_cache %}

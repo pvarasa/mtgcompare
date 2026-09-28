@@ -439,9 +439,9 @@
       {% include "_inventory_table.html" %}
     </div>
   {% else %}
-    <div class="empty">
-      No inventory yet. Add a card above, paste a decklist, or import a Deckbox/CardCastle-style CSV.
-    </div>
+    {% with lead="No inventory yet. Add your first cards above." %}
+      {% include "_getting_started.html" %}
+    {% endwith %}
   {% endif %}
 
   <script src="{{ url_for('static', filename='inventoryadd.js') }}?v={{ static_token }}"></script>

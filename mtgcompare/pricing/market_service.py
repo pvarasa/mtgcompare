@@ -422,6 +422,9 @@ def compute_market_ctx(
         return {
             "rows": [], "summary": None, "fx": None, "error": None,
             "has_cache": has_cache,
+            # No rows can also mean a filter matched nothing; only a truly
+            # empty inventory gets the getting-started explainer.
+            "inventory_empty": inv.stats(user_id)["printings"] == 0,
             "total": 0, "total_pages": 1,
             **common,
         }
