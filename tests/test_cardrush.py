@@ -174,3 +174,39 @@ def test_parse_price_jpy_to_usd_conversion():
     records = parse_search_html(html, "Force of Will", fx_jpy_per_usd=150.0)
     assert records[0]["price_jpy"] == 15000.0
     assert records[0]["price_usd"] == pytest.approx(100.0)
+
+
+def _cell(name: str, price: str = "2,190円", stock: str = "在庫数 1枚") -> str:
+    return f"""
+    <li class="list_item_cell"><div class="item_data">
+      <a href="https://www.cardrush-mtg.jp/product/9" class="item_data_link">
+        <p class="item_name"><span class="goods_name">{name}</span></p>
+        <div class="item_info">
+          <div class="price"><p class="selling_price"><span class="figure">{price}</span></p></div>
+          <p class="stock">{stock}</p>
+        </div>
+      </a>
+    </div></li>
+    """
+
+
+@pytest.mark.parametrize("name", [
+    "(FOIL)太陽の指輪/ Sol Ring 《英語》【CC1】",
+    "(サージFOIL)太陽の指輪/ Sol Ring 《英語》【TMC】",
+    "(FOIL)(1604)太陽の指輪/ Sol Ring 《英語》【SLD】",
+])
+def test_parse_skips_foil_tagged_listings(name):
+    """Foils used to parse as plain English listings via the flavor group."""
+    assert parse_search_html(_cell(name), "Sol Ring", fx_jpy_per_usd=150.0) == []
+
+
+def test_parse_accepts_stacked_tags_and_collector_number_suffix():
+    html = _cell("(1604)(旧枠仕様)太陽の指輪/ Sol Ring 《英語》【SLD】#292")
+    [record] = parse_search_html(html, "Sol Ring", fx_jpy_per_usd=150.0)
+    assert record["set"] == "SLD"
+
+
+def test_parse_matches_multi_face_query_against_front_face_listing():
+    html = _cell("砕骨の巨人/ Bonecrusher Giant 《英語》【ELD】")
+    [record] = parse_search_html(html, "Bonecrusher Giant // Stomp", fx_jpy_per_usd=150.0)
+    assert record["card"] == "Bonecrusher Giant // Stomp"

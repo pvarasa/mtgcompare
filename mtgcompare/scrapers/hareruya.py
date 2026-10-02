@@ -6,6 +6,16 @@ its own class structure rather than the shared ``HtmlSearchScrapper``
 base, but it still pulls ``USER_AGENT`` and ``make_session`` from
 ``_base`` for consistency.
 
+The search API returns at most ``rows`` docs per call, so popular cards
+are paged (Sol Ring: 172 matching docs on 2026-10-02, and only the first
+60 were ever fetched) up to ``_MAX_PAGES``.
+
+Item names are ``《Face》`` per face — ``《Delver of Secrets》/《Insectile
+Aberration》``, ``《Fire+Ice》``, or a Secret Lair alternate name like
+``《Vivi's Thunder Magic》//《Lightning Bolt》`` — so every bracketed face is
+collected and matched with ``names.matched_name``; taking only the first
+bracket made all of those miss.
+
 The `parse_lazy_html` function is pure and is what the tests exercise.
 """
 import logging
@@ -19,12 +29,16 @@ from ..utils import get_fx
 from .base import MtgScrapper
 from .html_base import RateLimitedError, ScraperFetchError, to_usd
 from .html_base import make_session as _make_session
+from .names import matched_name, query_variants
 
 BASE_URL = "https://www.hareruyamtg.com"
 UNISEARCH_API = f"{BASE_URL}/en/products/search/unisearch_api"
 UNISEARCH_LAZY = f"{BASE_URL}/en/products/search/unisearch/lazy"
 
 _NAME_SET_RE = re.compile(r"《(.+?)》.*?\[(.+?)]")
+_FACE_RE = re.compile(r"《(.+?)》")
+_ROWS_PER_PAGE = 60
+_MAX_PAGES = 3
 _STOCK_RE = re.compile(r"【(.+?) Stock:(\d+)】")
 _PRICE_RE = re.compile(r"(\d[\d,]*)")
 
@@ -46,7 +60,6 @@ def parse_lazy_html(html: str | bytes, card_name: str, fx_jpy_per_usd: float) ->
     fx_jpy_per_usd: JPY per 1 USD (ECB daily reference rate via utils.get_fx).
     """
     tree = HTMLParser(html)
-    target = card_name.strip().lower()
     records: list[dict] = []
 
     for item_data in tree.css("div.itemData"):
@@ -56,7 +69,8 @@ def parse_lazy_html(html: str | bytes, card_name: str, fx_jpy_per_usd: float) ->
         if not (name_el and price_el and stock_el):
             continue
 
-        name_match = _NAME_SET_RE.search(name_el.text(deep=True, separator=" ", strip=True))
+        name_text = name_el.text(deep=True, separator=" ", strip=True)
+        name_match = _NAME_SET_RE.search(name_text)
         stock_match = _STOCK_RE.search(stock_el.text(deep=True, separator=" ", strip=True))
         price_match = _PRICE_RE.search(
             price_el.text(deep=True, separator=" ", strip=True).replace("¥", ""),
@@ -64,9 +78,12 @@ def parse_lazy_html(html: str | bytes, card_name: str, fx_jpy_per_usd: float) ->
         if not (name_match and stock_match and price_match):
             continue
 
-        card, mtg_set = name_match.group(1), name_match.group(2)
-        if card.lower() != target:
+        # Every 《face》 before the set bracket, rejoined Scryfall-style.
+        faces = _FACE_RE.findall(name_text.split("[", 1)[0])
+        card = matched_name(" // ".join(faces), card_name)
+        if card is None:
             continue
+        mtg_set = name_match.group(2)
 
         condition = stock_match.group(1)
         stock = int(stock_match.group(2))
@@ -107,30 +124,40 @@ class HareruyaScrapper(MtgScrapper):
         # Both fetch helpers raise ScraperFetchError on transport failure.
         # We let it propagate so the cache layer doesn't poison the entry.
         t0 = monotonic()
-        docs = self._fetch_docs(card_name)
-        if not docs:
-            self.logger.info(
-                "event=shop_query shop='Hareruya' card=%r rows=0 duration_ms=%d",
-                card_name, int((monotonic() - t0) * 1000),
-            )
-            return []
-        body = self._fetch_lazy_html(docs)
-        records = parse_lazy_html(body, card_name, self.fx)
+        records: list[dict] = []
+        pages = 0
+        for query in query_variants(card_name):
+            records, n = self._collect(query, card_name)
+            pages += n
+            if records:
+                break
         self.logger.info(
-            "event=shop_query shop='Hareruya' card=%r rows=%d duration_ms=%d",
-            card_name, len(records), int((monotonic() - t0) * 1000),
+            "event=shop_query shop='Hareruya' card=%r rows=%d pages=%d duration_ms=%d",
+            card_name, len(records), pages, int((monotonic() - t0) * 1000),
         )
         return records
 
-    def _fetch_docs(self, card_name: str) -> list[dict]:
+    def _collect(self, query: str, card_name: str) -> tuple[list[dict], int]:
+        """Page the search API for ``query``; one lazy render per page."""
+        records: list[dict] = []
+        for page in range(1, _MAX_PAGES + 1):
+            docs, num_found = self._fetch_docs(query, page)
+            if docs:
+                records.extend(parse_lazy_html(self._fetch_lazy_html(docs), card_name, self.fx))
+            if not docs or page * _ROWS_PER_PAGE >= num_found:
+                return records, page
+        return records, _MAX_PAGES
+
+    def _fetch_docs(self, card_name: str, page: int = 1) -> tuple[list[dict], int]:
+        """One page of search docs, plus the total match count."""
         params = {
             "kw": card_name,
             "fq.price": "1~*",
             "fq.foil_flg": "0",
             "fq.language": "2",
             "fq.stock": "1~*",
-            "rows": "60",
-            "page": "1",
+            "rows": str(_ROWS_PER_PAGE),
+            "page": str(page),
         }
         try:
             resp = self.session.get(UNISEARCH_API, params=params, timeout=20)
@@ -141,7 +168,9 @@ class HareruyaScrapper(MtgScrapper):
         if resp.status_code >= 400:
             raise ScraperFetchError(f"Hareruya unisearch_api HTTP {resp.status_code}")
         try:
-            return resp.json().get("response", {}).get("docs", []) or []
+            body = resp.json().get("response", {})
+            docs = body.get("docs", []) or []
+            return docs, int(body.get("numFound") or len(docs))
         except ValueError as e:
             raise ScraperFetchError(f"Hareruya unisearch_api JSON decode failed: {e}") from e
 

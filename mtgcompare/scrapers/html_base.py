@@ -21,6 +21,19 @@ Optional overrides:
 - ``SESSION_HEADERS``    (extra headers merged into the default UA)
 - ``search_params(card_name)``   (for endpoints with multiple params)
 - ``decode_response(resp)``      (for non-UTF-8 endpoints, e.g. EUC-JP)
+- ``PAGE_PARAM`` / ``MAX_PAGES`` (follow result pages; see below)
+
+Two behaviours are shared rather than left to each shop:
+
+- **Pagination.** Popular cards overflow the first result page at most
+  shops (Sol Ring: 15 pages at SingleStar, 5 at Card Rush, 4 at BLACK FROG),
+  and the in-stock English copies are not reliably on page 1. With
+  ``PAGE_PARAM`` set, pages are fetched while the page links to the next
+  one, up to ``MAX_PAGES`` — a cap, because every page is another request
+  inside the decklist fan-out.
+- **Multi-face names.** A ``Front // Back`` name that finds nothing is
+  retried with the front face alone (``names.query_variants``); parsers
+  match listing names with ``names.matched_name``.
 
 Hareruya and Scryfall don't fit this shape (multi-step API call,
 JSON-only) so they keep their own classes; they share ``USER_AGENT``
@@ -37,6 +50,7 @@ from requests.adapters import HTTPAdapter
 
 from ..utils import get_fx
 from .base import MtgScrapper
+from .names import query_variants
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -139,6 +153,9 @@ class HtmlSearchScrapper(MtgScrapper):
     SEARCH_PARAM_NAME: ClassVar[str] = "keyword"
     SESSION_HEADERS: ClassVar[dict] = {}
     REQUEST_TIMEOUT_S: ClassVar[float] = 20.0
+    # Query parameter carrying the 1-based page number; None = single page.
+    PAGE_PARAM: ClassVar[str | None] = None
+    MAX_PAGES: ClassVar[int] = 3
     _SHARED_SESSION: ClassVar[requests.Session]
 
     def __init_subclass__(cls, **kwargs):
@@ -188,20 +205,62 @@ class HtmlSearchScrapper(MtgScrapper):
         # so the cache layer can distinguish "shop has no listings"
         # (cacheable) from "we couldn't reach the shop" (don't cache).
         t0 = monotonic()
-        body = self._fetch_search_html(card_name)
-        records = self.parse_html(body, card_name)
+        records: list[dict] = []
+        pages = 0
+        for query in query_variants(card_name):
+            records, n = self._collect_pages(query, card_name)
+            pages += n
+            if records:
+                break
         self.logger.info(
-            "event=shop_query shop=%r card=%r rows=%d duration_ms=%d",
-            self.SHOP_NAME, card_name, len(records),
+            "event=shop_query shop=%r card=%r rows=%d pages=%d duration_ms=%d",
+            self.SHOP_NAME, card_name, len(records), pages,
             int((monotonic() - t0) * 1000),
         )
         return records
 
-    def _fetch_search_html(self, card_name: str) -> str | bytes:
+    def _collect_pages(self, query: str, card_name: str) -> tuple[list[dict], int]:
+        """Search ``query`` and parse every page against ``card_name``."""
+        records: list[dict] = []
+        seen: set[tuple] = set()
+        page = 1
+        while True:
+            body = self._fetch_search_html(query, page=page)
+            for record in self.parse_html(body, card_name):
+                # A listing can straddle two pages if the shop's ordering
+                # shifts between requests; keep the first copy.
+                key = tuple(sorted(record.items()))
+                if key not in seen:
+                    seen.add(key)
+                    records.append(record)
+            if page >= self.MAX_PAGES or not self._has_next_page(body, page):
+                return records, page
+            page += 1
+
+    def page_value(self, page: int) -> str:
+        """``PAGE_PARAM``'s value for a 1-based page. Override for shops
+        that page by offset rather than page number (TokyoMTG)."""
+        return str(page)
+
+    def _has_next_page(self, body: str | bytes, page: int) -> bool:
+        if self.PAGE_PARAM is None:
+            return False
+        # Pager links carry the next page's value; hrefs in HTML are often
+        # entity-escaped, hence the optional "amp;".
+        value = re.escape(self.page_value(page + 1))
+        pattern = rf"[?&](?:amp;)?{re.escape(self.PAGE_PARAM)}={value}(?!\d)"
+        if isinstance(body, bytes):
+            return re.search(pattern.encode(), body) is not None
+        return re.search(pattern, body) is not None
+
+    def _fetch_search_html(self, card_name: str, page: int = 1) -> str | bytes:
+        params = self.search_params(card_name)
+        if page > 1 and self.PAGE_PARAM is not None:
+            params = {**params, self.PAGE_PARAM: self.page_value(page)}
         try:
             resp = self.session.get(
                 self.SEARCH_URL,
-                params=self.search_params(card_name),
+                params=params,
                 timeout=self.REQUEST_TIMEOUT_S,
             )
         except requests.RequestException as e:

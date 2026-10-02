@@ -14,7 +14,10 @@ page, keyed by ``<option value=...>`` of the per-product spec ``<select>``::
 We map each list card to the stock-map entry through the spec-id and
 filter to plain English NM rows with stock > 0 (no foil, no variant
 suffix). Per-spec price is recovered from the JSON (× 1.1 = tax-incl
-price displayed on the page).
+price displayed on the page, rounded to whole yen as the page shows it).
+
+Results come 100 to a page (Sol Ring: 152 items), followed via ``pageno=``
+up to ``MAX_PAGES``.
 """
 import json
 import re
@@ -22,6 +25,7 @@ import re
 from selectolax.parser import HTMLParser
 
 from .html_base import HtmlSearchScrapper, node_text_ws, to_usd
+from .names import matched_name
 
 BASE_URL = "https://www.mint-mall.net"
 SEARCH_URL = f"{BASE_URL}/products/list.php"
@@ -92,7 +96,8 @@ def _stock_map_from_tree(tree: HTMLParser) -> dict[str, dict]:
                 continue
             out[str(spec_id)] = {
                 "stock": stock,
-                "price_jpy": round(base_price * _TAX_MULTIPLIER, 2),
+                # The page shows whole yen (379.5 base x 1.1 -> "380円").
+                "price_jpy": float(round(base_price * _TAX_MULTIPLIER)),
             }
         return out
     return {}
@@ -101,7 +106,6 @@ def _stock_map_from_tree(tree: HTMLParser) -> dict[str, dict]:
 def parse_search_html(html: str | bytes, card_name: str, fx_jpy_per_usd: float) -> list[dict]:
     """Extract NM English non-foil non-variant in-stock rows for ``card_name``."""
     tree = HTMLParser(html)
-    target = card_name.strip().lower()
     stock = _stock_map_from_tree(tree)
     records: list[dict] = []
 
@@ -123,7 +127,8 @@ def parse_search_html(html: str | bytes, card_name: str, fx_jpy_per_usd: float) 
             continue
         if m.group("lang") != "ENG":
             continue
-        if m.group("en").strip().lower() != target:
+        card = matched_name(m.group("en").strip(), card_name)
+        if card is None:
             continue
 
         suffix = m.group("suffix").strip()
@@ -148,7 +153,7 @@ def parse_search_html(html: str | bytes, card_name: str, fx_jpy_per_usd: float) 
 
             records.append({
                 "shop": "MINT MALL",
-                "card": m.group("en").strip(),
+                "card": card,
                 "set": m.group("set"),
                 "price_jpy": float(entry["price_jpy"]),
                 "price_usd": to_usd(entry["price_jpy"], fx_jpy_per_usd),
@@ -164,6 +169,7 @@ class MintMallScrapper(HtmlSearchScrapper):
     SEARCH_URL = SEARCH_URL
     LOGGER_NAME = "mtgcompare.scrapers.mintmall"
     SEARCH_PARAM_NAME = "name"
+    PAGE_PARAM = "pageno"
 
     def parse_html(self, html: str | bytes, card_name: str) -> list[dict]:
         return parse_search_html(html, card_name, self.fx)

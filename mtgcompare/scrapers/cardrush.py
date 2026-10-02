@@ -9,10 +9,20 @@ Listing names follow the pattern:
 
     [<COND>]<JP-name>/<EN-name>《<LANG>》【<SET>】
 
-where the condition bracket is omitted for NM, the leading ``(...)`` group
-holds variant flavor tags like ``(旧枠仕様)`` (old frame), and the search
-form may inject ``<span class="result_emphasis">`` highlights inside the
-goods_name span. The parser strips those before matching.
+where the condition bracket is omitted for NM, the leading ``(...)`` groups
+hold finish and variant tags like ``(FOIL)``, ``(サージFOIL)``, ``(旧枠仕様)``
+(old frame) or a collector number ``(1604)`` — several can stack — and the
+search form may inject ``<span class="result_emphasis">`` highlights inside
+the goods_name span. The parser strips those before matching.
+
+Foils are rejected by any ``FOIL`` in those leading groups. The regex used
+to allow a single optional group and never looked inside it, so
+``(FOIL)Sol Ring《英語》`` parsed as a plain English listing: 10 of 32
+records across four staples on 2026-10-02 were foil prices reported as
+non-foil.
+
+``available=1`` drops sold-out listings server-side (Sol Ring: 5 pages to
+1), and pages are followed up to ``MAX_PAGES``.
 
 The ``parse_search_html`` function is pure and is what tests exercise.
 """
@@ -21,9 +31,10 @@ import re
 from selectolax.parser import HTMLParser
 
 from .html_base import HtmlSearchScrapper, node_text_ws, to_usd
+from .names import matched_name
 
 BASE_URL = "https://www.cardrush-mtg.jp"
-SEARCH_URL = f"{BASE_URL}/product-list"
+SEARCH_URL = f"{BASE_URL}/product-list/0/0/photo"
 
 # Card Rush only exposes prices tax-included ((税込) badge alongside the figure).
 _PRICE_RE = re.compile(r"([\d,]+)\s*円")
@@ -39,12 +50,13 @@ _STOCK_RE = re.compile(r"在庫数\s*(\d+)")
 _LISTING_RE = re.compile(
     r"^"
     r"(?:\[(?P<cond>[A-Z+\-]+)\])?"
-    r"(?:\([^)]*\))?"          # optional flavor bracket like (旧枠仕様)
+    r"(?P<tags>(?:\([^)]*\))*)"   # finish/flavor groups: (FOIL)(1604)(旧枠仕様)
     r"(?P<jp>[^/]+?)"
     r"/"
     r"(?P<en>.+?)"
     r"《(?P<lang>[^》]+)》"
     r"【(?P<set>[^】]+)】"
+    r"(?:\s*#\S+)?"              # trailing collector number, e.g. "#292"
     r"\s*$"
 )
 
@@ -57,7 +69,6 @@ _NM_CONDITIONS = {None, "NM", "NM-"}
 def parse_search_html(html: str | bytes, card_name: str, fx_jpy_per_usd: float) -> list[dict]:
     """Extract NM English price records for ``card_name`` from a Card Rush page."""
     tree = HTMLParser(html)
-    target = card_name.strip().lower()
     records: list[dict] = []
 
     for cell in tree.css("li.list_item_cell"):
@@ -75,11 +86,13 @@ def parse_search_html(html: str | bytes, card_name: str, fx_jpy_per_usd: float) 
 
         if m.group("cond") not in _NM_CONDITIONS:
             continue
+        if "FOIL" in m.group("tags").upper():
+            continue
         if m.group("lang") != "英語":
             continue
 
-        en_name = m.group("en").strip()
-        if en_name.lower() != target:
+        en_name = matched_name(m.group("en").strip(), card_name)
+        if en_name is None:
             continue
 
         stock_class_attr = stock_el.attributes.get("class") or ""
@@ -118,6 +131,10 @@ class CardRushScrapper(HtmlSearchScrapper):
     SHOP_NAME = "Card Rush"
     SEARCH_URL = SEARCH_URL
     LOGGER_NAME = "mtgcompare.scrapers.cardrush"
+    PAGE_PARAM = "page"
+
+    def search_params(self, card_name: str) -> dict:
+        return {"keyword": card_name, "available": "1", "num": "100"}
 
     def parse_html(self, html: str | bytes, card_name: str) -> list[dict]:
         return parse_search_html(html, card_name, self.fx)

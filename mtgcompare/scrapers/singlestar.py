@@ -1,8 +1,13 @@
 """SingleStar (シングルスター) scraper.
 
-SingleStar has no public API. The search page at
-`/product-list?keyword=<name>` returns all matches server-rendered on a
-single page (no pagination for typical card queries).
+SingleStar has no public API. Search is the ocnk template's
+`/product-list/0/0/photo?keyword=<name>` listing, server-rendered.
+
+``available=1`` makes the shop drop sold-out listings server-side and
+``num=100`` is the largest page it serves. Popular cards still run long
+(Sol Ring: 11 in-stock pages, mostly Japanese and foil copies), so result
+pages are followed up to ``MAX_PAGES``. The keyword search ORs its terms,
+so later pages drift into unrelated cards; the cap costs little.
 
 The `parse_search_html` function is pure and is what tests exercise.
 """
@@ -11,9 +16,10 @@ import re
 from selectolax.parser import HTMLParser
 
 from .html_base import HtmlSearchScrapper, to_usd
+from .names import matched_name
 
 BASE_URL = "https://www.singlestar.jp"
-SEARCH_URL = f"{BASE_URL}/product-list"
+SEARCH_URL = f"{BASE_URL}/product-list/0/0/photo"
 
 # Set code + color/rarity bracket at the end of goods_name, e.g. "[SOA-青MR]".
 _SET_RE = re.compile(r"\[([A-Z0-9]+)-[^\]]+\]\s*$")
@@ -23,6 +29,9 @@ _PRICE_RE = re.compile(r"([\d,]+)\s*円")
 _STOCK_RE = re.compile(r"在庫数\s*(\d+)")
 # Variant/language/set brackets stripped to obtain the bare English card name.
 _STRIP_BRACKETS_RE = re.compile(r"【[^】]*】|\([^)]*\)|\[[^\]]*\]|●")
+# Collector number suffix on Secret Lair-style printings, e.g. "No.1822".
+# Left in, it made "Sol Ring No.2683" a different card from "Sol Ring".
+_COLLECTOR_NO_RE = re.compile(r"\bNo\.\s*[\w-]+")
 
 ENGLISH_TAG = "【英語版】"
 
@@ -44,14 +53,13 @@ def _clean_english_name(goods_text: str) -> str | None:
         return None
 
     english_half = text.split("/", 1)[1]
-    bare = _STRIP_BRACKETS_RE.sub("", english_half)
+    bare = _COLLECTOR_NO_RE.sub("", _STRIP_BRACKETS_RE.sub("", english_half))
     return re.sub(r"\s+", " ", bare).strip()
 
 
 def parse_search_html(html: str | bytes, card_name: str, fx_jpy_per_usd: float) -> list[dict]:
     """Extract price records from a SingleStar /product-list HTML response."""
     tree = HTMLParser(html)
-    target = card_name.strip().lower()
     records: list[dict] = []
 
     for cell in tree.css("li.list_item_cell"):
@@ -64,7 +72,8 @@ def parse_search_html(html: str | bytes, card_name: str, fx_jpy_per_usd: float) 
 
         goods_text = name_el.text(deep=True, separator=" ", strip=True)
         english_name = _clean_english_name(goods_text)
-        if not english_name or english_name.lower() != target:
+        card = matched_name(english_name, card_name) if english_name else None
+        if card is None:
             continue
 
         set_match = _SET_RE.search(goods_text)
@@ -90,7 +99,7 @@ def parse_search_html(html: str | bytes, card_name: str, fx_jpy_per_usd: float) 
 
         records.append({
             "shop": "SingleStar",
-            "card": english_name,
+            "card": card,
             "set": set_match.group(1),
             "price_jpy": price_jpy,
             "price_usd": price_usd,
@@ -105,6 +114,10 @@ class SingleStarScrapper(HtmlSearchScrapper):
     SHOP_NAME = "SingleStar"
     SEARCH_URL = SEARCH_URL
     LOGGER_NAME = "mtgcompare.scrapers.singlestar"
+    PAGE_PARAM = "page"
+
+    def search_params(self, card_name: str) -> dict:
+        return {"keyword": card_name, "available": "1", "num": "100"}
 
     def parse_html(self, html: str | bytes, card_name: str) -> list[dict]:
         return parse_search_html(html, card_name, self.fx)

@@ -121,3 +121,20 @@ def test_parse_skips_japanese_edition():
     </li>
     """
     assert parse_search_html(html, "Force of Will", fx_jpy_per_usd=150.0) == []
+
+
+def test_parse_strips_collector_number_suffix():
+    """"Sol Ring No.2683" is a Sol Ring printing, not another card."""
+    html = """
+    <li class="list_item_cell"><div class="item_data">
+      <a href="https://www.singlestar.jp/product/2" class="item_data_link">
+        <p class="item_name"><span class="goods_name">太陽の指輪/ Sol  Ring No.2683 【英語版】 [SLD-灰R]</span></p>
+        <div class="item_info">
+          <div class="price"><p class="selling_price"><span class="figure">980円</span></p></div>
+          <p class="stock">在庫数 4点</p>
+        </div>
+      </a>
+    </div></li>
+    """
+    [record] = parse_search_html(html, "Sol Ring", fx_jpy_per_usd=150.0)
+    assert (record["card"], record["set"], record["stock"]) == ("Sol Ring", "SLD", 4)

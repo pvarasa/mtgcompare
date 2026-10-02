@@ -125,3 +125,27 @@ def test_parse_price_jpy_to_usd_conversion():
     records = parse_search_html(html, "Force of Will", fx_jpy_per_usd=150.0)
     assert records[0]["price_jpy"] == 15000.0
     assert records[0]["price_usd"] == pytest.approx(100.0)
+
+
+def test_parse_accepts_collector_number_bracket_before_rarity():
+    html = """
+    <ul class="innerList clear"><li>
+      <p class="name"><a href="/shop/shopdetail.html?brandcode=7">【英】太陽の指輪/Sol Ring[No.2807][無色P]【SLD】</a></p>
+      <p class="price">1,200円</p>
+      <a href="basket.html?brandcode=7&amount=1">cart</a>
+    </li></ul>
+    """
+    [record] = parse_search_html(html, "Sol Ring", fx_jpy_per_usd=150.0)
+    assert (record["card"], record["set"], record["price_jpy"]) == ("Sol Ring", "SLD", 1200.0)
+
+
+def test_parse_accepts_mixed_case_set_label():
+    html = """
+    <ul class="innerList clear"><li>
+      <p class="name"><a href="/shop/shopdetail.html?brandcode=8">《イベント配布》【英】太陽の指輪/Sol Ring[無色P]【MagicFest】</a></p>
+      <p class="price">800円</p>
+      <a href="basket.html?brandcode=8&amount=1">cart</a>
+    </li></ul>
+    """
+    [record] = parse_search_html(html, "Sol Ring", fx_jpy_per_usd=150.0)
+    assert record["set"] == "MagicFest"

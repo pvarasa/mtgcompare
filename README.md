@@ -199,6 +199,7 @@ mtgcompare/
   scrapers/       Scraper stack
     base.py           MtgScrapper ABC
     html_base.py      HtmlSearchScrapper convention base + shared session/error/JSON helpers
+    names.py          multi-face-aware card-name matching shared by the shop parsers
     cache.py          CachedScrapper DB-cache wrapper
     registry.py       shop registry (incl. marketplace flag) + collect_prices()
     <shop>.py         per-shop implementations

@@ -57,7 +57,12 @@ Repo-specific guidance for coding sessions.
   (`HtmlSearchScrapper` convention base, plus the shared `make_session` /
   `raise_for_response` / `decode_json_response` helpers the JSON scrapers
   also use, and the `to_usd` / `to_jpy` FX conversion helpers every shop
-  builds records with), `cache.py` (`CachedScrapper` DB-cache wrapper),
+  builds records with; it also follows result pages via `PAGE_PARAM` /
+  `MAX_PAGES` and retries a `Front // Back` name with its front face),
+  `names.py` (`matched_name`: multi-face-aware listing-name matching every
+  shop parser uses — compare faces, never raw strings, because Scryfall /
+  the autocomplete send `Front // Back` and each shop renders it
+  differently), `cache.py` (`CachedScrapper` DB-cache wrapper),
   `registry.py` (the `Shop` NamedTuple registry incl. the `marketplace`
   flag + parallel `collect_prices()` fan-out), and one module per shop.
 - `mtgcompare/inventory.py`

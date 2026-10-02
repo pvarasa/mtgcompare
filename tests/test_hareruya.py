@@ -72,3 +72,46 @@ def test_parse_skips_zero_stock():
     </div>
     """
     assert parse_lazy_html(html, "Foo", fx_jpy_per_usd=150.0) == []
+
+
+def _item(name: str, price: str = "¥ 1,200", stock: str = "【NM Stock:19】") -> str:
+    return f"""
+    <div class="itemData">
+      <a href=" /en/products/detail/1?lang=EN " class="itemName">{name}</a>
+      <div class="itemDetail">
+        <p class="itemDetail__price">{price}</p>
+        <p class="itemDetail__stock">{stock}</p>
+      </div>
+    </div>
+    """
+
+
+def test_parse_matches_alternate_name_printing():
+    html = _item("【EN】(1871)■Borderless■《Vivi's Thunder Magic》//《Lightning Bolt》[SLD]")
+    [record] = parse_lazy_html(html, "Lightning Bolt", fx_jpy_per_usd=150.0)
+    assert (record["card"], record["set"]) == ("Lightning Bolt", "SLD")
+
+
+@pytest.mark.parametrize("name,card", [
+    ("【EN】《Delver of Secrets》/《Insectile Aberration》[ISD]", "Delver of Secrets // Insectile Aberration"),
+    ("【EN】《Fire+Ice》[[APC]", "Fire // Ice"),
+    ("【EN】《Bonecrusher Giant》[ELD]", "Bonecrusher Giant // Stomp"),
+])
+def test_parse_matches_multi_face_names(name, card):
+    assert len(parse_lazy_html(_item(name), card, fx_jpy_per_usd=150.0)) == 1
+
+
+def test_get_prices_pages_until_num_found_is_covered(monkeypatch):
+    from mtgcompare.scrapers import hareruya
+
+    scraper = hareruya.HareruyaScrapper(fx=150.0)
+    seen = []
+
+    def fake_docs(query, page=1):
+        seen.append(page)
+        return [{"p": page}], 130  # 130 matches -> 3 pages of 60
+
+    monkeypatch.setattr(scraper, "_fetch_docs", fake_docs)
+    monkeypatch.setattr(scraper, "_fetch_lazy_html", lambda docs: _item("【EN】《Sol Ring》[C21]"))
+    assert len(scraper.get_prices("Sol Ring")) == 3
+    assert seen == [1, 2, 3]

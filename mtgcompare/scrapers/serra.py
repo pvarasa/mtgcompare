@@ -28,9 +28,17 @@ the ``/``, so it lands in the discarded ``jp`` group — without an explicit
 check an English foil parses as a plain English listing and reports a
 foil price as the non-foil one.
 
-Only the first result page is fetched, matching the single-GET shape of
-``HtmlSearchScrapper``. Serra sorts by relevance, so in-stock English
-printings land on page 1; page 2+ is long-tail zero-stock variants.
+Results come 30 to a page. Page 1 is *not* enough: on 2026-10-02 Sol
+Ring's page 2 held six more in-stock English NM printings (MB1, C21, C20,
+M3C, WOC, FIC). ``MAX_PAGES`` is 2 rather than the default 3 because Serra
+sits behind Cloudflare and answers bursts with a 429 (``Retry-After: 60``)
+— the decklist fan-out already queries it once per card — and page 3+ was
+long-tail. Shopify's ``filter.v.availability=1`` does not narrow this
+store's search results, so it isn't used.
+
+Multi-face titles carry each face's Japanese name inline —
+``砕骨の巨人 / Bonecrusher Giant - 踏みつけ / Stomp`` — which
+``names.matched_name`` reduces to the English faces.
 
 The ``parse_search_html`` function is pure and is what tests exercise.
 """
@@ -39,6 +47,7 @@ import re
 from selectolax.parser import HTMLParser
 
 from .html_base import HtmlSearchScrapper, node_text_ws, to_usd
+from .names import matched_name
 
 BASE_URL = "https://cardshop-serra.com"
 SEARCH_URL = f"{BASE_URL}/search"
@@ -89,7 +98,6 @@ def _row_condition(condition_area) -> str:
 def parse_search_html(html: str | bytes, card_name: str, fx_jpy_per_usd: float) -> list[dict]:
     """Extract NM English non-foil in-stock rows for ``card_name`` from a Serra page."""
     tree = HTMLParser(html)
-    target = card_name.strip().lower()
     records: list[dict] = []
 
     for item in tree.css("div.product_item"):
@@ -108,8 +116,8 @@ def parse_search_html(html: str | bytes, card_name: str, fx_jpy_per_usd: float) 
         if m.group("lang") != "英":
             continue
 
-        en = _FLAVOR_RE.sub("", m.group("en")).strip()
-        if en.lower() != target:
+        en = matched_name(_FLAVOR_RE.sub("", m.group("en")).strip(), card_name)
+        if en is None:
             continue
 
         href = (title_el.attributes.get("href") or "").strip()
@@ -150,6 +158,8 @@ class CardshopSerraScrapper(HtmlSearchScrapper):
     SEARCH_URL = SEARCH_URL
     LOGGER_NAME = "mtgcompare.scrapers.serra"
     SEARCH_PARAM_NAME = "q"
+    PAGE_PARAM = "page"
+    MAX_PAGES = 2
 
     def search_params(self, card_name: str) -> dict:
         # `type=product` keeps blog/page hits out of the result set.

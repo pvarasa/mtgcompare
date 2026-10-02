@@ -21,6 +21,14 @@ Examples we filter out:
   …[日本画]                     — Japanese-art variant
   【シルバースクロールFOIL】…  — special foil variant
 
+Collector numbers ride in their own bracket before the rarity —
+``Sol Ring[No.2807][無色P]【SLD】`` — so the name regex allows any number of
+``[...]`` groups there; it used to allow one, which silently dropped every
+in-stock Secret Lair-style English printing.
+
+Search results come 48 to a page (Sol Ring: 4 pages), followed via
+``page=`` up to ``MAX_PAGES``.
+
 The ``parse_search_html`` function is pure and is what tests exercise.
 """
 import re
@@ -29,21 +37,22 @@ import requests
 from selectolax.parser import HTMLParser
 
 from .html_base import HtmlSearchScrapper, to_usd
+from .names import matched_name
 
 BASE_URL = "https://blackfrog.jp"
 SEARCH_URL = f"{BASE_URL}/shop/shopbrand.html"
 
 _PRICE_RE = re.compile(r"([\d,]+)\s*円")
-# The set bracket is the 【XYZ】 right after the rarity bracket; pin to the
-# set-code shape (uppercase ASCII letters/digits) so we don't accidentally
+# The set bracket is the 【XYZ】 right after the rarity bracket; pin to an
+# ASCII shape (letters/digits, e.g. SLD or MagicFest) so we don't accidentally
 # match a Japanese label like 【FOIL】 or 【シルバースクロールFOIL】.
 _NAME_RE = re.compile(
     r"【(?P<lang>[^】]+)】"
     r"(?P<jp>[^/]+?)"
     r"/"
     r"(?P<en>[^\[【]+?)"
-    r"(?:\[[^\]]+\])?"          # optional rarity bracket like [青MR]
-    r"\s*【(?P<set>[A-Z0-9]+)】"
+    r"(?:\[[^\]]+\])*"          # [No.2807], rarity like [青MR], ...
+    r"\s*【(?P<set>[A-Za-z0-9]+)】"
 )
 _VARIANT_BRACKETS = ("[ボーダーレス]", "[旧枠]", "[日本画]", "[拡張枠]", "[フレームレス]")
 
@@ -51,7 +60,6 @@ _VARIANT_BRACKETS = ("[ボーダーレス]", "[旧枠]", "[日本画]", "[拡張
 def parse_search_html(html: str | bytes, card_name: str, fx_jpy_per_usd: float) -> list[dict]:
     """Extract NM English non-foil non-variant rows for ``card_name`` from a BLACK FROG page."""
     tree = HTMLParser(html)
-    target = card_name.strip().lower()
     records: list[dict] = []
 
     # `> li` restricts to direct children — the listing is one level deep,
@@ -89,8 +97,8 @@ def parse_search_html(html: str | bytes, card_name: str, fx_jpy_per_usd: float) 
         if m.group("lang") != "英":
             continue
 
-        en = m.group("en").strip()
-        if en.lower() != target:
+        en = matched_name(m.group("en").strip(), card_name)
+        if en is None:
             continue
 
         price_match = _PRICE_RE.search(price_el.text(deep=True, separator=" ", strip=True))
@@ -121,6 +129,7 @@ class BlackFrogScrapper(HtmlSearchScrapper):
     SEARCH_URL = SEARCH_URL
     LOGGER_NAME = "mtgcompare.scrapers.blackfrog"
     SEARCH_PARAM_NAME = "search"
+    PAGE_PARAM = "page"
 
     def parse_html(self, html: str | bytes, card_name: str) -> list[dict]:
         return parse_search_html(html, card_name, self.fx)

@@ -153,3 +153,43 @@ def test_search_params_forces_jpy_currency():
     params = scraper.search_params("Sol Ring")
     assert params["cx"] == "jpy"
     assert params["query"] == "Sol Ring"
+
+
+def _wrapper(tabs: str, panes: str) -> str:
+    return f"""
+    <div class="pwrapper"><div class="border row m-2 py-1">
+      <div class="w-25 mx-1"><span class="lang-badge">English Version</span></div>
+      <div class="col mx-2">
+        <a href="carddetails.html?sc=9"><h3>Force of Will</h3></a>
+        <h3><a href="./cardpage.html?p=s&s=1"><b>Judge Foils</b></a></h3>
+        <ul class="nav nav-tabs">{tabs}</ul>
+        <div class="tab-content">{panes}</div>
+      </div>
+    </div></div>
+    """
+
+
+def test_foil_tab_opened_by_default_is_not_reported_as_regular():
+    """The site activates the first tab with stock. A foil-only printing
+    opens on Foil; its price must not come back as NM non-foil."""
+    html = _wrapper(
+        '<li><a class="active" href="#regfoil_9_0_0">Foil</a></li>',
+        '<div id="regfoil_9_0_0" class="tab-pane fade show active">'
+        '<h3 class="price-text">&yen;114,990<br />Stock: 1</h3></div>',
+    )
+    assert parse_search_html(html, "Force of Will", fx_jpy_per_usd=150.0) == []
+
+
+def test_regular_pane_is_read_even_when_another_tab_is_active():
+    html = _wrapper(
+        '<li><a href="#reg_9_0_0">Regular</a></li><li><a class="active" href="#pld_9_0_0">Played</a></li>',
+        '<div id="reg_9_0_0" class="tab-pane fade"><h3 class="price-text">&yen;9,990<br />Stock: 2</h3></div>'
+        '<div id="pld_9_0_0" class="tab-pane fade show active"><h3 class="price-text">&yen;7,000<br />Stock: 1</h3></div>',
+    )
+    [record] = parse_search_html(html, "Force of Will", fx_jpy_per_usd=150.0)
+    assert (record["price_jpy"], record["stock"]) == (9990.0, 2)
+
+
+def test_pages_by_twenty_printing_offset():
+    scraper = TokyoMtgScrapper(fx=150.0)
+    assert [scraper.page_value(n) for n in (1, 2, 3)] == ["0", "20", "40"]

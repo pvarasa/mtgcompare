@@ -6,6 +6,17 @@ wrapped in a `div.pwrapper` with Bootstrap nav-tabs for
 Regular/Played/Foil/PlayedFoil. We only pull the Regular (NM) tab of
 English-version entries that have stock.
 
+The Regular pane is picked by its id (``reg_<n>``), never by which tab is
+active: the site activates the first tab that *has stock*, so a printing
+with no regular copies opens on Played or Foil. Reading the active pane
+reported those prices as NM non-foil — 23 of 50 records across five
+staple cards on 2026-10-02, e.g. a ¥114,990 Judge-foil Force of Will.
+
+Results come 20 printings per page, paged by the ``b`` offset
+(``b=20``, ``b=40``, ...). The site's filter form (English / non-foil /
+in stock) would cut that down, but it lives in the PHP session and dropped
+valid printings when tested, so the parser does the filtering instead.
+
 ``cx=jpy`` is load-bearing: without it the site geo-IPs the client and
 serves prices in the local currency (EUR from a German Hetzner egress,
 USD from US IPs, etc.), and our ``_PRICE_RE`` only matches the ¥ glyph.
@@ -21,6 +32,7 @@ import re
 from selectolax.parser import HTMLParser
 
 from .html_base import HtmlSearchScrapper, to_usd
+from .names import matched_name
 
 BASE_URL = "https://tokyomtg.com"
 SEARCH_URL = f"{BASE_URL}/cardpage.html"
@@ -36,7 +48,6 @@ ENGLISH_BADGE = "English Version"
 def parse_search_html(html: str | bytes, card_name: str, fx_jpy_per_usd: float) -> list[dict]:
     """Extract price records from a TokyoMTG /cardpage.html response."""
     tree = HTMLParser(html)
-    target = card_name.strip().lower()
     records: list[dict] = []
 
     for wrap in tree.css("div.pwrapper"):
@@ -54,14 +65,20 @@ def parse_search_html(html: str | bytes, card_name: str, fx_jpy_per_usd: float) 
         if not (name_el and set_el and detail_link_el):
             continue
 
-        card = name_el.text(deep=True, strip=True)
-        if card.lower() != target:
+        card = matched_name(name_el.text(deep=True, strip=True), card_name)
+        if card is None:
             continue
 
-        # The first (active) tab-pane is always Regular/NM non-foil.
-        reg_pane = wrap.css_first("div.tab-pane.show.active")
+        # Regular = NM non-foil. Select it by id, not by "active" (see the
+        # module docstring). The underscore matters: "regfoil_" also
+        # starts with "reg".
+        reg_pane = next(
+            (p for p in wrap.css("div.tab-pane")
+             if (p.attributes.get("id") or "").startswith("reg_")),
+            None,
+        )
         if not reg_pane:
-            continue
+            continue  # No regular printing listed at all.
         price_el = reg_pane.css_first("h3.price-text")
         if not price_el:
             continue  # Out of stock — no price-text node.
@@ -104,9 +121,14 @@ class TokyoMtgScrapper(HtmlSearchScrapper):
         "Accept-Language": "en-US,en;q=0.9",
         "Accept-Encoding": "gzip, deflate, br",
     }
+    PAGE_PARAM = "b"
+    _PAGE_SIZE = 20
 
     def parse_html(self, html: str | bytes, card_name: str) -> list[dict]:
         return parse_search_html(html, card_name, self.fx)
 
     def search_params(self, card_name: str) -> dict:
         return {"query": card_name, "p": "q", "cx": "jpy"}
+
+    def page_value(self, page: int) -> str:
+        return str((page - 1) * self._PAGE_SIZE)
