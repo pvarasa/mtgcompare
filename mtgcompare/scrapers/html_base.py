@@ -40,6 +40,7 @@ JSON-only) so they keep their own classes; they share ``USER_AGENT``
 and ``make_session`` but skip the base class.
 """
 import logging
+import os
 import re
 from time import monotonic
 from typing import ClassVar
@@ -114,9 +115,13 @@ def make_session(extra_headers: dict | None = None) -> requests.Session:
     if extra_headers:
         s.headers.update(extra_headers)
     # Module-level sessions are shared across the per-decklist fan-out, so
-    # the pool must accommodate concurrent in-flight requests per shop.
-    # Sized to match MTGCOMPARE_DECKLIST_FAN_OUT_WORKERS (default 12).
-    adapter = HTTPAdapter(pool_connections=12, pool_maxsize=12)
+    # the pool must accommodate concurrent in-flight requests per shop:
+    # one per fan-out worker. Read from the same env var as
+    # decklist.DECKLIST_FAN_OUT_WORKERS — prod runs 18, and a fixed 12 meant
+    # the extra connections were discarded after every request and each
+    # paid a fresh TLS handshake. (Importing decklist here would be circular.)
+    pool = max(12, int(os.environ.get("MTGCOMPARE_DECKLIST_FAN_OUT_WORKERS", "12")))
+    adapter = HTTPAdapter(pool_connections=pool, pool_maxsize=pool)
     s.mount("https://", adapter)
     s.mount("http://", adapter)
     return s

@@ -53,14 +53,6 @@ _TITLE_RE = re.compile(
 _TAX_MULTIPLIER = 1.10
 
 
-def _stock_map(html: str | bytes) -> dict[str, dict]:
-    """Public-ish wrapper: parse once and extract the stock map.
-
-    Retained as a top-level helper because the test suite imports it.
-    """
-    return _stock_map_from_tree(HTMLParser(html))
-
-
 def _stock_map_from_tree(tree: HTMLParser) -> dict[str, dict]:
     """Return spec_id → {stock, price_jpy} from the page's inline JS const.
 

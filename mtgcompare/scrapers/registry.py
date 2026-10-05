@@ -61,15 +61,14 @@ _SHOPS: list[Shop] = [
     Shop("Cardshop Serra",   _JP_FLAG, _DEFAULT_JP_SHIPPING,   True,  False, lambda fx: CardshopSerraScrapper(fx=fx)),
     Shop("BLACK FROG",       _JP_FLAG, _DEFAULT_JP_SHIPPING,   True,  False, lambda fx: BlackFrogScrapper(fx=fx)),
     Shop("MINT MALL",        _JP_FLAG, _DEFAULT_JP_SHIPPING,   True,  False, lambda fx: MintMallScrapper(fx=fx)),
-    # ENNDAL GAMES still disabled. Public resolvers recovered on 2026-05-26
-    # (dig +short www.enndalgames.com @8.8.8.8 → 13.159.57.5 / 52.193.201.15),
-    # but the *cluster's* upstream DNS still can't resolve www — an in-pod
-    # socket.gethostbyname('www.enndalgames.com') returns Errno -5 while the
-    # apex enndalgames.com (219.94.128.207) does resolve. The apex isn't a
-    # usable fallback: its TLS cert is valid only for www. So prod would just
-    # log fast NameResolutionErrors and contribute nothing. Re-enable only
-    # once `kubectl -n apps exec <pod> -- python -c
-    # "import socket; socket.gethostbyname('www.enndalgames.com')"` succeeds.
+    # ENNDAL GAMES is disabled for good from this deployment. Its DNS is
+    # Route 53 geolocation routing that answers only Japanese resolvers:
+    # asked from Japan, the authoritative servers return 54.95.59.170 /
+    # 52.199.145.100; asked from vps1 (Hetzner, Germany) — even directly,
+    # or via 1.1.1.1 — they return NOERROR with no A record (checked
+    # 2026-10-05). The apex resolves but its TLS cert is www-only. So no
+    # resolver change fixes it; it needs a Japanese egress. The earlier
+    # theory (the cluster's upstream DNS lagging a recovery) was wrong.
     Shop("ENNDAL GAMES",     _JP_FLAG, _DEFAULT_JP_SHIPPING,   False, False, lambda fx: EnndalGamesScrapper(fx=fx)),
 ]
 

@@ -53,10 +53,6 @@ class SearchQuery:
     variants: list[str] = field(default_factory=list)
     unknown_tokens: list[str] = field(default_factory=list)
 
-    @property
-    def has_filters(self) -> bool:
-        return bool(self.set_code or self.number or self.variants)
-
 
 def parse_query(q: str) -> SearchQuery:
     """Split printing-filter tokens off a search-box query."""

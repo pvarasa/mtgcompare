@@ -1,8 +1,9 @@
 from pathlib import Path
 
 import pytest
+from selectolax.parser import HTMLParser
 
-from mtgcompare.scrapers.mintmall import _stock_map, parse_search_html
+from mtgcompare.scrapers.mintmall import _stock_map_from_tree, parse_search_html
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
@@ -15,7 +16,7 @@ def search_html() -> str:
 def test_stock_map_extracts_inventory(search_html):
     """The JS const ``specificationTreeSearchProductsTree`` is the source of truth
     for per-spec stock and price."""
-    s = _stock_map(search_html)
+    s = _stock_map_from_tree(HTMLParser(search_html))
     assert s, "stock map should be non-empty when the JSON is present"
     in_stock = {k: v for k, v in s.items() if v["stock"] > 0}
     # The current fixture has 2 specs with stock; both ought to show up.
