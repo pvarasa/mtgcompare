@@ -181,6 +181,20 @@ The `users` table is keyed on `workos_user_id`; inventory rows continue to key o
   (`search.apply_shipping`) uses each row's own `ship_jpy` instead of a flat
   estimate, and the decklist form hides their shop-filter checkbox via the
   `marketplace_shops` Jinja global.
+- **Printing variants.** Every shop record carries `variant` (comma-joined
+  `scrapers/variants.py` tags; `""` = regular, `None` = the shop can't tell)
+  and `number` (normalised collector number). Each parser maps its own
+  title markers via `variants.tags_from_markers`; `scrapers/enrich.py`
+  (`build_scrapers` wraps shops as `CachedScrapper(EnrichingScrapper(shop))`)
+  then resolves the printing against the memoized Scryfall summaries and
+  lets Scryfall's tags win, because shops label the same printing
+  inconsistently. `shop_listings.variant` stores unknown as `"?"`; a NULL
+  means a row written by a pre-variant release (stg and prod share the
+  table) and `CachedScrapper` treats it as a miss. The search box accepts
+  `set:` / `#number` / `is:<treatment>` / `(SET) number` tokens
+  (`search.parse_query`) that only preselect the client-side results
+  filters (`static/resultfilters.js`); decklist "(SET) number" narrowing is
+  opt-in (`match_printings`).
 - Market prices are cached in the `market_prices` table (global, not per-user).
 - The Market page does not fetch live prices on GET. Prices are populated via **Update prices** (`POST /market/history/download`), which downloads MTGJSON history and writes the latest price per mapped lot into `market_prices` as a side effect (`pricing.populate_market_prices_from_history`).
 - There is no separate Scryfall refresh; prices come from MTGJSON/TCGPlayer daily data.

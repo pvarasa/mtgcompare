@@ -9,6 +9,7 @@ from .blackfrog import BlackFrogScrapper
 from .cache import DEFAULT_TTL, CachedScrapper
 from .cardrush import CardRushScrapper
 from .enndalgames import EnndalGamesScrapper
+from .enrich import EnrichingScrapper
 from .hareruya import HareruyaScrapper
 from .mintmall import MintMallScrapper
 from .scryfall import ScryfallScrapper
@@ -113,7 +114,7 @@ def build_scrapers(fx: float, enabled: set[str] | None = None) -> list:
     ``_SHOPS`` are always skipped.
     """
     raw = [
-        (s.name, s.factory(fx))
+        (s.name, EnrichingScrapper(s.factory(fx), s.name))
         for s in _SHOPS
         if s.enabled and (enabled is None or s.name in enabled)
     ]

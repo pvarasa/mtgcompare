@@ -143,6 +143,8 @@ def build_record(
     *,
     card_name: str,
     set_code: str,
+    number: str | None = None,
+    variant: str | None = None,
     product_id: int,
     fx_jpy_per_usd: float,
 ) -> dict:
@@ -169,6 +171,8 @@ def build_record(
         "shop": SHOP_NAME,
         "card": card_name,
         "set": set_code,
+        "number": number,
+        "variant": variant,
         "price_jpy": to_jpy(price_usd, fx_jpy_per_usd),
         "price_usd": round(price_usd, 2),
         "ship_jpy": to_jpy(ship_usd, fx_jpy_per_usd),
@@ -237,6 +241,8 @@ class TcgPlayerJpScrapper(MtgScrapper):
                         listing,
                         card_name=p["name"],
                         set_code=p["set"],
+                        number=p.get("number"),
+                        variant=p.get("variant"),
                         product_id=p["tcgplayer_id"],
                         fx_jpy_per_usd=self.fx,
                     ) for listing in pick_best_listings(page))

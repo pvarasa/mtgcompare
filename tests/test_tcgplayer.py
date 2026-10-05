@@ -97,6 +97,8 @@ def test_build_record_keeps_item_price_and_shipping_separate():
         "shop": "TCGPlayer → JP",
         "card": "Witch Enchanter // Witch-Blessed Meadow",
         "set": "MH3",
+        "number": None,
+        "variant": None,
         "price_jpy": round(13.76 * 150.0, 2),
         "price_usd": 13.76,
         "ship_jpy": round(1.99 * 150.0, 2),

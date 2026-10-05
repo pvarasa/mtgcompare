@@ -224,6 +224,13 @@
                  style="accent-color:#c9a84c">
           Use inventory
         </label>
+        <label style="display:inline-flex;align-items:center;gap:.35rem;font-size:.88rem;color:var(--muted);cursor:pointer"
+               title="Price only the printing each line names, e.g. “1 Rhystic Study (C21) 79”.">
+          <input type="checkbox" name="match_printings" value="1"
+                 {% if match_printings %}checked{% endif %}
+                 style="accent-color:#c9a84c">
+          Match (SET) number
+        </label>
         <button type="submit">Search again</button>
       </div>
     </form>

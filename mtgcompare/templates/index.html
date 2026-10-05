@@ -145,6 +145,44 @@
     .shop-filter-actions button:hover { color: var(--gold); border-color: var(--gold); }
   }
 
+  /* Printing filters above the single-card results (resultfilters.js). */
+  .printing-filter {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .4rem .6rem;
+    align-items: center;
+    margin-bottom: .6rem;
+    font-size: .85rem;
+  }
+  .printing-filter select {
+    background: var(--bg-alt);
+    color: var(--fg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: .2rem .4rem;
+    font: inherit;
+  }
+  .printing-filter .chip {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    font-size: .8rem;
+    padding: .15rem .6rem;
+    border-radius: 999px;
+    cursor: pointer;
+  }
+  .printing-filter .chip[aria-pressed="true"] {
+    border-color: var(--gold);
+    color: var(--gold);
+    background: var(--gold-dim);
+  }
+  @media (hover: hover) {
+    .printing-filter .chip:hover { border-color: var(--gold); color: var(--gold); }
+  }
+  .printing-filter .filter-note { color: var(--muted); font-size: .78rem; }
+  .version-unknown { color: var(--muted); cursor: help; }
+  .version-number { color: var(--muted); font-size: .8rem; }
+
   /* Search progress indicator — visible only while the form is submitting. */
   .search-loading {
     display: none;
@@ -175,7 +213,7 @@
     <form method="get" action="{{ url_for('index') }}">
       <div class="search-row">
         <input type="text" name="q" value="{{ q }}"
-               placeholder='Card name, e.g. "Force of Will"'
+               placeholder='Card name, e.g. "Force of Will" — or narrow it: "Force of Will set:DMR is:borderless"'
                list="search-name-suggest"
                autofocus autocomplete="off">
         <datalist id="search-name-suggest"></datalist>
@@ -244,10 +282,12 @@
           data-shop-flags='{{ shop_flags | tojson }}'>
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <textarea name="decklist"
-                placeholder="1 Sol Ring&#10;4x Force of Will (FEM)&#10;1 Rhystic Study (C21) 79&#10;..."></textarea>
+                placeholder="1 Sol Ring&#10;4x Force of Will (FEM)&#10;1 Rhystic Study (C21) 79&#10;...&#10;&#10;(SET) number is ignored unless “Match (SET) number” is ticked."></textarea>
       <div class="dl-actions">
         <span style="font-size:.78rem; color:var(--muted); margin-right:auto;">max 100 cards</span>
         <label><input type="checkbox" name="use_inventory" value="1" checked> Use inventory</label>
+        <label title="Price only the printing each line names, e.g. “1 Rhystic Study (C21) 79”. Off: any printing, cheapest first.">
+          <input type="checkbox" name="match_printings" value="1"> Match (SET) number</label>
         <button type="submit">Search decklist</button>
       </div>
 
@@ -327,14 +367,47 @@
         timed out — re-run to retry.
       </p>
     {% endif %}
+    {% if unknown_filter_tokens %}
+      <p class="meta">Ignored {{ unknown_filter_tokens|join(', ') }} — filters are
+        <code>set:</code>, <code>#number</code> and
+        <code>is:fullart</code> / <code>borderless</code> / <code>showcase</code> /
+        <code>extended</code> / <code>oldframe</code> / <code>regular</code>.</p>
+    {% endif %}
 
     {% if results %}
+      {% set fo = filter_options %}
+      <div class="printing-filter" id="printing-filter"
+           data-initial="{{ initial_filters|tojson|forceescape }}">
+        <label>Set
+          <select data-filter-set>
+            <option value="">All sets</option>
+            {% for code, n in fo.sets %}
+              <option value="{{ code }}">{{ code }} ({{ n }})</option>
+            {% endfor %}
+            {% if initial_filters.set and initial_filters.set not in fo.sets|map('first')|list %}
+              <option value="{{ initial_filters.set }}">{{ initial_filters.set }} (0)</option>
+            {% endif %}
+          </select>
+        </label>
+        {% if fo.variant_chips|length > 1 or fo.has_unknown or initial_filters.variants %}
+          <button type="button" class="chip" data-filter-variant="">Any version</button>
+          {% for value, text in fo.variant_chips %}
+            <button type="button" class="chip" data-filter-variant="{{ value }}">{{ text }}</button>
+          {% endfor %}
+        {% endif %}
+        <button type="button" class="chip" data-filter-number hidden></button>
+        <span class="filter-note" data-filter-count aria-live="polite"></span>
+        {% if fo.has_unknown %}
+          <span class="filter-note">“?” = the shop doesn’t say which version; those rows stay visible under every version filter.</span>
+        {% endif %}
+      </div>
       <div class="table-scroll">
       <table id="results-table">
         <thead>
           <tr>
             <th>Shop</th>
             <th>Set</th>
+            <th>Version</th>
             <th class="num">¥</th>
             {% if include_shipping %}<th class="num">w/ship ¥</th>{% endif %}
             <th class="num">$</th>
@@ -345,12 +418,23 @@
         </thead>
         <tbody>
           {% for r in results %}
-            <tr class="{% if loop.first %}cheapest{% endif %}">
+            <tr class="{% if loop.first %}cheapest{% endif %}"
+                data-set="{{ r.set }}"
+                data-variant="{{ '?' if r.variant is none else r.variant }}"
+                data-number="{{ r.number or '' }}">
               <td>
                 <span class="flag">{{ shop_flags.get(r.shop, '') }}</span>{{ r.shop }}
                 {% if loop.first %}<span class="badge">cheapest</span>{% endif %}
               </td>
-              <td>{{ card_icon(q, r.set) }}{{ r.set }}</td>
+              <td>{{ card_icon(card_name, r.set) }}{{ r.set }}</td>
+              <td>
+                {% if r.variant is none %}
+                  <span class="version-unknown" title="This shop doesn’t say which version this is">?</span>
+                {% else %}
+                  {{ r.variant|variant_label }}
+                {% endif %}
+                {% if r.number %}<span class="version-number">#{{ r.number }}</span>{% endif %}
+              </td>
               <td class="num">¥{{ '{:,.0f}'.format(r.price_jpy) }}</td>
               {% if include_shipping %}
                 <td class="num"
@@ -373,6 +457,7 @@
 
   <script src="{{ url_for('static', filename='searchautocomplete.js') }}?v={{ static_token }}" defer></script>
   <script src="{{ url_for('static', filename='decklist-stream.js') }}?v={{ static_token }}" defer></script>
+  <script src="{{ url_for('static', filename='resultfilters.js') }}?v={{ static_token }}" defer></script>
   <script>
     (function () {
       // --- mode toggle ---

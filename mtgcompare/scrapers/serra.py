@@ -48,6 +48,7 @@ from selectolax.parser import HTMLParser
 
 from .html_base import HtmlSearchScrapper, node_text_ws, to_usd
 from .names import matched_name
+from .variants import encode, normalize_number, tags_from_markers
 
 BASE_URL = "https://cardshop-serra.com"
 SEARCH_URL = f"{BASE_URL}/search"
@@ -61,7 +62,7 @@ _TITLE_RE = re.compile(
     r"\s*/\s*"
     r"(?P<en>.+?)"
     r"\s*【(?P<set>[^】]+)】"
-    r"(?:\s*No\.[\w\-]+)?"
+    r"(?:\s*No\.(?P<num>[\w\-]+))?"
     r"\s*$"
 )
 # Decorations sometimes appended to the EN name to flag printing variants.
@@ -116,6 +117,7 @@ def parse_search_html(html: str | bytes, card_name: str, fx_jpy_per_usd: float) 
         if m.group("lang") != "英":
             continue
 
+        flavor = _FLAVOR_RE.search(m.group("en"))
         en = matched_name(_FLAVOR_RE.sub("", m.group("en")).strip(), card_name)
         if en is None:
             continue
@@ -144,6 +146,10 @@ def parse_search_html(html: str | bytes, card_name: str, fx_jpy_per_usd: float) 
                 "shop": "Cardshop Serra",
                 "card": en,
                 "set": m.group("set").strip(),
+                "number": normalize_number(m.group("num")),
+                # ★拡張枠★-style flavor marks some variants, not all (no
+                # mark on retro frames); enrichment fills the rest by number.
+                "variant": encode(tags_from_markers([flavor.group(0)] if flavor else [])),
                 "price_jpy": price_jpy,
                 "price_usd": to_usd(price_jpy, fx_jpy_per_usd),
                 "stock": stock,

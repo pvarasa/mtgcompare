@@ -12,8 +12,9 @@ page, keyed by ``<option value=...>`` of the per-product spec ``<select>``::
     {"<spec_id>": ["<stock>", <reserve>, <publish>, "<price_x100_tax_excl>"], ...}
 
 We map each list card to the stock-map entry through the spec-id and
-filter to plain English NM rows with stock > 0 (no foil, no variant
-suffix). Per-spec price is recovered from the JSON (× 1.1 = tax-incl
+filter to English NM non-foil rows with stock > 0. A variant suffix
+(``ボーダーレス版``, ``旧枠版``, ...) tags the row (see ``variants``)
+rather than dropping it; no suffix is the regular printing. Per-spec price is recovered from the JSON (× 1.1 = tax-incl
 price displayed on the page, rounded to whole yen as the page shows it).
 
 Results come 100 to a page (Sol Ring: 152 items), followed via ``pageno=``
@@ -26,6 +27,7 @@ from selectolax.parser import HTMLParser
 
 from .html_base import HtmlSearchScrapper, node_text_ws, to_usd
 from .names import matched_name
+from .variants import encode, normalize_number, tags_from_markers
 
 BASE_URL = "https://www.mint-mall.net"
 SEARCH_URL = f"{BASE_URL}/products/list.php"
@@ -43,18 +45,9 @@ _TITLE_RE = re.compile(
     r"^"
     r"【(?P<set>[A-Z0-9]+)】"
     r"【(?P<lang>[^】]+)】"
-    r"(?:〈[^〉]+〉)?"
+    r"(?:〈(?P<num>[^〉-]+)[^〉]*〉)?"
     r"《(?P<jp>[^/]+?)/(?P<en>[^》]+?)》"
     r"(?P<suffix>.*)$"
-)
-# Variant suffixes that mean it's not the canonical printing.
-_VARIANT_SUFFIXES = (
-    "ショーケース版",
-    "ボーダーレス版",
-    "日本画版",
-    "拡張枠版",
-    "フレームレス版",
-    "旧枠版",
 )
 # MINT MALL applies 10% consumption tax on top of the JSON's base price.
 _TAX_MULTIPLIER = 1.10
@@ -104,7 +97,7 @@ def _stock_map_from_tree(tree: HTMLParser) -> dict[str, dict]:
 
 
 def parse_search_html(html: str | bytes, card_name: str, fx_jpy_per_usd: float) -> list[dict]:
-    """Extract NM English non-foil non-variant in-stock rows for ``card_name``."""
+    """Extract NM English non-foil in-stock rows for ``card_name``."""
     tree = HTMLParser(html)
     stock = _stock_map_from_tree(tree)
     records: list[dict] = []
@@ -131,9 +124,8 @@ def parse_search_html(html: str | bytes, card_name: str, fx_jpy_per_usd: float) 
         if card is None:
             continue
 
-        suffix = m.group("suffix").strip()
-        if any(v in suffix for v in _VARIANT_SUFFIXES):
-            continue
+        variant = encode(tags_from_markers([m.group("suffix")]))
+        number = normalize_number(m.group("num"))
 
         # Each in-stock NM option contributes a record.
         for option in select_el.css("option"):
@@ -155,6 +147,8 @@ def parse_search_html(html: str | bytes, card_name: str, fx_jpy_per_usd: float) 
                 "shop": "MINT MALL",
                 "card": card,
                 "set": m.group("set"),
+                "number": number,
+                "variant": variant,
                 "price_jpy": float(entry["price_jpy"]),
                 "price_usd": to_usd(entry["price_jpy"], fx_jpy_per_usd),
                 "stock": entry["stock"],

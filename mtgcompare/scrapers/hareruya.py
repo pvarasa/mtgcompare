@@ -16,6 +16,13 @@ Aberration》``, ``《Fire+Ice》``, or a Secret Lair alternate name like
 collected and matched with ``names.matched_name``; taking only the first
 bracket made all of those miss.
 
+Variants are flagged inline — ``【EN】■Borderless■《Force of Will》[DMR]``,
+``【EN】(017)■Showcase■《…》[OTP]`` — and some special printings carry a
+suffix on the set code instead (``[2XM-BT]``, a Double Masters box
+topper). The ``■…■`` markers become ``variants`` tags, the ``(017)`` the
+collector number, and the set is reported without its suffix (a bare
+suffix counts as an untagged variant for the enrichment to resolve).
+
 The `parse_lazy_html` function is pure and is what the tests exercise.
 """
 import logging
@@ -30,6 +37,7 @@ from .base import MtgScrapper
 from .html_base import RateLimitedError, ScraperFetchError, to_usd
 from .html_base import make_session as _make_session
 from .names import matched_name, query_variants
+from .variants import OTHER, encode, normalize_number, tags_from_markers
 
 BASE_URL = "https://www.hareruyamtg.com"
 UNISEARCH_API = f"{BASE_URL}/en/products/search/unisearch_api"
@@ -41,6 +49,8 @@ _ROWS_PER_PAGE = 60
 _MAX_PAGES = 3
 _STOCK_RE = re.compile(r"【(.+?) Stock:(\d+)】")
 _PRICE_RE = re.compile(r"(\d[\d,]*)")
+_MARKER_RE = re.compile(r"■([^■]+)■")
+_NUMBER_RE = re.compile(r"\((\d+[a-z]?)\)")
 
 
 def make_session() -> requests.Session:
@@ -83,7 +93,12 @@ def parse_lazy_html(html: str | bytes, card_name: str, fx_jpy_per_usd: float) ->
         card = matched_name(" // ".join(faces), card_name)
         if card is None:
             continue
-        mtg_set = name_match.group(2)
+        mtg_set, _, set_suffix = name_match.group(2).partition("-")
+        head = name_text.split("《", 1)[0]
+        tags = tags_from_markers(_MARKER_RE.findall(head))
+        if set_suffix and not tags:
+            tags = {OTHER}
+        number = _NUMBER_RE.search(head)
 
         condition = stock_match.group(1)
         stock = int(stock_match.group(2))
@@ -100,6 +115,8 @@ def parse_lazy_html(html: str | bytes, card_name: str, fx_jpy_per_usd: float) ->
             "shop": "Hareruya",
             "card": card,
             "set": mtg_set,
+            "number": normalize_number(number.group(1)) if number else None,
+            "variant": encode(tags),
             "price_jpy": price_jpy,
             "price_usd": price_usd,
             "stock": stock,

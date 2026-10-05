@@ -117,3 +117,71 @@ def test_shop_filter_chips_select_all_none_and_submit(e2e_base_url, page):
     final_url = page.url
     assert f"{first_name}=1" not in final_url, \
         f"unchecked shop {first_name} should not be in the submitted URL"
+
+
+def _printing_rows():
+    base = {"card": "Force of Will", "price_usd": 100.0, "stock": 1,
+            "condition": "NM", "link": "https://example.test/"}
+    return [
+        {**base, "shop": "Hareruya", "set": "DMR", "number": "50", "variant": "", "price_jpy": 14000.0},
+        {**base, "shop": "Card Rush", "set": "DMR", "number": "418",
+         "variant": "fullart,borderless", "price_jpy": 15000.0},
+        {**base, "shop": "TokyoMTG", "set": "DMR", "number": None, "variant": None, "price_jpy": 13000.0},
+        {**base, "shop": "Cardshop Serra", "set": "2XM", "number": "340",
+         "variant": "fullart,borderless", "price_jpy": 50000.0},
+    ]
+
+
+@pytest.fixture
+def stub_search(monkeypatch):
+    from mtgcompare import web as web_module
+    seen: list[str] = []
+
+    def fake_collect(name, fx, **kw):
+        seen.append(name)
+        return [dict(r) for r in _printing_rows()]
+
+    monkeypatch.setattr(web_module, "collect_prices", fake_collect)
+    monkeypatch.setattr(web_module, "_get_fx", lambda: 150.0)
+    return seen
+
+
+def _visible_shops(page):
+    return page.locator("#results-table tbody tr:visible td:first-child").all_inner_texts()
+
+
+def test_printing_filters_narrow_rows_and_move_the_cheapest_badge(e2e_base_url, page, stub_search):
+    """Version chips + set select filter client-side; "?" rows stay visible
+    under a version filter; the cheapest badge follows the first visible row."""
+    page.goto(f"{e2e_base_url}/?q=Force+of+Will")
+    assert len(_visible_shops(page)) == 4
+
+    page.locator('[data-filter-variant="fullart"]').click()
+    shops = _visible_shops(page)
+    assert len(shops) == 3
+    assert not any("Hareruya" in s for s in shops)          # regular hidden
+    assert any("TokyoMTG" in s for s in shops)              # unknown kept
+    assert "cheapest" in shops[0] and "TokyoMTG" in shops[0]
+
+    page.locator("[data-filter-set]").select_option("2XM")
+    shops = _visible_shops(page)
+    assert len(shops) == 1 and "Cardshop Serra" in shops[0] and "cheapest" in shops[0]
+
+    page.locator('[data-filter-variant=""]').click()
+    page.locator("[data-filter-set]").select_option("")
+    assert len(_visible_shops(page)) == 4
+
+
+def test_query_filter_tokens_search_the_bare_name_and_preselect(e2e_base_url, page, stub_search):
+    page.goto(f"{e2e_base_url}/?q=Force+of+Will+set%3ADMR+is%3Aregular+%23999")
+    assert stub_search[-1] == "Force of Will"
+    assert page.locator("[data-filter-set]").input_value() == "DMR"
+    assert page.locator('[data-filter-variant="regular"]').get_attribute("aria-pressed") == "true"
+    # #999 matches nothing with a known number; only the "?" row survives.
+    shops = _visible_shops(page)
+    assert len(shops) == 1 and "TokyoMTG" in shops[0]
+
+    page.locator("[data-filter-number]").click()   # clear #999
+    shops = _visible_shops(page)
+    assert len(shops) == 2
+    assert "TokyoMTG" in shops[0] and "Hareruya" in shops[1]

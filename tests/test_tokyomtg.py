@@ -64,6 +64,8 @@ def test_parse_handcrafted_in_stock_record():
         "shop": "TokyoMTG",
         "card": "Force of Will",
         "set": "Alliances",
+        "number": None,
+        "variant": None,
         "price_jpy": 14990.0,
         "price_usd": 99.93,
         "stock": 1,

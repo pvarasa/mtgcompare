@@ -16,10 +16,11 @@ Examples we filter out:
   ★特価品　状態EX★【英】…   — non-NM (condition stamped in 状態XX prefix)
   【FOIL】【英】…              — foil printing
   【日】…                       — Japanese
-  …[ボーダーレス]              — borderless variant
-  …[旧枠]                       — old-frame variant
-  …[日本画]                     — Japanese-art variant
   【シルバースクロールFOIL】…  — special foil variant
+
+Variant printings are kept and tagged from their trailing bracket —
+``[ボーダーレス]``, ``[旧枠]``, ``[拡張アート版]`` (see ``variants``);
+a listing without one is the regular printing.
 
 Collector numbers ride in their own bracket before the rarity —
 ``Sol Ring[No.2807][無色P]【SLD】`` — so the name regex allows any number of
@@ -38,6 +39,7 @@ from selectolax.parser import HTMLParser
 
 from .html_base import HtmlSearchScrapper, to_usd
 from .names import matched_name
+from .variants import encode, normalize_number, tags_from_markers
 
 BASE_URL = "https://blackfrog.jp"
 SEARCH_URL = f"{BASE_URL}/shop/shopbrand.html"
@@ -54,11 +56,12 @@ _NAME_RE = re.compile(
     r"(?:\[[^\]]+\])*"          # [No.2807], rarity like [青MR], ...
     r"\s*【(?P<set>[A-Za-z0-9]+)】"
 )
-_VARIANT_BRACKETS = ("[ボーダーレス]", "[旧枠]", "[日本画]", "[拡張枠]", "[フレームレス]")
+_BRACKET_RE = re.compile(r"\[([^\]]+)\]")
+_NUMBER_RE = re.compile(r"\[No\.\s*([^\]]+)\]")
 
 
 def parse_search_html(html: str | bytes, card_name: str, fx_jpy_per_usd: float) -> list[dict]:
-    """Extract NM English non-foil non-variant rows for ``card_name`` from a BLACK FROG page."""
+    """Extract NM English non-foil rows for ``card_name`` from a BLACK FROG page."""
     tree = HTMLParser(html)
     records: list[dict] = []
 
@@ -88,8 +91,6 @@ def parse_search_html(html: str | bytes, card_name: str, fx_jpy_per_usd: float) 
         # Foil and special-foil variants
         if "【FOIL】" in name or "FOIL】" in name.split("】", 1)[0] + "】":
             continue
-        if any(v in name for v in _VARIANT_BRACKETS):
-            continue
 
         m = _NAME_RE.search(name)
         if not m:
@@ -111,10 +112,13 @@ def parse_search_html(html: str | bytes, card_name: str, fx_jpy_per_usd: float) 
         href = (name_el.attributes.get("href") or "").strip()
         link = href if href.startswith("http") else f"{BASE_URL}{href}"
 
+        number = _NUMBER_RE.search(name)
         records.append({
             "shop": "BLACK FROG",
             "card": en,
             "set": m.group("set"),
+            "number": normalize_number(number.group(1)) if number else None,
+            "variant": encode(tags_from_markers(_BRACKET_RE.findall(name))),
             "price_jpy": price_jpy,
             "price_usd": to_usd(price_jpy, fx_jpy_per_usd),
             "stock": None,  # BLACK FROG list view doesn't expose stock counts

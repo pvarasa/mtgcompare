@@ -110,6 +110,16 @@ def upsert_log(
     )
 
 
+# Stored in shop_listings.variant for "the shop can't tell" (record
+# variant None). NULL is reserved for rows written before the column
+# existed, which ``read_listings`` reports as stale.
+_UNKNOWN_VARIANT = "?"
+
+
+class StaleListings(Exception):
+    """Cached rows predate the variant column — refetch instead."""
+
+
 def read_listings(conn, shop: str, card_name: str) -> list[dict]:
     """Return cached rows in the same shape a fresh scraper would return.
 
@@ -117,11 +127,16 @@ def read_listings(conn, shop: str, card_name: str) -> list[dict]:
     they're intentionally not surfaced here so that ``CachedScrapper`` is a
     transparent wrapper — callers can't tell whether a result came from the
     cache or a fresh fetch.
+
+    Raises ``StaleListings`` for rows without a ``variant``: written by a
+    release that didn't know the column (stg and prod share this table), so
+    they'd render every printing as unknown until the TTL ran out.
     """
     rows = conn.execute(
         text(
             "SELECT card_display, set_code, condition,"
-            "       price_jpy, price_usd, ship_jpy, stock, url"
+            "       price_jpy, price_usd, ship_jpy, stock, url,"
+            "       variant, card_number"
             " FROM shop_listings"
             " WHERE shop = :shop AND card_name = :card"
         ),
@@ -129,10 +144,14 @@ def read_listings(conn, shop: str, card_name: str) -> list[dict]:
     ).fetchall()
     out = []
     for r in rows:
+        if r[8] is None:
+            raise StaleListings(f"{shop} {card_name!r}")
         record = {
             "shop": shop,
             "card": r[0],
             "set": r[1],
+            "number": r[9],
+            "variant": None if r[8] == _UNKNOWN_VARIANT else r[8],
             "condition": r[2],
             "price_jpy": float(r[3]),
             "price_usd": float(r[4]) if r[4] is not None else None,
@@ -187,6 +206,8 @@ def replace_listings(
         "price_jpy": r["price_jpy"],
         "price_usd": r.get("price_usd"),
         "ship_jpy": r.get("ship_jpy"),
+        "variant": _UNKNOWN_VARIANT if r.get("variant") is None else r["variant"],
+        "card_number": r.get("number"),
         "stock": r.get("stock"),
         "url": r.get("link"),
         "last_checked": timestamp,
@@ -273,12 +294,18 @@ class CachedScrapper(MtgScrapper):
         with db.get_conn() as conn:
             log = read_log(conn, self.shop_name, norm)
             if log and log["status"] == "ok" and self._is_fresh(log["queried_at"]):
-                self.logger.debug(
-                    "cache hit %s %r (%d rows, %s old)",
-                    self.shop_name, card_name, log["result_count"],
-                    _now() - log["queried_at"],
-                )
-                return read_listings(conn, self.shop_name, norm)
+                try:
+                    cached = read_listings(conn, self.shop_name, norm)
+                except StaleListings:
+                    self.logger.debug("cache stale (pre-variant rows) %s %r",
+                                      self.shop_name, card_name)
+                else:
+                    self.logger.debug(
+                        "cache hit %s %r (%d rows, %s old)",
+                        self.shop_name, card_name, log["result_count"],
+                        _now() - log["queried_at"],
+                    )
+                    return cached
 
         # Miss — go to the network. Transport failures (ScraperFetchError)
         # propagate without writing to cache so the next request retries

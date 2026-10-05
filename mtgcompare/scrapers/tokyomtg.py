@@ -25,6 +25,12 @@ Before this was set, prod silently returned 0 rows for every search.
 The default `User-Agent` gets a 429, so the scraper merges a full
 ``Accept-*`` browser fingerprint via ``SESSION_HEADERS``.
 
+Printings are labelled by set *name* ("Double Masters"), with special
+printings under a "<set> Variants" / "<set> Alt Art" name and nothing to
+tell a set's regular card from its retro-frame one. So the variant is
+``other`` for the former and unknown (``None``) otherwise; the Scryfall
+enrichment maps names to set codes and settles what it can.
+
 The `parse_search_html` function is pure and is what tests exercise.
 """
 import re
@@ -33,6 +39,7 @@ from selectolax.parser import HTMLParser
 
 from .html_base import HtmlSearchScrapper, to_usd
 from .names import matched_name
+from .variants import OTHER
 
 BASE_URL = "https://tokyomtg.com"
 SEARCH_URL = f"{BASE_URL}/cardpage.html"
@@ -43,6 +50,7 @@ _PRICE_RE = re.compile(r"¥\s*([\d,]+)")
 _STOCK_RE = re.compile(r"Stock:\s*(\d+)")
 
 ENGLISH_BADGE = "English Version"
+_VARIANT_SET_RE = re.compile(r"\s(Variants|Alt Art)$")
 
 
 def parse_search_html(html: str | bytes, card_name: str, fx_jpy_per_usd: float) -> list[dict]:
@@ -99,10 +107,13 @@ def parse_search_html(html: str | bytes, card_name: str, fx_jpy_per_usd: float) 
         href = (detail_link_el.attributes.get("href") or "").strip()
         link = href if href.startswith("http") else f"{BASE_URL}/{href.lstrip('/')}"
 
+        set_name = set_el.text(deep=True, strip=True)
         records.append({
             "shop": "TokyoMTG",
             "card": card,
-            "set": set_el.text(deep=True, strip=True),
+            "set": set_name,
+            "number": None,
+            "variant": OTHER if _VARIANT_SET_RE.search(set_name) else None,
             "price_jpy": price_jpy,
             "price_usd": price_usd,
             "stock": stock,

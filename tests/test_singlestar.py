@@ -64,6 +64,8 @@ def test_parse_handcrafted_record_field_math():
         "shop": "SingleStar",
         "card": "Force of Will",
         "set": "DMR",
+        "number": None,
+        "variant": "",
         "price_jpy": 15000.0,
         "price_usd": 100.0,
         "stock": 4,

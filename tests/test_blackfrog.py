@@ -71,7 +71,7 @@ def test_parse_skips_below_nm_listings():
     assert parse_search_html(html, "Force of Will", fx_jpy_per_usd=150.0) == []
 
 
-def test_parse_skips_borderless_and_old_frame_variants():
+def test_parse_tags_borderless_and_old_frame_variants():
     html = """
     <ul class="innerList clear">
       <li>
@@ -84,9 +84,33 @@ def test_parse_skips_borderless_and_old_frame_variants():
         <p class="price">25,000円</p>
         <a href="basket.html?brandcode=4&amount=1">cart</a>
       </li>
+      <li>
+        <p class="name"><a href="/p/5">【英】意志の力/Force of Will[青MR]【DMR】</a></p>
+        <p class="price">14,000円</p>
+        <a href="basket.html?brandcode=5&amount=1">cart</a>
+      </li>
     </ul>
     """
-    assert parse_search_html(html, "Force of Will", fx_jpy_per_usd=150.0) == []
+    records = parse_search_html(html, "Force of Will", fx_jpy_per_usd=150.0)
+    assert [(r["price_jpy"], r["variant"]) for r in records] == [
+        (22000.0, "borderless"),
+        (25000.0, "oldframe"),
+        (14000.0, ""),
+    ]
+
+
+def test_parse_reads_collector_number_bracket():
+    html = """
+    <ul class="innerList clear">
+      <li>
+        <p class="name"><a href="/p/1">【英】魔力の墓所/Sol Ring[No.2807][無色P]【SLD】</a></p>
+        <p class="price">1,500円</p>
+        <a href="basket.html?brandcode=1&amount=1">cart</a>
+      </li>
+    </ul>
+    """
+    [r] = parse_search_html(html, "Sol Ring", fx_jpy_per_usd=150.0)
+    assert r["number"] == "2807"
 
 
 def test_parse_skips_out_of_stock_listings():

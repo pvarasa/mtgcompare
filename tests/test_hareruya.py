@@ -53,6 +53,8 @@ def test_parse_handcrafted_record_field_math():
         "shop": "Hareruya",
         "card": "Foo",
         "set": "BAR",
+        "number": None,
+        "variant": "",
         "price_jpy": 15000.0,
         "price_usd": 100.0,
         "stock": 4,

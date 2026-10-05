@@ -34,6 +34,15 @@ from .html_base import (
     to_jpy,
 )
 from .html_base import make_session as _make_session
+from .variants import (
+    BORDERLESS,
+    EXTENDED,
+    FULL_ART,
+    OLD_FRAME,
+    SHOWCASE,
+    encode,
+    normalize_number,
+)
 
 SEARCH_URL = "https://api.scryfall.com/cards/search"
 
@@ -72,14 +81,41 @@ def _name_matches(name: str, target_lower: str) -> bool:
     )
 
 
+# Retro frames on modern reprints (Dominaria Remastered's old-border
+# cards, Time Spiral's timeshifted) carry the old frame *codes*; cards
+# that were simply printed before the modern frame do too, and those are
+# the regular printing. Eighth Edition introduced the modern frame.
+_MODERN_FRAME_SINCE = "2003-07-28"
+
+
+def variant_tags(card: dict) -> set[str]:
+    """Treatment tags (``variants`` vocabulary) for one Scryfall card."""
+    tags: set[str] = set()
+    effects = card.get("frame_effects") or ()
+    if card.get("full_art"):
+        tags.add(FULL_ART)
+    if card.get("border_color") == "borderless":
+        tags.add(BORDERLESS)
+    if "showcase" in effects:
+        tags.add(SHOWCASE)
+    if "extendedart" in effects:
+        tags.add(EXTENDED)
+    if (card.get("frame") in ("1993", "1997")
+            and (card.get("released_at") or "") >= _MODERN_FRAME_SINCE):
+        tags.add(OLD_FRAME)
+    return tags
+
+
 def summarize_page(page: dict, target_lower: str) -> list[dict]:
     """Compact per-printing summaries for exact-name matches on one page.
 
-    One dict per printing: ``name`` (canonical casing), ``set``, ``usd``
-    (TCGPlayer market price, float | None), ``tcgplayer_id`` (int | None)
-    and ``link``. Everything both TCGPlayer shops need, nothing else —
-    summaries for a whole walk stay small enough to memoize while the raw
-    pages are dropped one at a time.
+    One dict per printing: ``name`` (canonical casing), ``set``,
+    ``set_name``, ``number`` (normalised collector number), ``variant``
+    (``variants`` tags), ``usd`` (TCGPlayer market price, float | None),
+    ``tcgplayer_id`` (int | None) and ``link``. Everything both TCGPlayer
+    shops and the variant enrichment need, nothing else — summaries for a
+    whole walk stay small enough to memoize while the raw pages are
+    dropped one at a time.
     """
     summaries: list[dict] = []
     for card in page.get("data") or ():
@@ -94,6 +130,9 @@ def summarize_page(page: dict, target_lower: str) -> list[dict]:
         summaries.append({
             "name": card["name"],
             "set": (card.get("set") or "").upper(),
+            "set_name": card.get("set_name") or "",
+            "number": normalize_number(card.get("collector_number")),
+            "variant": encode(variant_tags(card)),
             "usd": usd,
             "tcgplayer_id": card.get("tcgplayer_id"),
             "link": purchase_uris.get("tcgplayer") or card.get("scryfall_uri") or "",
@@ -120,6 +159,8 @@ def record_from_summary(summary: dict, fx_jpy_per_usd: float) -> dict | None:
         "shop": "TCGPlayer market",
         "card": summary["name"],
         "set": summary["set"],
+        "number": summary["number"],
+        "variant": summary["variant"],
         "price_jpy": to_jpy(usd, fx_jpy_per_usd),
         "price_usd": usd,
         "stock": None,

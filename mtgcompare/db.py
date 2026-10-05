@@ -202,6 +202,11 @@ _shop_listings = Table(
     # Per-offer seller shipping (marketplace shops). NULL means "no
     # per-offer shipping known — use the flat per-shop estimate".
     Column("ship_jpy", Numeric(12, 2)),
+    # Printing treatment (scrapers.variants tags; "" = regular, "?" =
+    # unknown) and collector number. NULL variant marks a row written
+    # before the column existed — the cache treats it as stale.
+    Column("variant", Text),
+    Column("card_number", Text),
     Column("stock", Integer),
     Column("url", Text),
     Column("last_checked", DateTime(timezone=True), nullable=False),
@@ -327,6 +332,12 @@ def _migrate(conn) -> None:
             conn.execute(text(
                 "ALTER TABLE shop_listings ADD COLUMN ship_jpy NUMERIC(12,2)"
             ))
+        # Nullable, no default: a metadata-only ALTER on Postgres, safe to
+        # run while an older release shares the table (it names its columns).
+        for col in ("variant", "card_number"):
+            conn.execute(text(
+                f"ALTER TABLE shop_listings ADD COLUMN IF NOT EXISTS {col} TEXT"
+            ))
 
         # Covering index for the portfolio value query, and drop of the
         # narrower index it supersedes. Non-concurrent CREATE is safe here:
@@ -352,6 +363,9 @@ def _migrate(conn) -> None:
             conn.execute(text(
                 "ALTER TABLE shop_listings ADD COLUMN ship_jpy NUMERIC(12,2)"
             ))
+        for col in ("variant", "card_number"):
+            if col not in cols:
+                conn.execute(text(f"ALTER TABLE shop_listings ADD COLUMN {col} TEXT"))
 
 
 def init_schema() -> None:

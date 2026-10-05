@@ -74,14 +74,15 @@ def test_parse_skips_foil_listings():
     assert parse_search_html(html, "Force of Will", fx_jpy_per_usd=150.0) == []
 
 
-def test_parse_skips_variant_suffix_listings():
-    """ボーダーレス版 / ショーケース版 / 日本画版 are alt-art variants — skip."""
+def test_parse_tags_variant_suffix_listings():
+    """ボーダーレス版 / ショーケース版 / 日本画版 suffixes tag the row; 〈019-…〉 is its number."""
     cases = [
-        "【SOA】【ENG】〈019-M-U〉《意志の力/Force of Will》ショーケース版",
-        "【2XM】【ENG】《意志の力/Force of Will》 ボーダーレス版",
-        "【SOA】【ENG】《意志の力/Force of Will》日本画版",
+        ("【SOA】【ENG】〈019-M-U〉《意志の力/Force of Will》ショーケース版", "showcase", "19"),
+        ("【2XM】【ENG】《意志の力/Force of Will》 ボーダーレス版", "borderless", None),
+        ("【SOA】【ENG】《意志の力/Force of Will》日本画版", "other", None),
+        ("【EMA】【ENG】《意志の力/Force of Will》", "", None),
     ]
-    for title in cases:
+    for title, variant, number in cases:
         html = f"""
         <script>var specificationTreeSearchProductsTree = {{"1":["1",false,true,"15000"]}};</script>
         <div class="list_area">
@@ -90,8 +91,8 @@ def test_parse_skips_variant_suffix_listings():
           <select name="specification"><option value="1">NM〜NM-</option></select>
         </div>
         """
-        assert parse_search_html(html, "Force of Will", fx_jpy_per_usd=150.0) == [], \
-            f"variant title not filtered: {title!r}"
+        [r] = parse_search_html(html, "Force of Will", fx_jpy_per_usd=150.0)
+        assert (r["variant"], r["number"]) == (variant, number), title
 
 
 def test_parse_skips_zero_stock():

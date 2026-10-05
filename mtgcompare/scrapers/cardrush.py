@@ -9,7 +9,9 @@ Listing names follow the pattern:
 
     [<COND>]<JP-name>/<EN-name>《<LANG>》【<SET>】
 
-where the condition bracket is omitted for NM, the leading ``(...)`` groups
+where the condition bracket is omitted for NM, an optional ``☆SALE☆`` flag
+may follow it (it used to swallow the tags after it into the JP name, so
+``☆SALE☆(旧枠仕様)`` read as the regular printing), the leading ``(...)`` groups
 hold finish and variant tags like ``(FOIL)``, ``(サージFOIL)``, ``(旧枠仕様)``
 (old frame) or a collector number ``(1604)`` — several can stack — and the
 search form may inject ``<span class="result_emphasis">`` highlights inside
@@ -32,6 +34,7 @@ from selectolax.parser import HTMLParser
 
 from .html_base import HtmlSearchScrapper, node_text_ws, to_usd
 from .names import matched_name
+from .variants import encode, normalize_number, tags_from_markers
 
 BASE_URL = "https://www.cardrush-mtg.jp"
 SEARCH_URL = f"{BASE_URL}/product-list/0/0/photo"
@@ -50,13 +53,14 @@ _STOCK_RE = re.compile(r"在庫数\s*(\d+)")
 _LISTING_RE = re.compile(
     r"^"
     r"(?:\[(?P<cond>[A-Z+\-]+)\])?"
+    r"(?:[☆★][^☆★]*[☆★])?"       # sale flag, e.g. "☆SALE☆" — before the tags
     r"(?P<tags>(?:\([^)]*\))*)"   # finish/flavor groups: (FOIL)(1604)(旧枠仕様)
     r"(?P<jp>[^/]+?)"
     r"/"
     r"(?P<en>.+?)"
     r"《(?P<lang>[^》]+)》"
     r"【(?P<set>[^】]+)】"
-    r"(?:\s*#\S+)?"              # trailing collector number, e.g. "#292"
+    r"(?:\s*#(?P<num>\S+))?"      # trailing collector number, e.g. "#292"
     r"\s*$"
 )
 
@@ -64,6 +68,8 @@ _LISTING_RE = re.compile(
 # [NM] is explicit NM, [NM-] is "near-mint with light handling" — the shop
 # itself groups it with NM in their grading guide.
 _NM_CONDITIONS = {None, "NM", "NM-"}
+
+_TAG_RE = re.compile(r"\(([^)]*)\)")
 
 
 def parse_search_html(html: str | bytes, card_name: str, fx_jpy_per_usd: float) -> list[dict]:
@@ -114,10 +120,15 @@ def parse_search_html(html: str | bytes, card_name: str, fx_jpy_per_usd: float) 
         href = (link_el.attributes.get("href") or "").strip()
         link = href if href.startswith("http") else f"{BASE_URL}{href}"
 
+        tags = _TAG_RE.findall(m.group("tags"))
+        # A bare-digits tag is the collector number: "(1604)".
+        number = m.group("num") or next((t for t in tags if t.isdigit()), None)
         records.append({
             "shop": "Card Rush",
             "card": en_name,
             "set": m.group("set").strip(),
+            "number": normalize_number(number),
+            "variant": encode(tags_from_markers(tags)),
             "price_jpy": price_jpy,
             "price_usd": price_usd,
             "stock": stock,

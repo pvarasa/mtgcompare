@@ -34,6 +34,10 @@ _FACE_SEP_RE = re.compile(r"\s*(?://|/|\+|\s-\s)\s*")
 _PAREN_RE = re.compile(r"\([^)]*\)")
 
 
+def has_cjk(text: str) -> bool:
+    return _CJK_RE.search(text) is not None
+
+
 def _norm(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip().lower()
 

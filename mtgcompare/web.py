@@ -43,6 +43,7 @@ from .log_context import (
     install_record_factory,
 )
 from .pricing import market_repo, meta, run_log
+from .scrapers import variants
 from .scrapers.registry import (
     ACTIVE_SHOPS,
     MARKETPLACE_SHOPS,
@@ -274,6 +275,7 @@ def _inject_current_user():
 # decklist form hides their shop-filter checkbox. (Their shipping-override
 # rows are already absent everywhere via _shipping_config.)
 app.jinja_env.globals["marketplace_shops"] = MARKETPLACE_SHOPS
+app.jinja_env.filters["variant_label"] = variants.label
 
 
 def _render_error(code: int, title: str, message: str):
@@ -439,15 +441,18 @@ def index():
     results: list[dict] = []
     error: str | None = None
     timed_out_shops: set[str] = set()
+    query = search.parse_query(q)
 
-    if q:
+    if q and not query.name:
+        error = "Add a card name to the filters, e.g. “Force of Will set:DMR”."
+    elif q:
         t0 = monotonic()
         fx = _get_fx()
         if fx is None:
             error = "Could not fetch FX rate; try again later."
         else:
             results = collect_prices(
-                q, fx, enabled=enabled_shops, logger=app.logger,
+                query.name, fx, enabled=enabled_shops, logger=app.logger,
                 timeouts_out=timed_out_shops,
             )
             results = search.collapse_marketplace_offers(results, include_shipping)
@@ -456,9 +461,11 @@ def index():
             else:
                 results.sort(key=lambda r: r["price_jpy"])
         app.logger.info(
-            "event=search_query q=%r shops_enabled=%s include_shipping=%d "
+            "event=search_query q=%r name=%r filter_set=%s filter_number=%s "
+            "filter_variants=%s shops_enabled=%s include_shipping=%d "
             "result_count=%d timed_out_shops=%s duration_ms=%d",
-            q,
+            q, query.name, query.set_code or "-", query.number or "-",
+            ",".join(query.variants) or "-",
             len(enabled_shops) if enabled_shops is not None else "all",
             int(include_shipping), len(results),
             ",".join(sorted(timed_out_shops)) or "none",
@@ -468,6 +475,14 @@ def index():
     return render_template(
         "index.html",
         q=q,
+        card_name=query.name,
+        initial_filters={
+            "set": query.set_code,
+            "number": query.number,
+            "variants": query.variants,
+        },
+        unknown_filter_tokens=query.unknown_tokens,
+        filter_options=search.filter_options(results),
         results=results,
         fx=_fx,
         error=error,
@@ -504,11 +519,13 @@ def _fetch_decklist_prices(
     fx: float,
     enabled_shops: set[str] | None,
     timeouts_out: set[str] | None = None,
+    printings: dict[str, set[decklist.Printing]] | None = None,
 ) -> dict[str, list[dict]]:
     """Inject web-layer deps into the pure ``decklist.fetch_decklist_prices``."""
     return decklist.fetch_decklist_prices(
         names_to_search, name_canonical, fx, enabled_shops,
         timeouts_out=timeouts_out, collect=collect_prices, logger=app.logger,
+        printings=printings,
     )
 
 
@@ -534,6 +551,7 @@ def _parse_decklist_form_basics(form) -> decklist.DecklistFormBasics:
         shipping_overrides_jpy=_parse_shipping_overrides(form),
         use_inventory=form.get("use_inventory") == "1",
         enabled_shops=_parse_enabled_shops(form),
+        match_printings=form.get("match_printings") == "1",
     )
 
 
@@ -570,6 +588,7 @@ def decklist_search():
             shop_filter_config=shop_filter_cfg,
             shop_filter_active=shop_filter_active,
             use_inventory=use_inventory,
+            match_printings=basics.match_printings,
             skipped_basics=0,
             timed_out_shops=[],
         )
@@ -612,7 +631,7 @@ def _run_decklist_search(prep, basics, ship_cfg, shop_filter_cfg, t0):
     prices_by_name = (
         _fetch_decklist_prices(
             names_to_search, name_canonical, fx, enabled_shops,
-            timeouts_out=timed_out_shops,
+            timeouts_out=timed_out_shops, printings=prep.name_printings,
         )
         if fx is not None else {n: [] for n in names_to_search}
     )
@@ -649,6 +668,7 @@ def _run_decklist_search(prep, basics, ship_cfg, shop_filter_cfg, t0):
         active="search",
         error=None,
         use_inventory=use_inventory,
+        match_printings=basics.match_printings,
         skipped_basics=skipped_basics,
         timed_out_shops=timed_out_sorted,
         **totals,

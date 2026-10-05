@@ -61,7 +61,9 @@ def test_summaries_include_unpriced_printings_and_product_ids(fow_page):
     all_printings = [c for c in fow_page["data"] if c["name"].lower() == "force of will"]
     assert len(summaries) == len(all_printings)
     for s in summaries:
-        assert set(s) == {"name", "set", "usd", "tcgplayer_id", "link"}
+        assert set(s) == {
+            "name", "set", "set_name", "number", "variant", "usd", "tcgplayer_id", "link",
+        }
 
 
 def test_parse_case_insensitive_match(fow_page):
@@ -113,6 +115,8 @@ def test_parse_handcrafted_fx_conversion():
         "shop": "TCGPlayer market",
         "card": "Foo",
         "set": "BAR",
+        "number": None,
+        "variant": "",
         "price_jpy": 7500.0,
         "price_usd": 50.0,
         "stock": None,

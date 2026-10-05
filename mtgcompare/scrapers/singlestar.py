@@ -17,6 +17,7 @@ from selectolax.parser import HTMLParser
 
 from .html_base import HtmlSearchScrapper, to_usd
 from .names import matched_name
+from .variants import encode, normalize_number, tags_from_markers
 
 BASE_URL = "https://www.singlestar.jp"
 SEARCH_URL = f"{BASE_URL}/product-list/0/0/photo"
@@ -31,7 +32,9 @@ _STOCK_RE = re.compile(r"在庫数\s*(\d+)")
 _STRIP_BRACKETS_RE = re.compile(r"【[^】]*】|\([^)]*\)|\[[^\]]*\]|●")
 # Collector number suffix on Secret Lair-style printings, e.g. "No.1822".
 # Left in, it made "Sol Ring No.2683" a different card from "Sol Ring".
-_COLLECTOR_NO_RE = re.compile(r"\bNo\.\s*[\w-]+")
+_COLLECTOR_NO_RE = re.compile(r"\bNo\.\s*([\w-]+)")
+# Variant tags ride in parentheses: "(全面アート版)", "(ショーケース・海外産ブースター版)".
+_PAREN_RE = re.compile(r"\(([^)]*)\)")
 
 ENGLISH_TAG = "【英語版】"
 
@@ -97,10 +100,13 @@ def parse_search_html(html: str | bytes, card_name: str, fx_jpy_per_usd: float) 
         href = (link_el.attributes.get("href") or "").strip()
         link = href if href.startswith("http") else f"{BASE_URL}{href}"
 
+        number = _COLLECTOR_NO_RE.search(goods_text)
         records.append({
             "shop": "SingleStar",
             "card": card,
             "set": set_match.group(1),
+            "number": normalize_number(number.group(1)) if number else None,
+            "variant": encode(tags_from_markers(_PAREN_RE.findall(goods_text))),
             "price_jpy": price_jpy,
             "price_usd": price_usd,
             "stock": stock,

@@ -11,6 +11,8 @@ import-light and unit-testable without spinning up the app.
 Pipeline:
 
   parse_decklist          raw text → [(qty, name)]
+  parse_printings         raw text → {name: {(SET, number)}} for opt-in
+                          printing matching ("1 Rhystic Study (C21) 79")
   strip_basic_lands       drop basics (shops carry hundreds of printings)
   consolidate_decklist    sum duplicate lines, remember first-seen casing
   deduct_inventory        subtract owned copies → per-name "still needed"
@@ -34,7 +36,7 @@ import re
 import threading
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from time import monotonic
 
 from .scrapers.registry import (
@@ -44,12 +46,20 @@ from .scrapers.registry import (
     SHOP_FLAGS,
     collect_prices,
 )
+from .scrapers.variants import normalize_number
 
 logger = logging.getLogger(__name__)
 
 
+# "<qty>[x] <name> [(<SET>) [<number>]] [*F*]" — the Arena / Moxfield
+# export shape. The number is any non-space token ("79", "263a", "LTR-123",
+# "1234★"); Moxfield's trailing foil/etched marks ("*F*", "*E*") are
+# dropped. Either used to fail the optional suffix and leave the whole
+# tail in the card name, which then matched nothing.
 _DECK_LINE_RE = re.compile(
-    r'^(\d+)x?\s+(.+?)(?:\s+\([A-Za-z0-9]+\)(?:\s+\d+[a-z]?)?)?\s*$'
+    r'^(\d+)x?\s+(.+?)'
+    r'(?:\s+\(([A-Za-z0-9]+)\)(?:\s+([^\s*]+))?)?'
+    r'(?:\s+\*[A-Za-z]+\*)*\s*$'
 )
 
 # Hard cap on the total card count of a single decklist search. Sized to
@@ -105,8 +115,7 @@ def strip_basic_lands(
     return kept, skipped_copies
 
 
-def parse_decklist(text: str) -> list[tuple[int, str]]:
-    result = []
+def _deck_lines(text: str) -> Iterator[re.Match]:
     for line in text.splitlines():
         line = line.strip()
         if not line or line.startswith("//") or line.startswith("#"):
@@ -114,12 +123,45 @@ def parse_decklist(text: str) -> list[tuple[int, str]]:
         if re.match(r'^(commander|sideboard|deck|maybeboard):?$', line, re.IGNORECASE):
             continue
         m = _DECK_LINE_RE.match(line)
-        if m:
-            qty = int(m.group(1))
-            name = m.group(2).strip()
-            if qty > 0 and name:
-                result.append((qty, name))
-    return result
+        if m and int(m.group(1)) > 0 and m.group(2).strip():
+            yield m
+
+
+def parse_decklist(text: str) -> list[tuple[int, str]]:
+    return [(int(m.group(1)), m.group(2).strip()) for m in _deck_lines(text)]
+
+
+Printing = tuple[str, str | None]  # (SET, normalised collector number or None)
+
+
+def parse_printings(text: str) -> dict[str, set[Printing]]:
+    """Requested printings per lowercase card name, for lines naming a set.
+
+    A card listed on several lines collects every printing named; one line
+    of it *without* a set means any printing will do, so it gets no entry.
+    """
+    wanted: dict[str, set[Printing]] = {}
+    any_printing: set[str] = set()
+    for m in _deck_lines(text):
+        key = m.group(2).strip().lower()
+        if m.group(3) is None:
+            any_printing.add(key)
+            continue
+        wanted.setdefault(key, set()).add((m.group(3).upper(), normalize_number(m.group(4))))
+    return {k: v for k, v in wanted.items() if k not in any_printing}
+
+
+def filter_printings(rows: list[dict], wanted: set[Printing]) -> list[dict]:
+    """Rows that are one of the ``wanted`` printings. A row whose shop
+    gives no collector number matches on set alone — the same "unknown
+    stays visible" rule as the single-card filters."""
+    def ok(r: dict) -> bool:
+        return any(
+            r.get("set") == set_code
+            and (number is None or r.get("number") is None or r.get("number") == number)
+            for set_code, number in wanted
+        )
+    return [r for r in rows if ok(r)]
 
 
 def deduct_inventory(
@@ -164,6 +206,7 @@ def iter_decklist_prices(
     collect: Callable[..., list[dict]] = collect_prices,
     logger: logging.Logger = logger,
     cancel: threading.Event | None = None,
+    printings: dict[str, set[Printing]] | None = None,
 ) -> Iterator[tuple[str, list[dict]]]:
     """Stream ``(lower_name, sorted_rows)`` per card in fan-out
     completion order. Per-name failures yield ``(name, [])`` rather than
@@ -176,6 +219,9 @@ def iter_decklist_prices(
 
     Setting ``cancel`` drops every card not yet started and stops yielding;
     cards already in flight (at most ``DECKLIST_FAN_OUT_WORKERS``) finish.
+
+    ``printings`` (from ``parse_printings``, when the user opted in)
+    narrows a card's rows to the printings its decklist line named.
     """
     if not names_to_search:
         return
@@ -204,6 +250,8 @@ def iter_decklist_prices(
                     name_canonical[n], len(names_to_search), shops_count, exc,
                 )
                 rows = []
+            if printings and n in printings:
+                rows = filter_printings(rows, printings[n])
             rows.sort(key=lambda r: r["price_jpy"])
             yield n, rows
 
@@ -217,6 +265,7 @@ def fetch_decklist_prices(
     *,
     collect: Callable[..., list[dict]] = collect_prices,
     logger: logging.Logger = logger,
+    printings: dict[str, set[Printing]] | None = None,
 ) -> dict[str, list[dict]]:
     """Dict-returning wrapper around ``iter_decklist_prices``. Names
     with no matches still appear with an empty list.
@@ -224,7 +273,7 @@ def fetch_decklist_prices(
     prices_by_name: dict[str, list[dict]] = {n: [] for n in names_to_search}
     for n, rows in iter_decklist_prices(
         names_to_search, name_canonical, fx, enabled_shops, timeouts_out,
-        collect=collect, logger=logger,
+        collect=collect, logger=logger, printings=printings,
     ):
         prices_by_name[n] = rows
     return prices_by_name
@@ -332,6 +381,9 @@ class DecklistFormBasics:
     shipping_overrides_jpy: dict[str, int]
     use_inventory: bool
     enabled_shops: set[str] | None
+    # Narrow each card to the "(SET) number" its line names; off by default
+    # so a pasted export doesn't silently price only the listed printings.
+    match_printings: bool = False
 
 
 @dataclass
@@ -350,6 +402,7 @@ class DecklistPrep:
     enabled_shops: set[str] | None
     shipping_overrides_jpy: dict[str, int]
     use_inventory: bool
+    name_printings: dict[str, set[Printing]] = field(default_factory=dict)
 
 
 @dataclass
@@ -436,6 +489,7 @@ def prepare_decklist_search(
         enabled_shops=enabled_shops,
         shipping_overrides_jpy=shipping_overrides_jpy,
         use_inventory=use_inventory,
+        name_printings=parse_printings(text) if basics.match_printings else {},
     )
 
 
@@ -552,6 +606,7 @@ def _run_fanout(
     for name, rows in iter_decklist_prices(
         prep.names_to_search, prep.name_canonical, prep.fx, prep.enabled_shops,
         timeouts_out=timed_out, collect=collect, logger=logger, cancel=cancel,
+        printings=prep.name_printings,
     ):
         prices_by_name[name] = rows
         _emit_card_row(name, prep, rows, row_template, q)
