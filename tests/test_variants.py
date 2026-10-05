@@ -180,11 +180,22 @@ def test_enriching_scrapper_survives_a_scryfall_failure(monkeypatch):
     assert EnrichingScrapper(_FakeShop([row]), "X").get_prices("Foo") == [row]
 
 
-def test_enriching_scrapper_skips_scryfall_when_rows_are_complete(monkeypatch):
-    row = {"shop": "X", "card": "Foo", "set": "DMR", "number": "1", "variant": ""}
+def test_enriching_scrapper_corrects_rows_that_already_have_number_and_variant(monkeypatch):
+    """Serra prints a number and its own tag on every row; Scryfall still wins."""
+    row = {"shop": "Cardshop Serra", "card": "Force of Will", "set": "DMR",
+           "number": "418", "variant": "extended"}
+    printings = [{"set": "DMR", "set_name": "Dominaria Remastered",
+                  "number": "418", "variant": "borderless"}]
+    monkeypatch.setattr("mtgcompare.scrapers.enrich.fetch_card_summaries",
+                        lambda name: printings)
+    [out] = EnrichingScrapper(_FakeShop([row]), "Cardshop Serra").get_prices("Force of Will")
+    assert out["variant"] == "borderless"
+
+
+def test_enriching_scrapper_skips_scryfall_when_the_shop_has_no_rows(monkeypatch):
     monkeypatch.setattr("mtgcompare.scrapers.enrich.fetch_card_summaries",
                         lambda name: pytest.fail("should not be called"))
-    assert EnrichingScrapper(_FakeShop([row]), "X").get_prices("Foo") == [row]
+    assert EnrichingScrapper(_FakeShop([]), "X").get_prices("Foo") == []
 
 
 # --- shop_listings round trip ---------------------------------------------

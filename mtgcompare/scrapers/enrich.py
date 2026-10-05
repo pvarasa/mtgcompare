@@ -19,10 +19,6 @@ from .variants import enrich_records
 logger = logging.getLogger("mtgcompare.scrapers.enrich")
 
 
-def _complete(record: dict) -> bool:
-    return record.get("number") is not None and record.get("variant") is not None
-
-
 class EnrichingScrapper(MtgScrapper):
     def __init__(self, scrapper: MtgScrapper, shop_name: str):
         super().__init__()
@@ -31,8 +27,13 @@ class EnrichingScrapper(MtgScrapper):
 
     def get_prices(self, card_name: str) -> list[dict]:
         records = self.scrapper.get_prices(card_name)
-        if all(_complete(r) for r in records):
-            return records  # nothing to fill (Scryfall-sourced shops, or no rows)
+        # Rows that already carry a number and a variant still go through:
+        # Serra prints both on every listing, but its "★拡張枠★" is
+        # Scryfall's borderless and its unmarked Mystical Archive cards are
+        # showcases — the correction is the point. Skipping "complete" rows
+        # shipped exactly that bug in 1.13.0.
+        if not records:
+            return records
         try:
             printings = fetch_card_summaries(card_name)
         except Exception as exc:  # noqa: BLE001 — enrichment must never cost a shop its rows
