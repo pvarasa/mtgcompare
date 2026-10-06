@@ -153,6 +153,13 @@ def test_shipping_config_excludes_marketplace_shops():
     assert "TCGPlayer market" in shops
 
 
+def test_shipping_config_excludes_disabled_shops():
+    """ENNDAL GAMES is known but never searched; no shipping box for it."""
+    shops = {c["shop"] for c in web._shipping_config()}
+    assert "ENNDAL GAMES" not in shops
+    assert "Hareruya" in shops
+
+
 def test_collapse_marketplace_offers_picks_the_active_modes_winner():
     """Shipping off → cheapest by item price, no shipping influence at
     all. Shipping on → cheapest by landed total. Never both rows."""

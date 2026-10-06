@@ -500,7 +500,8 @@ def _shipping_config(overrides_jpy: dict | None = None) -> list[dict]:
     """Build the per-shop shipping config list passed to templates.
 
     Marketplace shops never appear: their seller shipping is already in
-    the price, so an editable flat override would double count.
+    the price, so an editable flat override would double count. Disabled
+    shops (ENNDAL GAMES) don't either — they are never searched.
     """
     return [
         {
@@ -509,7 +510,7 @@ def _shipping_config(overrides_jpy: dict | None = None) -> list[dict]:
             "cost_jpy": int((overrides_jpy or {}).get(shop, SHIPPING_JPY.get(shop, 0))),
         }
         for shop in SHIPPING_JPY
-        if shop not in MARKETPLACE_SHOPS
+        if shop not in MARKETPLACE_SHOPS and shop in ACTIVE_SHOPS
     ]
 
 

@@ -191,9 +191,8 @@
 
     for (let i = 0; i < parsed.length; i += 75) {
       const batch = parsed.slice(i, i + 75);
-      const batchByKey = new Map(
-        batch.map(item => [makeLookupKey(item.name, item.set), item]),
-      );
+      // Lines not yet matched to a returned card (see matchesLine).
+      const pending = batch.slice();
       const identifiers = batch.map(item => {
         const identifier = { name: item.name };
         if (item.set) identifier.set = item.set.toLowerCase();
@@ -219,7 +218,8 @@
       }
 
       (payload.data || []).forEach(card => {
-        const original = batchByKey.get(makeLookupKey(card.name, card.set));
+        const idx = pending.findIndex(item => matchesLine(item, card));
+        const original = idx >= 0 ? pending.splice(idx, 1)[0] : null;
         found.push({
           card_name: card.name,
           set_code: (card.set || "").toUpperCase(),
@@ -420,7 +420,18 @@
     return option;
   }
 
-  function makeLookupKey(name, set) {
-    return `${(name || "").toLowerCase()}|${(set || "").toLowerCase()}`;
+  // Scryfall answers with the card it resolved, not the identifier it was
+  // given: a line without a set comes back with the printing's set filled
+  // in, and a double-faced card with its full "Front // Back" name. So a
+  // returned card belongs to the first unclaimed line whose name is its
+  // name or one of its faces, and whose set (when the line named one)
+  // agrees. Matching on an exact (name, set) key instead silently reset
+  // the quantity of every set-less line to 1 ("4 Lightning Bolt" added one).
+  function matchesLine(item, card) {
+    const want = (item.name || "").toLowerCase();
+    const full = (card.name || "").toLowerCase();
+    const nameOk = want === full || full.split(" // ").includes(want);
+    const setOk = !item.set || item.set.toLowerCase() === (card.set || "").toLowerCase();
+    return nameOk && setOk;
   }
 })();

@@ -137,6 +137,38 @@ def test_paste_decklist_resolve_preview_commit(e2e_base_url, clean_inventory, pa
     assert rows[1]["quantity"] == 1
 
 
+def test_paste_decklist_keeps_quantities_without_set_or_back_face(
+    e2e_base_url, clean_inventory, page,
+):
+    """Scryfall returns the resolved printing's set and a double-faced card's
+    full "Front // Back" name, so lines matched back by an exact (name, set)
+    key lost their quantity: "4 Brainstorm" was added as 1 copy."""
+    _stub_scryfall_collection(page, found=[
+        {"name": "Brainstorm", "set": "frc",
+         "set_name": "Final Fantasy Commander", "collector_number": "41"},
+        {"name": "Fable of the Mirror-Breaker // Reflection of Kiki-Jiki", "set": "neo",
+         "set_name": "Kamigawa: Neon Dynasty", "collector_number": "141"},
+    ])
+
+    page.goto(f"{e2e_base_url}/inventory")
+    page.locator('.add-mode button[data-mode="decklist"]').click()
+    page.locator("#decklist-text").fill("4 Brainstorm\n3 Fable of the Mirror-Breaker")
+    page.locator("#decklist-resolve").click()
+    page.wait_for_function(
+        "() => document.querySelectorAll('#decklist-preview tbody tr').length === 2",
+        timeout=3000,
+    )
+
+    with page.expect_navigation(url=lambda u: u.rstrip("/").endswith("/inventory")):
+        page.locator("#decklist-commit").click()
+
+    qty = {r["card_name"]: r["quantity"] for r in inv.list_all()}
+    assert qty == {
+        "Brainstorm": 4,
+        "Fable of the Mirror-Breaker // Reflection of Kiki-Jiki": 3,
+    }
+
+
 def test_csv_import_replace_mode(e2e_base_url, clean_inventory, page):
     """A6: upload a tiny CSV with `mode=replace`, redirect lands on
     /inventory, the row count matches the upload. Catches multipart form

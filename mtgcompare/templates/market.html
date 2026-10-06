@@ -498,6 +498,110 @@
         </div>
       </div>
     </div>
+    {# Rendered with the button, not inside the prices-loaded branch below:
+       it used to live in that branch's script, so on a first run (no
+       prices yet, the one time the page tells you to click it) the button
+       had no handler and did nothing. #}
+    <script>
+      (function () {
+        const isFirstDownload = {{ (not history_db_exists)|tojson }};
+        const historyDownloadUrl = {{ url_for('market_history_download')|tojson }};
+        const historyStatusUrl = {{ url_for('market_history_download_status')|tojson }};
+        const downloadBtn = document.getElementById('mkt-history-download-btn');
+        const progressEl = document.getElementById('mkt-history-progress');
+        const progressFillEl = document.getElementById('mkt-history-fill');
+        const progressPhaseEl = document.getElementById('mkt-history-phase');
+        const progressPctEl = document.getElementById('mkt-history-pct');
+        const progressDetailEl = document.getElementById('mkt-history-detail');
+        let activeJobId = null;
+        let statusPoll = null;
+
+        if (downloadBtn) {
+          function setProgress(job) {
+            progressEl.classList.add('open');
+            const progress = Math.max(0, Math.min(100, job.progress || 0));
+            progressFillEl.style.width = `${progress}%`;
+            progressPhaseEl.textContent = job.phase || 'Working';
+            progressPctEl.textContent = `${progress}%`;
+            progressDetailEl.textContent = job.error || job.detail || '';
+            downloadBtn.disabled = job.state === 'running';
+            if (job.state === 'running') {
+              downloadBtn.textContent = 'Updating...';
+            } else {
+              downloadBtn.textContent = 'Update prices';
+            }
+          }
+
+          function stopPolling() {
+            if (statusPoll) {
+              clearInterval(statusPoll);
+              statusPoll = null;
+            }
+          }
+
+          function pollStatus(jobId) {
+            fetch(`${historyStatusUrl}?job_id=${encodeURIComponent(jobId)}`)
+              .then(response => response.json())
+              .then(job => {
+                if (!job.ok) throw new Error(job.error || 'Status fetch failed');
+                setProgress(job);
+                if (job.state === 'done' || job.state === 'error') {
+                  stopPolling();
+                  if (job.state === 'done') {
+                    window.setTimeout(() => window.location.reload(), 900);
+                  }
+                }
+              })
+              .catch(() => {
+                stopPolling();
+                downloadBtn.disabled = false;
+                downloadBtn.textContent = 'Update prices';
+                progressEl.classList.add('open');
+                progressPhaseEl.textContent = 'Failed';
+                progressPctEl.textContent = '';
+                progressFillEl.style.width = '0%';
+                progressDetailEl.textContent = 'Could not read status.';
+              });
+          }
+
+          downloadBtn.addEventListener('click', () => {
+            if (isFirstDownload && !confirm(
+              'First-time setup fetches a large file (~150 MB) and builds a local price database. This takes 5–15 minutes depending on your connection and machine.\n\nContinue?'
+            )) return;
+            downloadBtn.disabled = true;
+            downloadBtn.textContent = 'Starting...';
+            progressEl.classList.add('open');
+            progressPhaseEl.textContent = 'Queued';
+            progressPctEl.textContent = '0%';
+            progressFillEl.style.width = '0%';
+            progressDetailEl.textContent = 'Starting price update...';
+
+            const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
+            fetch(historyDownloadUrl, {
+              method: 'POST',
+              headers: { 'X-Requested-With': 'fetch', 'X-CSRFToken': csrf },
+            })
+              .then(response => response.json())
+              .then(data => {
+                if (!data.ok) throw new Error(data.error || 'Download start failed');
+                activeJobId = data.job_id;
+                pollStatus(activeJobId);
+                stopPolling();
+                statusPoll = window.setInterval(() => pollStatus(activeJobId), 1000);
+              })
+              .catch(err => {
+                downloadBtn.disabled = false;
+                downloadBtn.textContent = 'Update prices';
+                progressPhaseEl.textContent = 'Failed';
+                progressPctEl.textContent = '';
+                progressFillEl.style.width = '0%';
+                progressDetailEl.textContent = err.message || 'Could not start price update.';
+              });
+          });
+        }
+
+      })();
+    </script>
     {% endif %}
   </div>
 
@@ -613,9 +717,6 @@
       (function () {
         const historyUrl = {{ url_for('market_history')|tojson }};
         const portfolioHistoryUrl = {{ url_for('market_history_portfolio')|tojson }};
-        const isFirstDownload = {{ (not history_db_exists)|tojson }};
-        const historyDownloadUrl = {{ url_for('market_history_download')|tojson }};
-        const historyStatusUrl = {{ url_for('market_history_download_status')|tojson }};
         const modal = document.getElementById('market-chart-modal');
         const titleEl = document.getElementById('market-chart-title');
         const subtitleEl = document.getElementById('market-chart-subtitle');
@@ -626,16 +727,8 @@
         const stageEl = document.getElementById('market-chart-stage');
         const footnoteEl = document.getElementById('market-chart-footnote');
         const closeEl = document.getElementById('market-chart-close');
-        const downloadBtn = document.getElementById('mkt-history-download-btn');
-        const progressEl = document.getElementById('mkt-history-progress');
-        const progressFillEl = document.getElementById('mkt-history-fill');
-        const progressPhaseEl = document.getElementById('mkt-history-phase');
-        const progressPctEl = document.getElementById('mkt-history-pct');
-        const progressDetailEl = document.getElementById('mkt-history-detail');
 
         let activeHistory = null;
-        let activeJobId = null;
-        let statusPoll = null;
 
         function formatUsd(value) {
           if (value == null || Number.isNaN(value)) return '-';
@@ -891,90 +984,6 @@
                 });
               })
               .catch(() => loadHistoryError('Could not load portfolio history.'));
-          });
-        }
-
-        if (downloadBtn) {
-          function setProgress(job) {
-            progressEl.classList.add('open');
-            const progress = Math.max(0, Math.min(100, job.progress || 0));
-            progressFillEl.style.width = `${progress}%`;
-            progressPhaseEl.textContent = job.phase || 'Working';
-            progressPctEl.textContent = `${progress}%`;
-            progressDetailEl.textContent = job.error || job.detail || '';
-            downloadBtn.disabled = job.state === 'running';
-            if (job.state === 'running') {
-              downloadBtn.textContent = 'Updating...';
-            } else {
-              downloadBtn.textContent = 'Update prices';
-            }
-          }
-
-          function stopPolling() {
-            if (statusPoll) {
-              clearInterval(statusPoll);
-              statusPoll = null;
-            }
-          }
-
-          function pollStatus(jobId) {
-            fetch(`${historyStatusUrl}?job_id=${encodeURIComponent(jobId)}`)
-              .then(response => response.json())
-              .then(job => {
-                if (!job.ok) throw new Error(job.error || 'Status fetch failed');
-                setProgress(job);
-                if (job.state === 'done' || job.state === 'error') {
-                  stopPolling();
-                  if (job.state === 'done') {
-                    window.setTimeout(() => window.location.reload(), 900);
-                  }
-                }
-              })
-              .catch(() => {
-                stopPolling();
-                downloadBtn.disabled = false;
-                downloadBtn.textContent = 'Update prices';
-                progressEl.classList.add('open');
-                progressPhaseEl.textContent = 'Failed';
-                progressPctEl.textContent = '';
-                progressFillEl.style.width = '0%';
-                progressDetailEl.textContent = 'Could not read status.';
-              });
-          }
-
-          downloadBtn.addEventListener('click', () => {
-            if (isFirstDownload && !confirm(
-              'First-time setup fetches a large file (~150 MB) and builds a local price database. This takes 5–15 minutes depending on your connection and machine.\n\nContinue?'
-            )) return;
-            downloadBtn.disabled = true;
-            downloadBtn.textContent = 'Starting...';
-            progressEl.classList.add('open');
-            progressPhaseEl.textContent = 'Queued';
-            progressPctEl.textContent = '0%';
-            progressFillEl.style.width = '0%';
-            progressDetailEl.textContent = 'Starting price update...';
-
-            const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
-            fetch(historyDownloadUrl, {
-              method: 'POST',
-              headers: { 'X-Requested-With': 'fetch', 'X-CSRFToken': csrf },
-            })
-              .then(response => response.json())
-              .then(data => {
-                if (!data.ok) throw new Error(data.error || 'Download start failed');
-                activeJobId = data.job_id;
-                pollStatus(activeJobId);
-                stopPolling();
-                statusPoll = window.setInterval(() => pollStatus(activeJobId), 1000);
-              })
-              .catch(err => {
-                downloadBtn.disabled = false;
-                downloadBtn.textContent = 'Update prices';
-                progressPhaseEl.textContent = 'Failed';
-                progressPctEl.textContent = '';
-                progressFillEl.style.width = '0%';
-                progressDetailEl.textContent = err.message || 'Could not start price update.';
-              });
           });
         }
 
