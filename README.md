@@ -5,6 +5,8 @@
 
 Compare *Magic: The Gathering* card prices across Japanese and US shops, track your collection, and estimate decklist costs. Runs as a local desktop app on Windows/macOS or as a self-hosted server with PostgreSQL.
 
+**New to the app?** Read the illustrated [user manual](docs/user-manual.md).
+
 ---
 
 ## Download & run (Windows)
