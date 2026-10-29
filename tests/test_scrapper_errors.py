@@ -210,7 +210,7 @@ class TestPacing:
     def test_serra_is_paced(self):
         """2026-10-24: a 14-card decklist got a 429 on every Serra lookup."""
         assert CardshopSerraScrapper.MAX_CONCURRENT == 2
-        assert CardshopSerraScrapper.MIN_INTERVAL_S >= 1.0
+        assert CardshopSerraScrapper.MIN_INTERVAL_S >= 0.5
 
 
 # ---------------------------------------------------------------------------

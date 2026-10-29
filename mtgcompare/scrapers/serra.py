@@ -38,10 +38,13 @@ store's search results, so it isn't used.
 
 The fan-out burst did trip it: on 2026-10-24 a 14-card decklist got a 429
 on every Serra lookup, so that search showed no Serra prices at all.
-Requests are now paced to at most 2 in flight and one start per second
+Requests are now paced to at most 2 in flight and one start every 0.5 s
 (``MAX_CONCURRENT`` / ``MIN_INTERVAL_S``), and a 429 backs the shop off
-for its ``Retry-After`` instead of retrying into the ban. With 18 cards
-queued the last one waits ~18 s, inside the 30 s per-card shop timeout.
+for its ``Retry-After`` instead of retrying into the ban. Measured from
+stg on 2026-10-29 with cold 20-card decklists (~40 Serra requests each):
+at 0.5 s no 429s and every card inside the 30 s per-card shop timeout;
+at 1.0 s also no 429s, but each card's page 2 queued behind every other
+card's page 1, so the last third of the deck overran the timeout.
 
 Multi-face titles carry each face's Japanese name inline —
 ``砕骨の巨人 / Bonecrusher Giant - 踏みつけ / Stomp`` — which
@@ -174,7 +177,7 @@ class CardshopSerraScrapper(HtmlSearchScrapper):
     PAGE_PARAM = "page"
     MAX_PAGES = 2
     MAX_CONCURRENT = 2
-    MIN_INTERVAL_S = 1.0
+    MIN_INTERVAL_S = 0.5
 
     def search_params(self, card_name: str) -> dict:
         # `type=product` keeps blog/page hits out of the result set.
