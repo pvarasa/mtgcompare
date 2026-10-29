@@ -22,6 +22,7 @@ Optional overrides:
 - ``search_params(card_name)``   (for endpoints with multiple params)
 - ``decode_response(resp)``      (for non-UTF-8 endpoints, e.g. EUC-JP)
 - ``PAGE_PARAM`` / ``MAX_PAGES`` (follow result pages; see below)
+- ``MAX_CONCURRENT`` / ``MIN_INTERVAL_S`` (pace a shop that rate-limits)
 
 Two behaviours are shared rather than left to each shop:
 
@@ -34,6 +35,16 @@ Two behaviours are shared rather than left to each shop:
 - **Multi-face names.** A ``Front // Back`` name that finds nothing is
   retried with the front face alone (``names.query_variants``); parsers
   match listing names with ``names.matched_name``.
+- **Rate limits.** A 429 puts the shop in back-off for its ``Retry-After``
+  (default 60 s, capped at 10 min): calls inside that window raise
+  ``RateLimitedError`` without a request, rather than hammering a shop
+  that is already refusing us and extending the ban. Shops that 429 a
+  burst (Cardshop Serra) also set ``MAX_CONCURRENT`` / ``MIN_INTERVAL_S``
+  so the decklist fan-out — up to MTGCOMPARE_DECKLIST_FAN_OUT_WORKERS
+  cards at once (18 in prod), each querying every shop — reaches them at
+  a paced rate instead of all at once. Both are per process: one search
+  runs in one gunicorn worker, so its own burst is paced, but searches
+  in different workers (prod: 2 pods × 2 workers) are not coordinated.
 
 Hareruya and Scryfall don't fit this shape (multi-step API call,
 JSON-only) so they keep their own classes; they share ``USER_AGENT``
@@ -42,7 +53,9 @@ and ``make_session`` but skip the base class.
 import logging
 import os
 import re
-from time import monotonic
+import threading
+from contextlib import contextmanager
+from time import monotonic, sleep
 from typing import ClassVar
 
 import orjson
@@ -86,6 +99,75 @@ class RateLimitedError(ScraperFetchError):
     "the fetch failed, don't cache" can ignore the distinction, while
     rate-limiter logic can pattern-match on the type.
     """
+
+
+_DEFAULT_RETRY_AFTER_S = 60.0
+_MAX_RETRY_AFTER_S = 600.0
+
+
+def retry_after_s(resp: requests.Response) -> float:
+    """Seconds a 429 asks us to wait: ``Retry-After`` in delta-seconds
+    form, else the default. The HTTP-date form isn't used by any shop we
+    scrape and falls back to the default too."""
+    headers = getattr(resp, "headers", None) or {}
+    try:
+        value = float(headers.get("Retry-After", ""))
+    except ValueError:
+        return _DEFAULT_RETRY_AFTER_S
+    return min(max(value, 0.0), _MAX_RETRY_AFTER_S)
+
+
+class ShopThrottle:
+    """Process-wide request pacing and 429 back-off for one shop.
+
+    ``max_concurrent`` caps in-flight requests, ``min_interval_s`` spaces
+    request starts; ``None`` / ``0`` leave that dimension unlimited.
+    """
+
+    def __init__(self, shop: str, max_concurrent: int | None = None, min_interval_s: float = 0.0):
+        self.shop = shop
+        self._slots = threading.BoundedSemaphore(max_concurrent) if max_concurrent else None
+        self._min_interval_s = min_interval_s
+        self._lock = threading.Lock()
+        self._next_start = 0.0
+        self._blocked_until = 0.0
+
+    def reset(self) -> None:
+        with self._lock:
+            self._next_start = 0.0
+            self._blocked_until = 0.0
+
+    def back_off(self, seconds: float) -> None:
+        with self._lock:
+            self._blocked_until = max(self._blocked_until, monotonic() + seconds)
+
+    def _check_back_off(self) -> None:
+        remaining = self._blocked_until - monotonic()
+        if remaining > 0:
+            raise RateLimitedError(
+                f"{self.shop} rate-limited — backing off for {remaining:.0f}s more"
+            )
+
+    @contextmanager
+    def slot(self):
+        """Hold one request slot for the duration of the ``with`` block."""
+        self._check_back_off()
+        if self._slots is not None:
+            self._slots.acquire()
+        try:
+            if self._min_interval_s:
+                with self._lock:
+                    now = monotonic()
+                    start = max(now, self._next_start)
+                    self._next_start = start + self._min_interval_s
+                if start > now:
+                    sleep(start - now)
+            # A 429 may have landed on another thread while this one queued.
+            self._check_back_off()
+            yield
+        finally:
+            if self._slots is not None:
+                self._slots.release()
 
 
 def raise_for_response(resp: requests.Response, shop: str) -> None:
@@ -161,7 +243,11 @@ class HtmlSearchScrapper(MtgScrapper):
     # Query parameter carrying the 1-based page number; None = single page.
     PAGE_PARAM: ClassVar[str | None] = None
     MAX_PAGES: ClassVar[int] = 3
+    # Pacing for shops that 429 bursts; None / 0.0 = unlimited.
+    MAX_CONCURRENT: ClassVar[int | None] = None
+    MIN_INTERVAL_S: ClassVar[float] = 0.0
     _SHARED_SESSION: ClassVar[requests.Session]
+    _THROTTLE: ClassVar[ShopThrottle]
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
@@ -171,6 +257,11 @@ class HtmlSearchScrapper(MtgScrapper):
         # for each (card, shop) pair. requests.Session is thread-safe for
         # concurrent GETs.
         cls._SHARED_SESSION = make_session(cls.SESSION_HEADERS or None)
+        # Likewise one throttle per subclass, so pacing and back-off span
+        # every thread of the fan-out.
+        cls._THROTTLE = ShopThrottle(
+            getattr(cls, "SHOP_NAME", cls.__name__), cls.MAX_CONCURRENT, cls.MIN_INTERVAL_S,
+        )
 
     def __init__(
         self,
@@ -262,14 +353,17 @@ class HtmlSearchScrapper(MtgScrapper):
         params = self.search_params(card_name)
         if page > 1 and self.PAGE_PARAM is not None:
             params = {**params, self.PAGE_PARAM: self.page_value(page)}
-        try:
-            resp = self.session.get(
-                self.SEARCH_URL,
-                params=params,
-                timeout=self.REQUEST_TIMEOUT_S,
-            )
-        except requests.RequestException as e:
-            raise ScraperFetchError(f"{self.SHOP_NAME} fetch failed: {e}") from e
+        with self._THROTTLE.slot():
+            try:
+                resp = self.session.get(
+                    self.SEARCH_URL,
+                    params=params,
+                    timeout=self.REQUEST_TIMEOUT_S,
+                )
+            except requests.RequestException as e:
+                raise ScraperFetchError(f"{self.SHOP_NAME} fetch failed: {e}") from e
 
+        if resp.status_code == 429:
+            self._THROTTLE.back_off(retry_after_s(resp))
         raise_for_response(resp, self.SHOP_NAME)
         return self.decode_response(resp)

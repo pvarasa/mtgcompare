@@ -541,6 +541,62 @@ def test_parse_decklist_skips_headers_and_comments():
     ]
 
 
+@pytest.mark.parametrize("text,expected", [
+    # No quantity means one copy, so a bare list of names works.
+    ("Sol Ring\nCounterspell", [(1, "Sol Ring"), (1, "Counterspell")]),
+    ("4x Lightning Bolt\n1X Sol Ring\n2 x Opt",
+     [(4, "Lightning Bolt"), (1, "Sol Ring"), (2, "Opt")]),
+    # MTGO plain-text export.
+    ("4 Thoughtseize\nSB: 1 Pithing Needle", [(4, "Thoughtseize"), (1, "Pithing Needle")]),
+    # Archidekt: lower-case set, categories, tags.
+    ("1x Sol Ring (cmm) 464 [Ramp]\n"
+     "1x Swords to Plowshares (sta) 10 *F* [Removal,Draw] ^Have,#37d67a^\n"
+     "1x Opt [Draw]",
+     [(1, "Sol Ring"), (1, "Swords to Plowshares"), (1, "Opt")]),
+    # TCGplayer mass entry.
+    ("1 Sol Ring [CMM]\n4 Lightning Bolt [2X2]", [(1, "Sol Ring"), (4, "Lightning Bolt")]),
+    # MTGGoldfish / TappedOut type headers with counts.
+    ("Creatures (12)\n4 Delver of Secrets\nInstants:\n4 Brainstorm\nLands (20)\n4 Polluted Delta",
+     [(4, "Delver of Secrets"), (4, "Brainstorm"), (4, "Polluted Delta")]),
+    # Arena's About block holds the deck name, not a card.
+    ("About\nName My Deck\n\nDeck\n4 Lightning Bolt (2X2) 117", [(4, "Lightning Bolt")]),
+    ("1 Borrowing 100,000 Arrows\n1 Fire // Ice",
+     [(1, "Borrowing 100,000 Arrows"), (1, "Fire // Ice")]),
+])
+def test_parse_decklist_export_formats(text, expected):
+    assert decklist.parse_decklist(text) == expected
+
+
+def test_parse_decklist_report_lists_what_was_left_out():
+    report = decklist.parse_decklist_report(
+        "1 Sol Ring\n4\n0 Island\nMaybeboard\n1 Opt\n2 Brainstorm\nSideboard\n1 Duress"
+    )
+    assert report.items == [(1, "Sol Ring"), (1, "Duress")]
+    assert report.unparsed == ["4"]
+    assert report.maybeboard == 3
+
+
+def test_parse_printings_reads_tcgplayer_set_brackets():
+    assert decklist.parse_printings("1 Sol Ring [CMM]") == {"sol ring": {("CMM", None)}}
+
+
+def test_decklist_page_reports_unparsed_and_maybeboard(monkeypatch):
+    web.app.config["WTF_CSRF_ENABLED"] = False
+    monkeypatch.setattr(web, "_get_fx", lambda: 150.0)
+    monkeypatch.setattr(web, "collect_prices", lambda *a, **kw: [])
+    body = "1 Sol Ring\n12\nMaybeboard\n2 Opt"
+    with web.app.test_client() as client:
+        resp = client.post("/decklist", data={"decklist": body})
+    page = resp.data.decode()
+    assert "1 line not understood: 12" in page
+    assert "2 maybeboard cards excluded" in page
+
+
+def test_mint_mall_is_disabled_while_its_site_is_down():
+    from mtgcompare.scrapers.registry import ACTIVE_SHOPS
+    assert "MINT MALL" not in ACTIVE_SHOPS
+
+
 def test_parse_shipping_overrides_clamps_and_falls_back_to_defaults():
     source = {
         "ship_hareruya": "500",

@@ -60,7 +60,13 @@ _SHOPS: list[Shop] = [
     Shop("Card Rush",        _JP_FLAG, _DEFAULT_JP_SHIPPING,   True,  False, lambda fx: CardRushScrapper(fx=fx)),
     Shop("Cardshop Serra",   _JP_FLAG, _DEFAULT_JP_SHIPPING,   True,  False, lambda fx: CardshopSerraScrapper(fx=fx)),
     Shop("BLACK FROG",       _JP_FLAG, _DEFAULT_JP_SHIPPING,   True,  False, lambda fx: BlackFrogScrapper(fx=fx)),
-    Shop("MINT MALL",        _JP_FLAG, _DEFAULT_JP_SHIPPING,   True,  False, lambda fx: MintMallScrapper(fx=fx)),
+    # MINT MALL is disabled while its own site is down: since 2026-10-22
+    # 10:00 JST every URL answers 503 with a maintenance page announcing a
+    # service-wide suspension for a security review, end date undecided
+    # (night-time access had been restricted from 10-19). Our last good
+    # fetch was 10-12. Re-enable once https://www.mint-mall.net/ serves
+    # listings again and `uv run pytest -m canary -k mintmall` passes.
+    Shop("MINT MALL",        _JP_FLAG, _DEFAULT_JP_SHIPPING,   False, False, lambda fx: MintMallScrapper(fx=fx)),
     # ENNDAL GAMES is disabled for good from this deployment. Its DNS is
     # Route 53 geolocation routing that answers only Japanese resolvers:
     # asked from Japan, the authoritative servers return 54.95.59.170 /

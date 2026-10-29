@@ -18,6 +18,22 @@ from mtgcompare.web import app as _app  # noqa: E402
 _app.config["WTF_CSRF_ENABLED"] = False
 
 
+def _all_subclasses(cls):
+    for sub in cls.__subclasses__():
+        yield sub
+        yield from _all_subclasses(sub)
+
+
+@pytest.fixture(autouse=True)
+def _reset_shop_throttles():
+    """Scraper throttles are class-level, so a 429 in one test would put
+    the shop in back-off for every later test in the session."""
+    from mtgcompare.scrapers.html_base import HtmlSearchScrapper
+    yield
+    for cls in _all_subclasses(HtmlSearchScrapper):
+        cls._THROTTLE.reset()
+
+
 @pytest.fixture()
 def test_db(tmp_path, monkeypatch):
     """Redirect db.engine/db.DB_PATH/db.IS_POSTGRES at a fresh per-test

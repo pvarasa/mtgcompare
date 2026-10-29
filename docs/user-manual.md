@@ -153,7 +153,10 @@ cards you already own.
 
 1. Tap **Decklist**.
 2. Paste your list, one card per line: `4 Lightning Bolt`. Lists exported
-   from Moxfield, Archidekt, MTG Arena and similar sites work as they are.
+   from Moxfield, Archidekt, MTG Arena, MTGO, TCGplayer and similar sites
+   work as they are, and a line without a number counts as one copy.
+   Maybeboard cards are left out, and any line the app can't read is
+   listed above the results so nothing goes missing silently.
 3. **Use inventory** (on by default) skips the copies you already have in
    your collection (see [Inventory](#6-your-collection-inventory)).
 4. Press **Search decklist**.

@@ -51,16 +51,45 @@ from .scrapers.variants import normalize_number
 logger = logging.getLogger(__name__)
 
 
-# "<qty>[x] <name> [(<SET>) [<number>]] [*F*]" — the Arena / Moxfield
-# export shape. The number is any non-space token ("79", "263a", "LTR-123",
+# "[<qty>[x]] <name> [(<SET>) [<number>]] [[<SET>]] [*F*] [[Category]] [^tag^]"
+# — the Arena / Moxfield export shape plus the TCGplayer and Archidekt
+# variants. The number is any non-space token ("79", "263a", "LTR-123",
 # "1234★"); Moxfield's trailing foil/etched marks ("*F*", "*E*") are
 # dropped. Either used to fail the optional suffix and leave the whole
 # tail in the card name, which then matched nothing.
+#
+# Group 1 is the quantity (absent = 1, so a bare list of names works),
+# 2 the name, 3/4 the "(SET) number" pair, 5 TCGplayer's "[SET]" (upper
+# case only, so Archidekt's "[Ramp]" category is stripped, not read as a
+# set). Archidekt's "[Category]" groups and "^Tag,#color^" marks go too.
 _DECK_LINE_RE = re.compile(
-    r'^(\d+)x?\s+(.+?)'
-    r'(?:\s+\(([A-Za-z0-9]+)\)(?:\s+([^\s*]+))?)?'
-    r'(?:\s+\*[A-Za-z]+\*)*\s*$'
+    r'^(?:(\d+)\s*[xX]?\s+)?(.+?)'
+    r'(?:\s+\(([A-Za-z0-9]+)\)(?:\s+([^\s*\[^]+))?)?'
+    r'(?:\s+\[([A-Z0-9]{2,6})\])?'
+    r'(?:\s+\*[A-Za-z]+\*)*'
+    r'(?:\s+\[[^\]]*\])*'
+    r'(?:\s+\^[^^]*\^)*\s*$'
 )
+
+# MTGO's plain-text export marks sideboard cards "SB: 1 Name".
+_SB_PREFIX_RE = re.compile(r'^SB:\s*', re.IGNORECASE)
+
+# Section headers from Arena, Moxfield, MTGGoldfish, TappedOut and
+# Archidekt exports, with an optional "(12)" count and trailing colon.
+# Now that the quantity is optional, an unrecognised header would
+# otherwise be searched as a card named "Creatures (12)".
+_SECTION_HEADER_RE = re.compile(
+    r'^(?P<section>commanders?|companion|deck|main\s?deck|mainboard|sideboard'
+    r'|maybeboard|considering|about|creatures?|instants?|sorcery|sorceries'
+    r'|artifacts?|enchantments?|planeswalkers?|battles?|lands?|spells?|other)'
+    r'\s*(?:\(\d+\))?\s*:?$',
+    re.IGNORECASE,
+)
+# Sections whose lines are not part of the deck. Arena's "About" block
+# holds "Name <deck name>"; maybeboard / considering cards are counted
+# and reported, not priced.
+_MAYBE_SECTIONS = frozenset({"maybeboard", "considering"})
+_SKIPPED_SECTIONS = _MAYBE_SECTIONS | {"about"}
 
 # Hard cap on the total card count of a single decklist search. Sized to
 # fit a full Commander deck (99 + commander = 100). Beyond this the
@@ -115,20 +144,64 @@ def strip_basic_lands(
     return kept, skipped_copies
 
 
-def _deck_lines(text: str) -> Iterator[re.Match]:
+@dataclass(frozen=True)
+class ParsedDecklist:
+    """``parse_decklist_report`` output: the cards plus what was left out,
+    so the UI can say so instead of silently pricing part of a paste."""
+    items: list[tuple[int, str]]
+    unparsed: list[str]     # lines that read as neither a card nor a header
+    maybeboard: int         # copies under a maybeboard/considering header
+
+
+def _scan_deck_lines(text: str) -> Iterator[tuple[str, str, re.Match | None]]:
+    """Yield ``(kind, line, match)``; kind is "card", "maybe" or "unparsed"."""
+    section = None
     for line in text.splitlines():
         line = line.strip()
         if not line or line.startswith("//") or line.startswith("#"):
             continue
-        if re.match(r'^(commander|sideboard|deck|maybeboard):?$', line, re.IGNORECASE):
+        header = _SECTION_HEADER_RE.match(line)
+        if header:
+            section = header.group("section").lower()
             continue
+        if section == "about":
+            continue
+        line = _SB_PREFIX_RE.sub("", line)
         m = _DECK_LINE_RE.match(line)
-        if m and int(m.group(1)) > 0 and m.group(2).strip():
+        if m is None or not m.group(2).strip() or m.group(2).strip().isdigit():
+            yield "unparsed", line, None
+            continue
+        if m.group(1) is not None and int(m.group(1)) == 0:
+            continue
+        yield ("maybe" if section in _MAYBE_SECTIONS else "card"), line, m
+
+
+def _qty(m: re.Match) -> int:
+    return int(m.group(1)) if m.group(1) is not None else 1
+
+
+def _deck_lines(text: str) -> Iterator[re.Match]:
+    for kind, _, m in _scan_deck_lines(text):
+        if kind == "card" and m is not None:
             yield m
 
 
 def parse_decklist(text: str) -> list[tuple[int, str]]:
-    return [(int(m.group(1)), m.group(2).strip()) for m in _deck_lines(text)]
+    return [(_qty(m), m.group(2).strip()) for m in _deck_lines(text)]
+
+
+def parse_decklist_report(text: str) -> ParsedDecklist:
+    items: list[tuple[int, str]] = []
+    unparsed: list[str] = []
+    maybeboard = 0
+    for kind, line, m in _scan_deck_lines(text):
+        if m is None:
+            unparsed.append(line)
+        elif kind == "card":
+            items.append((_qty(m), m.group(2).strip()))
+        else:
+            maybeboard += _qty(m)
+    return ParsedDecklist(items, unparsed, maybeboard)
 
 
 Printing = tuple[str, str | None]  # (SET, normalised collector number or None)
@@ -144,10 +217,11 @@ def parse_printings(text: str) -> dict[str, set[Printing]]:
     any_printing: set[str] = set()
     for m in _deck_lines(text):
         key = m.group(2).strip().lower()
-        if m.group(3) is None:
+        set_code = m.group(3) or m.group(5)
+        if set_code is None:
             any_printing.add(key)
             continue
-        wanted.setdefault(key, set()).add((m.group(3).upper(), normalize_number(m.group(4))))
+        wanted.setdefault(key, set()).add((set_code.upper(), normalize_number(m.group(4))))
     return {k: v for k, v in wanted.items() if k not in any_printing}
 
 
@@ -403,6 +477,8 @@ class DecklistPrep:
     shipping_overrides_jpy: dict[str, int]
     use_inventory: bool
     name_printings: dict[str, set[Printing]] = field(default_factory=dict)
+    unparsed_lines: list[str] = field(default_factory=list)
+    skipped_maybeboard: int = 0
 
 
 @dataclass
@@ -434,12 +510,13 @@ def prepare_decklist_search(
     use_inventory = basics.use_inventory
     enabled_shops = basics.enabled_shops
 
-    card_items = parse_decklist(text)
+    parsed = parse_decklist_report(text)
+    card_items = parsed.items
     if not card_items:
-        return DecklistReject(
-            reason="parse_empty",
-            message="No cards parsed. Use format: '1 Card Name' or '4x Card Name (SET)'",
-        )
+        message = "No cards parsed. Use format: '1 Card Name' or '4x Card Name (SET)'"
+        if parsed.maybeboard:
+            message += " (maybeboard cards are not priced)"
+        return DecklistReject(reason="parse_empty", message=message)
 
     card_items, skipped_basics = strip_basic_lands(card_items)
     if not card_items:
@@ -490,6 +567,8 @@ def prepare_decklist_search(
         shipping_overrides_jpy=shipping_overrides_jpy,
         use_inventory=use_inventory,
         name_printings=parse_printings(text) if basics.match_printings else {},
+        unparsed_lines=parsed.unparsed,
+        skipped_maybeboard=parsed.maybeboard,
     )
 
 
@@ -512,6 +591,8 @@ def _emit_meta(prep: DecklistPrep, q: queue.Queue) -> None:
     q.put(("meta", {
         "total_cards": prep.total_cards,
         "skipped_basics": prep.skipped_basics,
+        "unparsed_lines": prep.unparsed_lines,
+        "skipped_maybeboard": prep.skipped_maybeboard,
         "distinct_names": len(prep.name_qty),
         "inventory_hits": prep.inventory_hits,
         "names_to_search": len(prep.names_to_search),

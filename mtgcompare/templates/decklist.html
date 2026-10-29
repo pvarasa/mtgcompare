@@ -136,6 +136,12 @@
       {% if skipped_basics %}
         &middot; <span class="dl-meta-note">{{ skipped_basics }} basic land{{ 's' if skipped_basics != 1 else '' }} excluded</span>
       {% endif %}
+      {% if skipped_maybeboard %}
+        &middot; <span class="dl-meta-note">{{ skipped_maybeboard }} maybeboard card{{ 's' if skipped_maybeboard != 1 else '' }} excluded</span>
+      {% endif %}
+      {% if unparsed_lines %}
+        &middot; <span class="dl-meta-warn" title="{{ unparsed_lines|join('\n') }}">{{ unparsed_lines|length }} line{{ 's' if unparsed_lines|length != 1 else '' }} not understood: {{ unparsed_lines[:3]|join(', ') }}{{ ', …' if unparsed_lines|length > 3 else '' }}</span>
+      {% endif %}
       {% if fx %} &middot; FX ¥{{ '%.2f'|format(fx) }} per $1{% endif %}
     </p>
 

@@ -591,6 +591,8 @@ def decklist_search():
             use_inventory=use_inventory,
             match_printings=basics.match_printings,
             skipped_basics=0,
+            unparsed_lines=[],
+            skipped_maybeboard=0,
             timed_out_shops=[],
         )
 
@@ -671,6 +673,8 @@ def _run_decklist_search(prep, basics, ship_cfg, shop_filter_cfg, t0):
         use_inventory=use_inventory,
         match_printings=basics.match_printings,
         skipped_basics=skipped_basics,
+        unparsed_lines=prep.unparsed_lines,
+        skipped_maybeboard=prep.skipped_maybeboard,
         timed_out_shops=timed_out_sorted,
         **totals,
     )

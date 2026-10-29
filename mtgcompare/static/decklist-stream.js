@@ -227,6 +227,8 @@
       sourcedCount: 0,
       invCovered: 0,
       skippedBasics: 0,
+      skippedMaybeboard: 0,
+      unparsedLines: [],
       fx: null,
       grandTotalUsd: 0,
       grandTotalJpy: 0,
@@ -294,8 +296,17 @@
       const basics = state.skippedBasics
         ? ` &middot; <span class="dl-meta-note">${state.skippedBasics} basic land${state.skippedBasics === 1 ? '' : 's'} excluded</span>`
         : '';
+      const maybe = state.skippedMaybeboard
+        ? ` &middot; <span class="dl-meta-note">${state.skippedMaybeboard} maybeboard card${state.skippedMaybeboard === 1 ? '' : 's'} excluded</span>`
+        : '';
+      const n = state.unparsedLines.length;
+      const unparsed = n
+        ? ` &middot; <span class="dl-meta-warn" title="${escapeHtml(state.unparsedLines.join('\n'))}">` +
+          `${n} line${n === 1 ? '' : 's'} not understood: ` +
+          `${escapeHtml(state.unparsedLines.slice(0, 3).join(', '))}${n > 3 ? ', …' : ''}</span>`
+        : '';
       const fx = state.fx ? ` &middot; FX ¥${state.fx.toFixed(2)} per $1` : '';
-      metaBox.innerHTML = moneyPart + sourced + inv + basics + fx;
+      metaBox.innerHTML = moneyPart + sourced + inv + basics + maybe + unparsed + fx;
     }
 
     function renderShops(shopList) {
@@ -373,6 +384,8 @@
         state.namesToSearch = d.names_to_search;
         state.invCovered = d.inventory_hits;
         state.skippedBasics = d.skipped_basics;
+        state.skippedMaybeboard = d.skipped_maybeboard || 0;
+        state.unparsedLines = d.unparsed_lines || [];
         state.fx = d.fx;
         renderMetaLine();
         updateProgress();

@@ -67,7 +67,7 @@ Your inventory is stored in `~/Library/Application Support/mtgcompare/inventory.
 | Cardshop Serra | 🇯🇵 JP | Price + stock |
 | BLACK FROG | 🇯🇵 JP | Price |
 | Card Rush | 🇯🇵 JP | Price + stock |
-| MINT MALL | 🇯🇵 JP | Price + stock (multi-tenant marketplace) |
+| MINT MALL | 🇯🇵 JP | Price + stock (multi-tenant marketplace). **Paused** since 2026-10-22 while the site is down for a security review |
 | SingleStar | 🇯🇵 JP | Price + stock |
 | TokyoMTG | 🇯🇵 JP | Price + stock |
 | TCGPlayer market (via Scryfall) | 🇺🇸 US | Market price (stock not available) |

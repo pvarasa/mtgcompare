@@ -36,6 +36,13 @@ sits behind Cloudflare and answers bursts with a 429 (``Retry-After: 60``)
 long-tail. Shopify's ``filter.v.availability=1`` does not narrow this
 store's search results, so it isn't used.
 
+The fan-out burst did trip it: on 2026-10-24 a 14-card decklist got a 429
+on every Serra lookup, so that search showed no Serra prices at all.
+Requests are now paced to at most 2 in flight and one start per second
+(``MAX_CONCURRENT`` / ``MIN_INTERVAL_S``), and a 429 backs the shop off
+for its ``Retry-After`` instead of retrying into the ban. With 18 cards
+queued the last one waits ~18 s, inside the 30 s per-card shop timeout.
+
 Multi-face titles carry each face's Japanese name inline —
 ``砕骨の巨人 / Bonecrusher Giant - 踏みつけ / Stomp`` — which
 ``names.matched_name`` reduces to the English faces.
@@ -166,6 +173,8 @@ class CardshopSerraScrapper(HtmlSearchScrapper):
     SEARCH_PARAM_NAME = "q"
     PAGE_PARAM = "page"
     MAX_PAGES = 2
+    MAX_CONCURRENT = 2
+    MIN_INTERVAL_S = 1.0
 
     def search_params(self, card_name: str) -> dict:
         # `type=product` keeps blog/page hits out of the result set.
