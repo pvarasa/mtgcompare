@@ -191,8 +191,10 @@ class TestPacing:
         t0 = time.monotonic()
         for _ in range(3):
             s.get_prices("X")
-        # Three starts, two enforced gaps.
-        assert time.monotonic() - t0 >= 0.1
+        # Three starts, two enforced 0.05 s gaps. The slack absorbs Windows'
+        # ~16 ms timer resolution (v1.14.2 measured 0.094 s there); unpaced,
+        # the loop takes ~0 s.
+        assert time.monotonic() - t0 >= 0.08
 
     def test_max_concurrent_caps_parallel_requests(self):
         session = _CountingSession(_FakeResponse(200, ""), delay_s=0.03)
