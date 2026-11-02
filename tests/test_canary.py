@@ -133,3 +133,32 @@ def test_mtgjson_meta_is_reachable():
     data = resp.json()
     assert "data" in data and "date" in data.get("data", {}), \
         f"MTGJSON Meta.json structure changed — missing data.date: {data}"
+
+
+# Sealed products: a long-lived, liquid booster box (Commander Masters Draft
+# Booster Box) so a zero/None price means drift, not a sold-out product.
+_SEALED_PROBE_PRODUCT_ID = 484924
+
+
+@pytest.mark.canary
+def test_tcgplayer_sealed_market_price():
+    from mtgcompare.sealed.tcgplayer import TcgSealedClient
+    price = TcgSealedClient().market_price(_SEALED_PROBE_PRODUCT_ID)
+    assert price is not None and 50 < price < 5000, \
+        f"TCGPlayer pricepoints returned an implausible sealed price: {price}"
+
+
+@pytest.mark.canary
+def test_tcgplayer_sealed_history_backfill():
+    from mtgcompare.sealed.tcgplayer import TcgSealedClient
+    points = TcgSealedClient().history(_SEALED_PROBE_PRODUCT_ID)
+    # annual (52 weekly) + month (30 daily) buckets, minus overlaps/zeros.
+    assert len(points) >= 30, f"TCGPlayer price history returned only {len(points)} points"
+
+
+@pytest.mark.canary
+def test_mtgjson_setlist_has_sealed_boosters():
+    from mtgcompare.sealed.catalog import fetch_setlist, parse_setlist
+    rows = parse_setlist(fetch_setlist(), updated_at="canary")
+    boxes = [r for r in rows if r["category"] == "booster_box" and r["tcgplayer_product_id"]]
+    assert len(boxes) >= 200, f"SetList.json yielded only {len(boxes)} priced booster boxes"

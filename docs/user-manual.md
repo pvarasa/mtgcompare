@@ -21,7 +21,8 @@ The numbered red circles in the pictures match the numbered steps under them.
 5. [Price a whole decklist](#5-price-a-whole-decklist)
 6. [Your collection (Inventory)](#6-your-collection-inventory)
 7. [What your collection is worth (Market)](#7-what-your-collection-is-worth-market)
-8. [Tips and questions](#8-tips-and-questions)
+8. [Booster boxes and packs (Sealed)](#8-booster-boxes-and-packs-sealed)
+9. [Tips and questions](#9-tips-and-questions)
 
 ---
 
@@ -40,7 +41,7 @@ You stay signed in on that device, so next time you go straight to the app.
 > **Tip:** on a phone, add the page to your home screen (Safari: *Share →
 > Add to Home Screen*; Chrome: *⋮ → Add to Home screen*) and it opens like an app.
 
-The app has three tabs at the top: **Search**, **Inventory** and **Market**.
+The app has four tabs at the top: **Search**, **Inventory**, **Market** and **Sealed**.
 
 ---
 
@@ -276,7 +277,32 @@ today's cards, valued at each day's prices.
 
 ---
 
-## 8. Tips and questions
+## 8. Booster boxes and packs (Sealed)
+
+The Sealed tab tracks unopened booster boxes and packs, separately from your
+cards.
+
+1. In **Product**, start typing a name (for example *Foundations Play
+   Booster Box*) and pick it from the list.
+2. Choose the **language** (EN or JP), how many you have, and what you paid
+   for each one, in **yen or dollars**.
+3. Press **Add to holdings**. The price appears straight away, with about a
+   year of history behind it.
+
+Press **Watch only** to follow a product's price without owning it. It goes
+in the **Watchlist** below your holdings.
+
+Each row shows today's price, its change over the last **30 days**, and
+your profit or loss. The **chart button** opens the price history, the same
+chart as on the Market tab.
+
+Prices are TCGPlayer's market price for the **English** product, updated
+once a day. **Refresh prices** fetches them now. Japanese boxes are marked
+**JP\*** because they are valued at the English price for now.
+
+---
+
+## 9. Tips and questions
 
 **Why does the first search for a card take a while?**
 The app asks nine shops live. Once a card has been searched, anyone searching

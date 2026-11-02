@@ -1,0 +1,239 @@
+{# Styles shared by the Market and Sealed pages: the summary stat cards,
+   the per-row chart trigger and the price-history chart modal. Included
+   inside each page's extra_css block. #}
+  /* The summary stat cards and the history action tile share one wrapping
+     row. #mkt-summary uses display:contents so its cards flow as direct
+     children of the bar — keeping the tile a sibling that survives the
+     partial summary swaps (which replace #mkt-summary's innerHTML). */
+  .mkt-summary-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .6rem;
+    align-items: stretch;
+    margin-bottom: 1rem;
+  }
+  .mkt-summary { display: contents; }
+  .mkt-stat {
+    background: var(--bg-alt);
+    border: 1px solid var(--border);
+    border-top: 2px solid var(--gold);
+    border-radius: 8px;
+    padding: .65rem 1rem;
+    min-width: 10rem;
+    flex: 1 1 10rem;
+  }
+  .mkt-stat .stat-label {
+    font-size: .75rem;
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    margin-bottom: .3rem;
+  }
+  .mkt-stat .stat-value {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: var(--fg);
+  }
+  .mkt-stat .stat-sub {
+    font-size: .78rem;
+    color: var(--muted);
+    margin-top: .15rem;
+  }
+
+  .pnl-up { color: var(--green); }
+  .pnl-down { color: var(--red); }
+  .pnl-none { color: var(--muted); }
+
+  .mkt-note {
+    font-size: .78rem;
+    color: var(--muted);
+    margin-bottom: .85rem;
+  }
+
+  .market-cell {
+    display: flex;
+    align-items: center;
+    gap: .35rem;
+    min-width: 0;
+  }
+  .market-chart-trigger {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.65rem;
+    height: 1.65rem;
+    padding: 0;
+    border: 1px solid rgba(201, 168, 76, 0.32);
+    border-radius: 999px;
+    background: linear-gradient(180deg, rgba(201, 168, 76, 0.18), rgba(90, 159, 212, 0.08));
+    color: var(--gold);
+    flex: 0 0 auto;
+  }
+  @media (hover: hover) {
+    .market-chart-trigger:hover {
+      color: #0f1117;
+      background: linear-gradient(180deg, var(--gold), #ecd389);
+    }
+  }
+  .market-chart-trigger svg {
+    width: .9rem;
+    height: .9rem;
+    display: block;
+  }
+
+  .market-chart-modal {
+    position: fixed;
+    inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 1.25rem;
+    background:
+      radial-gradient(circle at top, rgba(90, 159, 212, 0.18), transparent 42%),
+      rgba(4, 6, 12, 0.84);
+    backdrop-filter: blur(8px);
+    z-index: 1100;
+  }
+  .market-chart-modal.open { display: flex; }
+  .market-chart-panel {
+    width: min(860px, 100%);
+    max-height: min(92vh, 780px);
+    overflow: auto;
+    background:
+      linear-gradient(160deg, rgba(201, 168, 76, 0.06), transparent 22%),
+      linear-gradient(180deg, rgba(24, 28, 42, 0.96), rgba(12, 15, 24, 0.98));
+    border: 1px solid rgba(201, 168, 76, 0.28);
+    border-radius: 18px;
+    box-shadow: 0 26px 64px rgba(0, 0, 0, 0.55);
+    padding: 1.15rem 1.15rem 1rem;
+  }
+  .market-chart-topbar {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    align-items: flex-start;
+    margin-bottom: 1rem;
+  }
+  .market-chart-kicker {
+    color: var(--gold);
+    text-transform: uppercase;
+    letter-spacing: .12em;
+    font-size: .68rem;
+    margin-bottom: .4rem;
+  }
+  .market-chart-title {
+    font-family: 'Cinzel', 'Palatino Linotype', Georgia, serif;
+    color: var(--fg);
+    font-size: 1.25rem;
+    line-height: 1.15;
+    margin: 0;
+  }
+  .market-chart-subtitle {
+    color: var(--muted);
+    margin-top: .25rem;
+    font-size: .88rem;
+  }
+  .market-chart-close {
+    border-color: rgba(201, 168, 76, 0.28);
+    min-width: 2.4rem;
+    padding: .45rem .8rem;
+  }
+  .market-chart-meta {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: .7rem;
+    margin-bottom: 1rem;
+  }
+  .market-chart-stat {
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid rgba(201, 168, 76, 0.12);
+    border-radius: 12px;
+    padding: .75rem .85rem;
+  }
+  .market-chart-stat-label {
+    color: var(--muted);
+    font-size: .72rem;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    margin-bottom: .3rem;
+  }
+  .market-chart-stat-value {
+    color: var(--fg);
+    font-size: 1.18rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+  .market-chart-stat-value.positive { color: var(--green); }
+  .market-chart-stat-value.negative { color: var(--red); }
+  .market-chart-controls {
+    display: flex;
+    gap: .45rem;
+    flex-wrap: wrap;
+    margin-bottom: .9rem;
+  }
+  .market-chart-range {
+    padding: .42rem .75rem;
+    border-radius: 999px;
+    border: 1px solid rgba(201, 168, 76, 0.18);
+    background: rgba(255, 255, 255, 0.02);
+    color: var(--muted);
+    font-size: .82rem;
+  }
+  .market-chart-range.active {
+    color: #0f1117;
+    background: linear-gradient(180deg, var(--gold), #ecd389);
+    border-color: transparent;
+  }
+  .market-chart-stage {
+    border: 1px solid rgba(90, 159, 212, 0.14);
+    border-radius: 16px;
+    background:
+      radial-gradient(circle at top, rgba(90, 159, 212, 0.1), transparent 35%),
+      rgba(8, 11, 18, 0.74);
+    padding: .85rem;
+    min-height: 380px;
+  }
+  .market-chart-svg {
+    width: 100%;
+    height: 360px;
+    display: block;
+  }
+  .market-chart-axis {
+    fill: var(--muted);
+    font-size: 11px;
+    font-family: 'Inter', system-ui, sans-serif;
+  }
+  .market-chart-grid {
+    stroke: rgba(122, 130, 160, 0.18);
+    stroke-width: 1;
+  }
+  .market-chart-footnote {
+    color: var(--muted);
+    font-size: .8rem;
+    margin-top: .75rem;
+  }
+  .market-chart-empty,
+  .market-chart-loading {
+    min-height: 360px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--muted);
+    text-align: center;
+    padding: 1rem;
+  }
+  @media (max-width: 720px) {
+    .market-chart-meta {
+      grid-template-columns: 1fr;
+    }
+    .market-chart-panel {
+      padding: 1rem;
+    }
+    .market-chart-stage {
+      min-height: 320px;
+    }
+    .market-chart-svg {
+      height: 300px;
+    }
+  }

@@ -72,55 +72,8 @@
   }
   .mkt-first-time p { margin: 0 0 1rem; font-size: .95rem; }
 
-  /* The summary stat cards and the history action tile share one wrapping
-     row. #mkt-summary uses display:contents so its cards flow as direct
-     children of the bar — keeping the tile a sibling that survives the
-     partial summary swaps (which replace #mkt-summary's innerHTML). */
-  .mkt-summary-bar {
-    display: flex;
-    flex-wrap: wrap;
-    gap: .6rem;
-    align-items: stretch;
-    margin-bottom: 1rem;
-  }
-  .mkt-summary { display: contents; }
-  .mkt-stat {
-    background: var(--bg-alt);
-    border: 1px solid var(--border);
-    border-top: 2px solid var(--gold);
-    border-radius: 8px;
-    padding: .65rem 1rem;
-    min-width: 10rem;
-    flex: 1 1 10rem;
-  }
-  .mkt-stat .stat-label {
-    font-size: .75rem;
-    font-weight: 600;
-    color: var(--muted);
-    text-transform: uppercase;
-    letter-spacing: .05em;
-    margin-bottom: .3rem;
-  }
-  .mkt-stat .stat-value {
-    font-size: 1.25rem;
-    font-weight: 700;
-    color: var(--fg);
-  }
-  .mkt-stat .stat-sub {
-    font-size: .78rem;
-    color: var(--muted);
-    margin-top: .15rem;
-  }
+  {% include "_price_chart_styles.html" %}
 
-  .pnl-up { color: var(--green); }
-  .pnl-down { color: var(--red); }
-  .pnl-none { color: var(--muted); }
-
-  .mkt-note {
-    font-size: .78rem;
-    color: var(--muted);
-    margin-bottom: .85rem;
-  }
 
   /* History action tile: shaped like a stat card but a button. Sits at the
      end of the summary row so the portfolio chart is one click from the
@@ -281,192 +234,6 @@
     margin: -1px; overflow: hidden; clip: rect(0,0,0,0); border: 0;
   }
 
-  .market-cell {
-    display: flex;
-    align-items: center;
-    gap: .35rem;
-    min-width: 0;
-  }
-  .market-chart-trigger {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 1.65rem;
-    height: 1.65rem;
-    padding: 0;
-    border: 1px solid rgba(201, 168, 76, 0.32);
-    border-radius: 999px;
-    background: linear-gradient(180deg, rgba(201, 168, 76, 0.18), rgba(90, 159, 212, 0.08));
-    color: var(--gold);
-    flex: 0 0 auto;
-  }
-  @media (hover: hover) {
-    .market-chart-trigger:hover {
-      color: #0f1117;
-      background: linear-gradient(180deg, var(--gold), #ecd389);
-    }
-  }
-  .market-chart-trigger svg {
-    width: .9rem;
-    height: .9rem;
-    display: block;
-  }
-
-  .market-chart-modal {
-    position: fixed;
-    inset: 0;
-    display: none;
-    align-items: center;
-    justify-content: center;
-    padding: 1.25rem;
-    background:
-      radial-gradient(circle at top, rgba(90, 159, 212, 0.18), transparent 42%),
-      rgba(4, 6, 12, 0.84);
-    backdrop-filter: blur(8px);
-    z-index: 1100;
-  }
-  .market-chart-modal.open { display: flex; }
-  .market-chart-panel {
-    width: min(860px, 100%);
-    max-height: min(92vh, 780px);
-    overflow: auto;
-    background:
-      linear-gradient(160deg, rgba(201, 168, 76, 0.06), transparent 22%),
-      linear-gradient(180deg, rgba(24, 28, 42, 0.96), rgba(12, 15, 24, 0.98));
-    border: 1px solid rgba(201, 168, 76, 0.28);
-    border-radius: 18px;
-    box-shadow: 0 26px 64px rgba(0, 0, 0, 0.55);
-    padding: 1.15rem 1.15rem 1rem;
-  }
-  .market-chart-topbar {
-    display: flex;
-    justify-content: space-between;
-    gap: 1rem;
-    align-items: flex-start;
-    margin-bottom: 1rem;
-  }
-  .market-chart-kicker {
-    color: var(--gold);
-    text-transform: uppercase;
-    letter-spacing: .12em;
-    font-size: .68rem;
-    margin-bottom: .4rem;
-  }
-  .market-chart-title {
-    font-family: 'Cinzel', 'Palatino Linotype', Georgia, serif;
-    color: var(--fg);
-    font-size: 1.25rem;
-    line-height: 1.15;
-    margin: 0;
-  }
-  .market-chart-subtitle {
-    color: var(--muted);
-    margin-top: .25rem;
-    font-size: .88rem;
-  }
-  .market-chart-close {
-    border-color: rgba(201, 168, 76, 0.28);
-    min-width: 2.4rem;
-    padding: .45rem .8rem;
-  }
-  .market-chart-meta {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: .7rem;
-    margin-bottom: 1rem;
-  }
-  .market-chart-stat {
-    background: rgba(255, 255, 255, 0.02);
-    border: 1px solid rgba(201, 168, 76, 0.12);
-    border-radius: 12px;
-    padding: .75rem .85rem;
-  }
-  .market-chart-stat-label {
-    color: var(--muted);
-    font-size: .72rem;
-    text-transform: uppercase;
-    letter-spacing: .08em;
-    margin-bottom: .3rem;
-  }
-  .market-chart-stat-value {
-    color: var(--fg);
-    font-size: 1.18rem;
-    font-weight: 700;
-    font-variant-numeric: tabular-nums;
-  }
-  .market-chart-stat-value.positive { color: var(--green); }
-  .market-chart-stat-value.negative { color: var(--red); }
-  .market-chart-controls {
-    display: flex;
-    gap: .45rem;
-    flex-wrap: wrap;
-    margin-bottom: .9rem;
-  }
-  .market-chart-range {
-    padding: .42rem .75rem;
-    border-radius: 999px;
-    border: 1px solid rgba(201, 168, 76, 0.18);
-    background: rgba(255, 255, 255, 0.02);
-    color: var(--muted);
-    font-size: .82rem;
-  }
-  .market-chart-range.active {
-    color: #0f1117;
-    background: linear-gradient(180deg, var(--gold), #ecd389);
-    border-color: transparent;
-  }
-  .market-chart-stage {
-    border: 1px solid rgba(90, 159, 212, 0.14);
-    border-radius: 16px;
-    background:
-      radial-gradient(circle at top, rgba(90, 159, 212, 0.1), transparent 35%),
-      rgba(8, 11, 18, 0.74);
-    padding: .85rem;
-    min-height: 380px;
-  }
-  .market-chart-svg {
-    width: 100%;
-    height: 360px;
-    display: block;
-  }
-  .market-chart-axis {
-    fill: var(--muted);
-    font-size: 11px;
-    font-family: 'Inter', system-ui, sans-serif;
-  }
-  .market-chart-grid {
-    stroke: rgba(122, 130, 160, 0.18);
-    stroke-width: 1;
-  }
-  .market-chart-footnote {
-    color: var(--muted);
-    font-size: .8rem;
-    margin-top: .75rem;
-  }
-  .market-chart-empty,
-  .market-chart-loading {
-    min-height: 360px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: var(--muted);
-    text-align: center;
-    padding: 1rem;
-  }
-  @media (max-width: 720px) {
-    .market-chart-meta {
-      grid-template-columns: 1fr;
-    }
-    .market-chart-panel {
-      padding: 1rem;
-    }
-    .market-chart-stage {
-      min-height: 320px;
-    }
-    .market-chart-svg {
-      height: 300px;
-    }
-  }
 {% endblock %}
 {% block content %}
 
@@ -680,264 +447,18 @@
       {% include "_market_table.html" %}
     </div>
 
-    <div id="market-chart-modal" class="market-chart-modal">
-      <div class="market-chart-panel" role="dialog" aria-modal="true" aria-labelledby="market-chart-title">
-        <div class="market-chart-topbar">
-          <div>
-            <div class="market-chart-kicker">Market History</div>
-            <h2 id="market-chart-title" class="market-chart-title">Loading...</h2>
-            <div id="market-chart-subtitle" class="market-chart-subtitle"></div>
-          </div>
-          <button type="button" id="market-chart-close" class="market-chart-close" aria-label="Close chart">x</button>
-        </div>
-        <div class="market-chart-meta">
-          <div class="market-chart-stat">
-            <div class="market-chart-stat-label">Current</div>
-            <div id="market-chart-current" class="market-chart-stat-value">-</div>
-          </div>
-          <div class="market-chart-stat">
-            <div class="market-chart-stat-label">Range Change</div>
-            <div id="market-chart-delta" class="market-chart-stat-value">-</div>
-          </div>
-          <div class="market-chart-stat">
-            <div class="market-chart-stat-label">Range Low</div>
-            <div id="market-chart-low" class="market-chart-stat-value">-</div>
-          </div>
-        </div>
-        <div id="market-chart-controls" class="market-chart-controls"></div>
-        <div id="market-chart-stage" class="market-chart-stage">
-          <div class="market-chart-loading">Loading chart...</div>
-        </div>
-        <div id="market-chart-footnote" class="market-chart-footnote"></div>
-      </div>
-    </div>
+    {% include "_price_chart_modal.html" %}
 
     <script src="{{ url_for('static', filename='paginatedtable.js') }}?v={{ static_token }}"></script>
+    <script src="{{ url_for('static', filename='pricechart.js') }}?v={{ static_token }}"></script>
     <script>
       (function () {
         const historyUrl = {{ url_for('market_history')|tojson }};
         const portfolioHistoryUrl = {{ url_for('market_history_portfolio')|tojson }};
-        const modal = document.getElementById('market-chart-modal');
-        const titleEl = document.getElementById('market-chart-title');
-        const subtitleEl = document.getElementById('market-chart-subtitle');
-        const currentEl = document.getElementById('market-chart-current');
-        const deltaEl = document.getElementById('market-chart-delta');
-        const lowEl = document.getElementById('market-chart-low');
-        const controlsEl = document.getElementById('market-chart-controls');
-        const stageEl = document.getElementById('market-chart-stage');
-        const footnoteEl = document.getElementById('market-chart-footnote');
-        const closeEl = document.getElementById('market-chart-close');
-
-        let activeHistory = null;
-
-        function formatUsd(value) {
-          if (value == null || Number.isNaN(value)) return '-';
-          return `$${value.toFixed(2)}`;
-        }
-
-        function formatDate(stamp) {
-          if (!stamp) return '-';
-          const dt = new Date(stamp);
-          if (Number.isNaN(dt.getTime())) return stamp;
-          return dt.toLocaleDateString(undefined, {
-            year: 'numeric',
-            month: 'short',
-            day: 'numeric',
-          });
-        }
-
-        function slicePoints(points, period) {
-          if (period === 'all') return points.slice();
-          const days = activeHistory && activeHistory.period_days ? activeHistory.period_days[period] : null;
-          if (days == null) return points.slice();
-          const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
-          return points.filter(point => new Date(point.market_date).getTime() >= cutoff);
-        }
-
-        function summarize(points) {
-          const priced = points.filter(point => point.price_usd != null);
-          if (!priced.length) {
-            return { current: null, delta: null, low: null };
-          }
-          const current = priced[priced.length - 1].price_usd;
-          const low = Math.min.apply(null, priced.map(point => point.price_usd));
-          const delta = current - priced[0].price_usd;
-          return { current, delta, low };
-        }
-
-        function setDelta(delta) {
-          if (delta == null) {
-            deltaEl.textContent = '-';
-            deltaEl.className = 'market-chart-stat-value';
-            return;
-          }
-          const sign = delta > 0 ? '+' : '';
-          deltaEl.textContent = `${sign}$${delta.toFixed(2)}`;
-          deltaEl.className = `market-chart-stat-value ${delta > 0 ? 'positive' : (delta < 0 ? 'negative' : '')}`.trim();
-        }
-
-        function buildChart(points) {
-          const priced = points
-            .map((point, index) => ({ ...point, index }))
-            .filter(point => point.price_usd != null);
-          if (priced.length < 2) return '';
-
-          const width = 760;
-          const height = 360;
-          const pad = { top: 18, right: 18, bottom: 34, left: 58 };
-          const innerWidth = width - pad.left - pad.right;
-          const innerHeight = height - pad.top - pad.bottom;
-          const values = priced.map(point => point.price_usd);
-          const min = Math.min.apply(null, values);
-          const max = Math.max.apply(null, values);
-          const spread = Math.max(max - min, Math.max(max * 0.08, 0.25));
-          const lo = Math.max(0, min - spread * 0.35);
-          const hi = max + spread * 0.35;
-          const xFor = index => pad.left + (points.length === 1 ? innerWidth / 2 : (index / (points.length - 1)) * innerWidth);
-          const yFor = value => pad.top + (1 - ((value - lo) / (hi - lo || 1))) * innerHeight;
-          const yTicks = Array.from({ length: 5 }, (_, index) => lo + ((hi - lo) * index / 4));
-          const segments = [];
-          let currentSegment = [];
-          points.forEach((point, index) => {
-            if (point.price_usd == null) {
-              if (currentSegment.length) segments.push(currentSegment);
-              currentSegment = [];
-              return;
-            }
-            currentSegment.push({ x: xFor(index), y: yFor(point.price_usd), price_usd: point.price_usd });
-          });
-          if (currentSegment.length) segments.push(currentSegment);
-
-          const lineMarkup = segments.map(segment => {
-            const linePath = segment.map((point, idx) => `${idx ? 'L' : 'M'} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`).join(' ');
-            const areaPath = `${linePath} L ${segment[segment.length - 1].x.toFixed(2)} ${(pad.top + innerHeight).toFixed(2)} L ${segment[0].x.toFixed(2)} ${(pad.top + innerHeight).toFixed(2)} Z`;
-            return `
-              <path d="${areaPath}" fill="url(#chart-area-fill)"></path>
-              <path d="${linePath}" fill="none" stroke="url(#chart-line-stroke)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></path>
-            `;
-          }).join('');
-
-          // Drop the middle date label on narrow viewports — three ticks
-          // collide because tick text is rendered in screen pixels while
-          // tick X positions scale with the viewBox.
-          const narrow = window.innerWidth < 480;
-          const xIndexes = (narrow
-            ? [0, points.length - 1]
-            : [0, Math.floor((points.length - 1) / 2), points.length - 1])
-            .filter((index, position, array) => array.indexOf(index) === position);
-
-          const yMarkup = yTicks.map(value => {
-            const y = yFor(value).toFixed(2);
-            return `
-              <line class="market-chart-grid" x1="${pad.left}" y1="${y}" x2="${width - pad.right}" y2="${y}"></line>
-              <text class="market-chart-axis" x="${pad.left - 8}" y="${Number(y) + 4}" text-anchor="end">$${value.toFixed(2)}</text>
-            `;
-          }).join('');
-
-          const xMarkup = xIndexes.map(index => `
-            <text class="market-chart-axis" x="${xFor(index).toFixed(2)}" y="${height - 8}" text-anchor="middle">${formatDate(points[index].market_date)}</text>
-          `).join('');
-
-          const dotMarkup = priced.map((point, index) => `
-            <circle cx="${xFor(point.index).toFixed(2)}" cy="${yFor(point.price_usd).toFixed(2)}" r="${index === priced.length - 1 ? 4.5 : 3.2}" fill="${index === priced.length - 1 ? '#c9a84c' : '#5a9fd4'}"></circle>
-          `).join('');
-
-          return `
-            <svg class="market-chart-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="Price history chart">
-              <defs>
-                <linearGradient id="chart-area-fill" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stop-color="rgba(201, 168, 76, 0.38)"></stop>
-                  <stop offset="100%" stop-color="rgba(90, 159, 212, 0.04)"></stop>
-                </linearGradient>
-                <linearGradient id="chart-line-stroke" x1="0" y1="0" x2="1" y2="0">
-                  <stop offset="0%" stop-color="#5a9fd4"></stop>
-                  <stop offset="100%" stop-color="#c9a84c"></stop>
-                </linearGradient>
-              </defs>
-              ${yMarkup}
-              ${lineMarkup}
-              ${dotMarkup}
-              ${xMarkup}
-            </svg>
-          `;
-        }
-
-        function renderPeriod(period) {
-          if (!activeHistory) return;
-          controlsEl.querySelectorAll('.market-chart-range').forEach(button => {
-            button.classList.toggle('active', button.dataset.period === period);
-          });
-
-          const points = slicePoints(activeHistory.points, period);
-          const priced = points.filter(point => point.price_usd != null);
-          const stats = summarize(points);
-          currentEl.textContent = formatUsd(stats.current);
-          lowEl.textContent = formatUsd(stats.low);
-          setDelta(stats.delta);
-
-          if (!activeHistory.has_history) {
-            stageEl.innerHTML = '<div class="market-chart-empty">No MTGJSON price history is available yet.<br>Use <strong>Update prices</strong> to import it.</div>';
-          } else if (!priced.length) {
-            stageEl.innerHTML = '<div class="market-chart-empty">There is no priced data in this range.<br>Blank days are preserved when MTGJSON has no value.</div>';
-          } else if (priced.length === 1) {
-            stageEl.innerHTML = '<div class="market-chart-empty">Only one MTGJSON price point is available in this range.</div>';
-          } else {
-            stageEl.innerHTML = buildChart(points);
-          }
-
-          footnoteEl.textContent = `${activeHistory.source.detail} Downloaded ${activeHistory.downloaded_at ? formatDate(activeHistory.downloaded_at) : 'never'}.`;
-        }
-
-        function openModal() {
-          modal.classList.add('open');
-        }
-
-        function closeModal() {
-          modal.classList.remove('open');
-        }
-
-        closeEl.addEventListener('click', closeModal);
-        modal.addEventListener('click', event => {
-          if (event.target === modal) closeModal();
-        });
-        document.addEventListener('keydown', event => {
-          if (event.key === 'Escape') closeModal();
-        });
-
-        // Reset the modal chrome to a fresh "loading" state before a fetch.
-        function resetModalChrome(title, subtitle) {
-          openModal();
-          titleEl.textContent = title;
-          subtitleEl.textContent = subtitle || '';
-          currentEl.textContent = '-';
-          lowEl.textContent = '-';
-          setDelta(null);
-          controlsEl.innerHTML = '';
-          stageEl.innerHTML = '<div class="market-chart-loading">Loading chart...</div>';
-          footnoteEl.textContent = '';
-        }
-
-        // Wire a history response (per-card or portfolio — same payload
-        // shape) into the chart: store it, build the period buttons, render.
-        function renderHistory(data, subtitleFor) {
-          activeHistory = data;
-          if (subtitleFor) subtitleEl.textContent = subtitleFor(data);
-          controlsEl.innerHTML = data.available_periods.map(period => `
-            <button type="button" class="market-chart-range${period === data.default_period ? ' active' : ''}" data-period="${period}">
-              ${period.toUpperCase()}
-            </button>
-          `).join('');
-          controlsEl.querySelectorAll('.market-chart-range').forEach(rangeButton => {
-            rangeButton.addEventListener('click', () => renderPeriod(rangeButton.dataset.period));
-          });
-          renderPeriod(data.default_period || '1m');
-        }
-
-        function loadHistoryError(message) {
-          activeHistory = null;
-          stageEl.innerHTML = `<div class="market-chart-empty">${message}</div>`;
-          footnoteEl.textContent = 'Download history first if MTGJSON data is not available locally.';
-        }
+        const priceChart = window.mtgcompare.priceChart;
+        const formatDate = priceChart.formatDate;
+        const mtgjsonEmpty = 'No MTGJSON price history is available yet.<br>Use <strong>Update prices</strong> to import it.';
+        const mtgjsonFootnote = 'Download history first if MTGJSON data is not available locally.';
 
         // Delegate chart clicks on the wrapper, not the tbody — the
         // tbody is replaced on every filter/sort/pagination fetch, but
@@ -946,11 +467,6 @@
         (mktWrapper || document).addEventListener('click', event => {
           const btn = event.target.closest('.market-chart-trigger');
           if (!btn) return;
-          resetModalChrome(
-            btn.dataset.chartCard,
-            `${btn.dataset.chartSet}${btn.dataset.chartPrinting.toLowerCase() === 'foil' ? ' / Foil' : ' / Non-foil'}`,
-          );
-
           const params = new URLSearchParams({
             card_name: btn.dataset.chartCard,
             set_code: btn.dataset.chartSet,
@@ -958,32 +474,33 @@
             printing: btn.dataset.chartPrinting,
             period: 'all',
           });
-
-          fetch(`${historyUrl}?${params.toString()}`)
-            .then(response => response.json())
-            .then(data => {
-              if (!data.ok) throw new Error(data.error || 'History fetch failed');
-              renderHistory(data, d =>
-                `${d.set_code}${d.card_number ? ` #${d.card_number}` : ''}${d.is_foil ? ' / Foil' : ' / Non-foil'}${d.available_since ? ` / tracking since ${formatDate(d.available_since)}` : ''}`,
-              );
-            })
-            .catch(() => loadHistoryError('Could not load market history for this card.'));
+          priceChart.show({
+            url: `${historyUrl}?${params.toString()}`,
+            title: btn.dataset.chartCard,
+            subtitle: `${btn.dataset.chartSet}${btn.dataset.chartPrinting.toLowerCase() === 'foil' ? ' / Foil' : ' / Non-foil'}`,
+            subtitleFor: d =>
+              `${d.set_code}${d.card_number ? ` #${d.card_number}` : ''}${d.is_foil ? ' / Foil' : ' / Non-foil'}${d.available_since ? ` / tracking since ${formatDate(d.available_since)}` : ''}`,
+            errorMessage: 'Could not load market history for this card.',
+            errorFootnote: mtgjsonFootnote,
+            emptyMessage: mtgjsonEmpty,
+          });
         });
 
         const portfolioBtn = document.getElementById('mkt-portfolio-history-btn');
         if (portfolioBtn) {
           portfolioBtn.addEventListener('click', () => {
-            resetModalChrome('Portfolio total', 'Whole-portfolio value across MTGJSON history');
-            fetch(portfolioHistoryUrl)
-              .then(response => response.json())
-              .then(data => {
-                if (!data.ok) throw new Error(data.error || 'History fetch failed');
-                renderHistory(data, d => {
-                  const since = d.available_since ? ` / since ${formatDate(d.available_since)}` : '';
-                  return `${d.mapped_count} of ${d.lot_count} lot${d.lot_count === 1 ? '' : 's'} tracked${since}`;
-                });
-              })
-              .catch(() => loadHistoryError('Could not load portfolio history.'));
+            priceChart.show({
+              url: portfolioHistoryUrl,
+              title: 'Portfolio total',
+              subtitle: 'Whole-portfolio value across MTGJSON history',
+              subtitleFor: d => {
+                const since = d.available_since ? ` / since ${formatDate(d.available_since)}` : '';
+                return `${d.mapped_count} of ${d.lot_count} lot${d.lot_count === 1 ? '' : 's'} tracked${since}`;
+              },
+              errorMessage: 'Could not load portfolio history.',
+              errorFootnote: mtgjsonFootnote,
+              emptyMessage: mtgjsonEmpty,
+            });
           });
         }
 

@@ -52,6 +52,8 @@ from .scrapers.registry import (
     collect_prices,
     shop_slug,
 )
+from .sealed import repo as sealed_repo
+from .sealed import service as sealed_service
 from .utils import get_fx
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -1006,6 +1008,146 @@ def market_history_portfolio():
     })
 
 
+# --- Sealed products ---------------------------------------------------------
+
+@app.route("/sealed")
+def sealed_page():
+    user_id = _get_user_id()
+    ctx = sealed_service.compute_sealed_ctx(user_id, fx=_get_fx())
+    return render_template("sealed.html", active="sealed", **ctx)
+
+
+def _resolve_sealed_product_or_flash() -> dict | None:
+    name = request.form.get("product", "").strip()
+    if not name:
+        flash("Pick a product.")
+        return None
+    product = sealed_service.resolve_product(name)
+    if not product:
+        flash(f"Unknown product {name!r}. Pick one from the list.")
+    return product
+
+
+@app.route("/sealed/lots", methods=["POST"])
+def sealed_add_lot():
+    user_id = _get_user_id()
+    product = _resolve_sealed_product_or_flash()
+    if not product:
+        return redirect(url_for("sealed_page"))
+    language = request.form.get("language", "EN").strip().upper()
+    currency = request.form.get("currency", "JPY").strip().upper()
+    try:
+        quantity = int(request.form.get("quantity", "1"))
+    except ValueError:
+        quantity = 0
+    if language not in sealed_service.LANGUAGES or currency not in sealed_service.CURRENCIES or quantity < 1:
+        flash("Invalid language, currency or quantity.")
+        return redirect(url_for("sealed_page"))
+    with db.get_conn() as conn:
+        sealed_repo.add_lot(conn, user_id, {
+            "product_uuid": product["uuid"],
+            "language": language,
+            "quantity": quantity,
+            "price_bought": _opt_float(request.form.get("price_bought", "")),
+            "currency": currency,
+            "date_bought": request.form.get("date_bought", "").strip() or None,
+        })
+    sealed_service.ensure_priced(product)
+    app.logger.info("event=sealed_lot_add product=%s quantity=%d", product["uuid"], quantity)
+    flash(f"Added {quantity}x {product['name']} ({language}).")
+    return redirect(url_for("sealed_page"))
+
+
+@app.route("/sealed/lots/<int:lot_id>/delete", methods=["POST"])
+def sealed_delete_lot(lot_id: int):
+    user_id = _get_user_id()
+    with db.get_conn() as conn:
+        deleted = sealed_repo.delete_lot(conn, user_id, lot_id)
+    flash("Lot removed." if deleted else "Lot not found.")
+    return redirect(url_for("sealed_page"))
+
+
+@app.route("/sealed/watch", methods=["POST"])
+def sealed_add_watch():
+    user_id = _get_user_id()
+    product = _resolve_sealed_product_or_flash()
+    if not product:
+        return redirect(url_for("sealed_page"))
+    with db.get_conn() as conn:
+        sealed_repo.add_watch(conn, user_id, product["uuid"], datetime.now(UTC).isoformat(timespec="seconds"))
+    sealed_service.ensure_priced(product)
+    flash(f"Watching {product['name']}.")
+    return redirect(url_for("sealed_page"))
+
+
+@app.route("/sealed/watch/delete", methods=["POST"])
+def sealed_delete_watch():
+    user_id = _get_user_id()
+    with db.get_conn() as conn:
+        sealed_repo.delete_watch(conn, user_id, request.form.get("product_uuid", ""))
+    return redirect(url_for("sealed_page"))
+
+
+@app.route("/sealed/refresh", methods=["POST"])
+def sealed_refresh():
+    """Refresh the catalog (if stale) and every tracked product's price.
+
+    Cheap — one TCGPlayer call per tracked product — so unlike the MTGJSON
+    import it is offered in every mode, not just local.
+    """
+    running = jobs.find_running("sealed")
+    if running:
+        return jsonify({"ok": True, "job_id": running["id"], "already_running": True})
+    job_id = uuid4().hex
+    jobs.init(job_id, kind="sealed")
+
+    def _progress(progress: int, phase: str, detail: str) -> None:
+        jobs.update(job_id, progress=progress, phase=phase, detail=detail)
+
+    def _worker() -> None:
+        try:
+            stats = sealed_service.run_daily_update(progress_cb=_progress)
+            detail = f"Priced {stats['priced']} of {stats['products']} product(s)."
+            if stats["failed"]:
+                detail += f" {stats['failed']} failed."
+            jobs.update(job_id, state="done", progress=100, phase="Done", detail=detail)
+        except Exception as exc:
+            app.logger.exception("event=sealed_refresh_failed job_id=%s", job_id)
+            jobs.update(job_id, state="error", phase="Failed",
+                        detail="Sealed price refresh failed.", error=str(exc))
+
+    Thread(target=_worker, daemon=True).start()
+    return jsonify({"ok": True, "job_id": job_id, "already_running": False})
+
+
+@app.route("/sealed/history")
+def sealed_history():
+    result = sealed_service.product_history(request.args.get("uuid", "").strip())
+    if result is None:
+        return jsonify({"ok": False, "error": "unknown product"}), 404
+    points = result["points"]
+    return jsonify({
+        "ok": True,
+        "product": result["product"],
+        "default_period": "all",
+        "period": "all",
+        "available_periods": list(pricing.MARKET_HISTORY_PERIODS),
+        "period_days": pricing.MARKET_HISTORY_PERIODS,
+        "available_since": points[0]["market_date"] if points else None,
+        "downloaded_at": points[-1]["market_date"] if points else None,
+        "has_history": bool(points),
+        "source": {
+            "label": "TCGPlayer market price",
+            "detail": (
+                "TCGPlayer market price (recent sales, English product). The first"
+                " year is backfilled at weekly resolution, then one point per day."
+            ),
+        },
+        "points": points,
+        "all_points_count": len(points),
+    })
+
+
 _PER_PAGE_CHOICES = (25, 50, 100, 200)
 
 
@@ -1351,6 +1493,12 @@ def cron_update_prices():
                 run_id=run_id, status="failed", duration_ms=duration_ms,
                 error_message=str(exc),
             )
+        # Sealed prices are a separate source with a separate failure
+        # domain: an MTGJSON outage must not skip them, nor they the cards.
+        try:
+            sealed_service.run_daily_update()
+        except Exception:
+            app.logger.exception("Daily sealed price update failed run_id=%s", run_id)
 
     Thread(target=_worker, daemon=True).start()
     return jsonify({

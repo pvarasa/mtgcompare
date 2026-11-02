@@ -1,0 +1,32 @@
+{# Price-history chart modal; driven by static/pricechart.js. #}
+<div id="market-chart-modal" class="market-chart-modal">
+  <div class="market-chart-panel" role="dialog" aria-modal="true" aria-labelledby="market-chart-title">
+    <div class="market-chart-topbar">
+      <div>
+        <div class="market-chart-kicker">Market History</div>
+        <h2 id="market-chart-title" class="market-chart-title">Loading...</h2>
+        <div id="market-chart-subtitle" class="market-chart-subtitle"></div>
+      </div>
+      <button type="button" id="market-chart-close" class="market-chart-close" aria-label="Close chart">x</button>
+    </div>
+    <div class="market-chart-meta">
+      <div class="market-chart-stat">
+        <div class="market-chart-stat-label">Current</div>
+        <div id="market-chart-current" class="market-chart-stat-value">-</div>
+      </div>
+      <div class="market-chart-stat">
+        <div class="market-chart-stat-label">Range Change</div>
+        <div id="market-chart-delta" class="market-chart-stat-value">-</div>
+      </div>
+      <div class="market-chart-stat">
+        <div class="market-chart-stat-label">Range Low</div>
+        <div id="market-chart-low" class="market-chart-stat-value">-</div>
+      </div>
+    </div>
+    <div id="market-chart-controls" class="market-chart-controls"></div>
+    <div id="market-chart-stage" class="market-chart-stage">
+      <div class="market-chart-loading">Loading chart...</div>
+    </div>
+    <div id="market-chart-footnote" class="market-chart-footnote"></div>
+  </div>
+</div>

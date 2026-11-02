@@ -12,3 +12,14 @@
     </svg>
   </button>
 {% endmacro %}
+
+{# Chart trigger for a sealed product row; read by sealed.html's click handler. #}
+{% macro sealed_chart_button(r) -%}
+<button type="button" class="market-chart-trigger" title="Price history" aria-label="Price history for {{ r.name }}"
+        data-uuid="{{ r.uuid }}" data-name="{{ r.name }}" data-meta="{{ r.set_code }} · {{ r.kind }}">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+       stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/>
+  </svg>
+</button>
+{%- endmacro %}

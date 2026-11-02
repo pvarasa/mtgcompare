@@ -65,6 +65,13 @@ Repo-specific guidance for coding sessions.
   differently), `cache.py` (`CachedScrapper` DB-cache wrapper),
   `registry.py` (the `Shop` NamedTuple registry incl. the `marketplace`
   flag + parallel `collect_prices()` fan-out), and one module per shop.
+- `mtgcompare/sealed/`
+  Sealed-product (booster box / pack) tracking, Flask-free. `catalog.py`
+  (MTGJSON `SetList.json` `sealedProduct` → catalog rows), `tcgplayer.py`
+  (market price + history endpoints keyed by TCGPlayer product id, pure
+  parsers + `TcgSealedClient`), `repo.py` (data access for the `sealed_*`
+  tables), `service.py` (catalog/price refresh, backfill, `/sealed` page
+  computation).
 - `mtgcompare/inventory.py`
   Inventory storage and inventory CLI. All public functions accept a `user_id` parameter.
 - `mtgcompare/compare.py`
@@ -199,7 +206,40 @@ The `users` table is keyed on `workos_user_id`; inventory rows continue to key o
 - The Market page does not fetch live prices on GET. Prices are populated via **Update prices** (`POST /market/history/download`), which downloads MTGJSON history and writes the latest price per mapped lot into `market_prices` as a side effect (`pricing.populate_market_prices_from_history`).
 - There is no separate Scryfall refresh; prices come from MTGJSON/TCGPlayer daily data.
 - Market cache keys are `(card_name, normalized set_code, is_foil)`.
-- The Market page serves two price-history charts in one modal (shared SVG renderer in `market.html`): **per-card** (the chart button on each row → `GET /market/history`) and **whole-portfolio** (the *Portfolio history* tile in the summary row → `GET /market/history/portfolio`). The portfolio chart values the *current* inventory at every MTGJSON-priced day via a single DB-side weighted `SUM(qty × price_usd) GROUP BY market_date` (`pricing.compute_portfolio_history` → `PriceHistoryStore.portfolio_value_series`, with lots resolved through the set-scoped `pricing.load_card_map_for_inventory`). It is a deliberate simplification: it ignores when lots were bought/sold and does **not** forward-fill MTGJSON blank days (a day with no priced holding shows blank, same as the per-card chart).
+- The Market page serves two price-history charts in one modal (shared SVG renderer in `static/pricechart.js`, also used by `/sealed`): **per-card** (the chart button on each row → `GET /market/history`) and **whole-portfolio** (the *Portfolio history* tile in the summary row → `GET /market/history/portfolio`). The portfolio chart values the *current* inventory at every MTGJSON-priced day via a single DB-side weighted `SUM(qty × price_usd) GROUP BY market_date` (`pricing.compute_portfolio_history` → `PriceHistoryStore.portfolio_value_series`, with lots resolved through the set-scoped `pricing.load_card_map_for_inventory`). It is a deliberate simplification: it ignores when lots were bought/sold and does **not** forward-fill MTGJSON blank days (a day with no priced holding shows blank, same as the per-card chart).
+
+## Sealed products
+
+- `/sealed` tracks booster boxes and packs, separately from the card
+  inventory: a box has no collector number, foil or condition. Tables:
+  `sealed_products` (global catalog), `sealed_lots` (per user, one row per
+  lot, with language EN/JP and purchase currency JPY/USD), `sealed_watch`
+  (per user), `sealed_prices` (global daily points per product × source ×
+  language, stored in the source's own currency).
+- **Catalog**: MTGJSON `SetList.json` (~12 MB) carries every set's
+  `sealedProduct` with UUID, category/subtype and `tcgplayerProductId`.
+  Only `booster_box` / `booster_pack` are kept. It is reloaded when it is
+  older than 7 days, and rows are upserted, never deleted, because lots
+  reference them.
+- **Prices**: MTGJSON's AllPrices feed has **no** sealed prices, so they
+  come from TCGPlayer by product id. `mpapi…/pricepoints` gives today's
+  market price. On first sight of a product (fewer than 2 points),
+  `infinite-api…/price/history` is backfilled: `annual` gives 52 weekly
+  points, then `month` gives 30 daily ones. All TCGPlayer prices are for
+  the English product. JP lots are valued at that EN reference and flagged
+  `reference_mismatch` in the UI until a JP source (e.g. Hareruya sealed)
+  exists.
+- **Refresh**: the daily cron runs `sealed.service.run_daily_update()` after
+  the card update, in its own try/except so either can fail alone. The
+  page's **Refresh prices** (`POST /sealed/refresh`) runs the same thing as
+  a `jobs` entry of kind `"sealed"`. `jobs.find_running(kind)` keeps it from
+  coalescing with the MTGJSON import. Adding a lot or watch for an unpriced
+  product fetches its prices synchronously (best-effort).
+- The price-history chart modal is shared with `/market`:
+  `templates/_price_chart_modal.html` + `_price_chart_styles.html` +
+  `static/pricechart.js` (`window.mtgcompare.priceChart.show({...})`). The
+  x axis is date-based so the weekly backfill and daily points plot at true
+  spacing.
 
 ## MTGJSON price history
 

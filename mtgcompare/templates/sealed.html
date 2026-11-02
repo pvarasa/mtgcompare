@@ -1,0 +1,336 @@
+{% extends "base.html" %}
+{% from "_macros.html" import sealed_chart_button as chart_button %}
+{% block title %}Sealed - mtgcompare{% endblock %}
+{% block extra_css %}
+  {% include "_price_chart_styles.html" %}
+
+  .sealed-header {
+    display: flex; align-items: flex-start; justify-content: space-between;
+    gap: 1rem; margin-bottom: 1rem; flex-wrap: wrap;
+  }
+  .sealed-header .refresh-info { color: var(--muted); font-size: .85rem; flex: 1 1 18rem; }
+  .sealed-header .refresh-info strong { color: var(--fg); }
+  .sealed-refresh { display: flex; flex-direction: column; gap: .4rem; min-width: 14rem; }
+  .sealed-refresh .detail { color: var(--muted); font-size: .76rem; min-height: 1.1rem; }
+
+  .add-panel {
+    background: var(--bg-alt); border: 1px solid var(--border);
+    border-radius: 8px; padding: 1rem 1rem .9rem; margin-bottom: 1.5rem;
+  }
+  .add-panel h2, .sealed-section h2 {
+    margin: 0 0 .75rem; font-size: .8rem; font-weight: 600; color: var(--muted);
+    text-transform: uppercase; letter-spacing: .05em;
+  }
+  .add-form { display: flex; flex-wrap: wrap; gap: .7rem; align-items: end; }
+  .add-form label {
+    display: flex; flex-direction: column; gap: .2rem; min-width: 0;
+    font-size: .72rem; color: var(--muted); text-transform: uppercase; letter-spacing: .04em;
+  }
+  .add-form input, .add-form select {
+    padding: .45rem .55rem; background: var(--bg); color: var(--fg);
+    border: 1px solid var(--border); border-radius: 5px;
+    font-size: .9rem; font-family: inherit; box-sizing: border-box;
+  }
+  .add-form input:focus, .add-form select:focus { outline: 2px solid var(--gold); border-color: transparent; }
+  .add-form label.grow { flex: 1 1 20rem; }
+  .add-form label.grow > input { width: 100%; }
+  .add-form .w-qty { width: 4.5rem; }
+  .add-form .w-lang, .add-form .w-cur { width: 5.5rem; }
+  .add-form .w-price { width: 7rem; }
+  .add-form .w-date { width: 10rem; }
+  .add-form .actions { flex: 1 1 100%; display: flex; justify-content: flex-end; gap: .5rem; }
+  .add-hint { color: var(--muted); font-size: .78rem; margin: .6rem 0 0; }
+  @media (max-width: 540px) {
+    .add-form { display: grid; grid-template-columns: 1fr 1fr; gap: .6rem; }
+    .add-form label.grow, .add-form .actions { grid-column: 1 / -1; }
+    .add-form .w-qty, .add-form .w-lang, .add-form .w-cur,
+    .add-form .w-price, .add-form .w-date { width: 100%; }
+  }
+
+  .sealed-section { margin-bottom: 1.75rem; }
+  .sealed-table { width: 100%; }
+  .sealed-table td, .sealed-table th { white-space: nowrap; }
+  .sealed-table td.product { white-space: normal; min-width: 14rem; }
+  .product-name { color: var(--fg); }
+  .product-meta { color: var(--muted); font-size: .78rem; }
+  .lang-badge {
+    display: inline-block; font-size: .7rem; font-weight: 600; padding: .05rem .35rem;
+    border: 1px solid var(--border); border-radius: 4px; color: var(--muted);
+  }
+  .lang-badge.ref { border-color: var(--gold); color: var(--gold); cursor: help; }
+  .row-actions { display: flex; gap: .35rem; align-items: center; justify-content: flex-end; }
+  .row-actions form { margin: 0; }
+  .icon-btn {
+    padding: .15rem .5rem; font-size: .8rem; border-color: var(--border); color: var(--muted);
+  }
+  @media (hover: hover) {
+    .icon-btn:hover { color: var(--red); border-color: var(--red); background: transparent; }
+  }
+  .muted { color: var(--muted); }
+{% endblock %}
+{% block content %}
+  <div class="sealed-header">
+    <div class="refresh-info">
+      {% if last_price_date %}
+        Prices as of <strong>{{ last_price_date }}</strong> &middot; TCGPlayer market price.
+      {% else %}
+        No sealed prices yet.
+      {% endif %}
+      {% if fx %}FX JPY {{ '%.2f'|format(fx) }} per $1.{% endif %}
+      <br>
+      {% if catalog %}{{ catalog|length }} booster products in the catalog.{% else %}Catalog not loaded yet: click <strong>Refresh prices</strong>.{% endif %}
+    </div>
+    <div class="sealed-refresh">
+      <button type="button" id="sealed-refresh-btn">Refresh prices</button>
+      <div id="sealed-refresh-detail" class="detail" aria-live="polite"></div>
+    </div>
+  </div>
+
+  <div class="add-panel">
+    <h2>Add a booster box or pack</h2>
+    <form id="sealed-add-form" class="add-form" method="post" action="{{ url_for('sealed_add_lot') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label class="grow">Product
+        <input id="sealed-product" name="product" list="sealed-catalog" required autocomplete="off"
+               placeholder="e.g. Foundations Play Booster Box"{% if not catalog %} disabled{% endif %}>
+      </label>
+      <datalist id="sealed-catalog">
+        {% for p in catalog %}<option value="{{ p.name }}">{{ p.set_code }} · {{ p.kind }}{% if p.release_date %} · {{ p.release_date[:4] }}{% endif %}</option>{% endfor %}
+      </datalist>
+      <label>Lang
+        <select class="w-lang" name="language">
+          {% for l in languages %}<option>{{ l }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>Qty
+        <input class="w-qty" type="number" name="quantity" min="1" max="999" value="1" required>
+      </label>
+      <label>Paid / unit
+        <input class="w-price" type="number" name="price_bought" min="0" step="any" placeholder="optional">
+      </label>
+      <label>Currency
+        <select class="w-cur" name="currency">
+          {% for c in currencies %}<option>{{ c }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>Bought
+        <input class="w-date" type="date" name="date_bought" value="{{ today }}">
+      </label>
+      <div class="actions">
+        <button type="submit" formaction="{{ url_for('sealed_add_watch') }}" formnovalidate
+                id="sealed-watch-btn"{% if not catalog %} disabled{% endif %}>Watch only</button>
+        <button type="submit" id="sealed-add-btn"{% if not catalog %} disabled{% endif %}>Add to holdings</button>
+      </div>
+    </form>
+    <p class="add-hint">Prices are TCGPlayer's market price for the English product. Japanese lots are valued at that English reference for now.</p>
+  </div>
+
+  <section class="sealed-section">
+    <h2>Holdings</h2>
+    {% if not lots %}
+      <div class="empty">No sealed product yet. Add a box above to start tracking its value.</div>
+    {% else %}
+      <div class="mkt-summary-bar">
+        <div class="mkt-stat">
+          <div class="stat-label">Cost basis</div>
+          <div class="stat-value">${{ '{:,.2f}'.format(summary.total_cost_usd) }}</div>
+          <div class="stat-sub">
+            {{ summary.units_total }} unit{{ 's' if summary.units_total != 1 else '' }} in {{ summary.lots_total }} lot{{ 's' if summary.lots_total != 1 else '' }}
+            {% if summary.lots_no_cost %} &middot; {{ summary.lots_no_cost }} uncosted{% endif %}
+          </div>
+        </div>
+        <div class="mkt-stat">
+          <div class="stat-label">Market value</div>
+          <div class="stat-value">${{ '{:,.2f}'.format(summary.total_market_usd) }}</div>
+          <div class="stat-sub">
+            {% if summary.total_market_jpy is not none %}JPY {{ '{:,.0f}'.format(summary.total_market_jpy) }}{% endif %}
+            {% if summary.lots_no_market %} &middot; {{ summary.lots_no_market }} no price{% endif %}
+          </div>
+        </div>
+        <div class="mkt-stat">
+          <div class="stat-label">Unrealized PnL</div>
+          {% set pnl = summary.total_pnl_usd %}
+          <div class="stat-value {% if pnl > 0 %}pnl-up{% elif pnl < 0 %}pnl-down{% endif %}">
+            {% if pnl >= 0 %}+{% endif %}${{ '{:,.2f}'.format(pnl) }}
+          </div>
+          <div class="stat-sub">
+            {% if summary.pnl_pct is not none %}{% if summary.pnl_pct >= 0 %}+{% endif %}{{ summary.pnl_pct }}% on costed lots{% else %}no costed lots{% endif %}
+          </div>
+        </div>
+      </div>
+
+      <div class="table-scroll">
+        <table class="sealed-table" id="sealed-lots-table">
+          <thead>
+            <tr>
+              <th>Product</th><th>Lang</th><th class="num">Qty</th><th class="num">Paid / unit</th>
+              <th class="num">Market / unit</th><th class="num">30d</th><th class="num">Value</th>
+              <th class="num">PnL</th><th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for r in lots %}
+            <tr>
+              <td class="product">
+                <div class="product-name">{{ r.name }}</div>
+                <div class="product-meta">{{ r.set_code }} · {{ r.kind }}{% if r.date_bought %} · bought {{ r.date_bought }}{% endif %}</div>
+              </td>
+              <td>
+                {% if r.reference_mismatch %}
+                  <span class="lang-badge ref" title="Valued at the English TCGPlayer price">{{ r.language }}*</span>
+                {% else %}
+                  <span class="lang-badge">{{ r.language }}</span>
+                {% endif %}
+              </td>
+              <td class="num">{{ r.quantity }}</td>
+              <td class="num">
+                {% if r.price_bought is none %}<span class="muted">-</span>
+                {% elif r.currency == 'JPY' %}¥{{ '{:,.0f}'.format(r.price_bought) }}
+                {% else %}${{ '{:,.2f}'.format(r.price_bought) }}{% endif %}
+              </td>
+              <td class="num">
+                {% if r.market_usd is not none %}
+                  ${{ '{:,.2f}'.format(r.market_usd) }}
+                  {% if r.market_jpy is not none %}<div class="product-meta">¥{{ '{:,.0f}'.format(r.market_jpy) }}</div>{% endif %}
+                {% else %}<span class="muted">no price</span>{% endif %}
+              </td>
+              <td class="num">
+                {% if r.change_pct is not none %}
+                  <span class="{% if r.change_pct > 0 %}pnl-up{% elif r.change_pct < 0 %}pnl-down{% endif %}">{% if r.change_pct > 0 %}+{% endif %}{{ r.change_pct }}%</span>
+                {% else %}<span class="muted">-</span>{% endif %}
+              </td>
+              <td class="num">{% if r.value_usd is not none %}${{ '{:,.2f}'.format(r.value_usd) }}{% else %}<span class="muted">-</span>{% endif %}</td>
+              <td class="num">
+                {% if r.pnl_usd is not none %}
+                  <span class="{% if r.pnl_usd > 0 %}pnl-up{% elif r.pnl_usd < 0 %}pnl-down{% endif %}">
+                    {% if r.pnl_usd >= 0 %}+{% endif %}${{ '{:,.2f}'.format(r.pnl_usd) }}
+                  </span>
+                  {% if r.pnl_pct is not none %}<div class="product-meta">{% if r.pnl_pct >= 0 %}+{% endif %}{{ r.pnl_pct }}%</div>{% endif %}
+                {% else %}<span class="muted">-</span>{% endif %}
+              </td>
+              <td>
+                <div class="row-actions">
+                  {{ chart_button(r) }}
+                  <form method="post" action="{{ url_for('sealed_delete_lot', lot_id=r.id) }}"
+                        onsubmit="return confirm('Remove this lot?');">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button type="submit" class="icon-btn" title="Remove lot" aria-label="Remove lot">✕</button>
+                  </form>
+                </div>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% endif %}
+  </section>
+
+  <section class="sealed-section">
+    <h2>Watchlist</h2>
+    {% if not watch %}
+      <div class="empty">Nothing watched. Use <strong>Watch only</strong> to track a product you don't own.</div>
+    {% else %}
+      <div class="table-scroll">
+        <table class="sealed-table" id="sealed-watch-table">
+          <thead>
+            <tr><th>Product</th><th class="num">Market</th><th class="num">JPY</th><th class="num">30d</th><th class="num">As of</th><th></th></tr>
+          </thead>
+          <tbody>
+            {% for r in watch %}
+            <tr>
+              <td class="product">
+                <div class="product-name">{{ r.name }}</div>
+                <div class="product-meta">{{ r.set_code }} · {{ r.kind }}</div>
+              </td>
+              <td class="num">{% if r.market_usd is not none %}${{ '{:,.2f}'.format(r.market_usd) }}{% else %}<span class="muted">no price</span>{% endif %}</td>
+              <td class="num">{% if r.market_jpy is not none %}¥{{ '{:,.0f}'.format(r.market_jpy) }}{% else %}<span class="muted">-</span>{% endif %}</td>
+              <td class="num">
+                {% if r.change_pct is not none %}
+                  <span class="{% if r.change_pct > 0 %}pnl-up{% elif r.change_pct < 0 %}pnl-down{% endif %}">{% if r.change_pct > 0 %}+{% endif %}{{ r.change_pct }}%</span>
+                {% else %}<span class="muted">-</span>{% endif %}
+              </td>
+              <td class="num muted">{{ r.market_date or '-' }}</td>
+              <td>
+                <div class="row-actions">
+                  {{ chart_button(r) }}
+                  <form method="post" action="{{ url_for('sealed_delete_watch') }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="product_uuid" value="{{ r.uuid }}">
+                    <button type="submit" class="icon-btn" title="Stop watching" aria-label="Stop watching">✕</button>
+                  </form>
+                </div>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% endif %}
+  </section>
+
+  {% include "_price_chart_modal.html" %}
+
+  <script src="{{ url_for('static', filename='pricechart.js') }}?v={{ static_token }}"></script>
+  <script>
+    (function () {
+      const historyUrl = {{ url_for('sealed_history')|tojson }};
+      const refreshUrl = {{ url_for('sealed_refresh')|tojson }};
+      const statusUrl = {{ url_for('market_history_download_status')|tojson }};
+      const priceChart = window.mtgcompare.priceChart;
+
+      document.addEventListener('click', event => {
+        const btn = event.target.closest('.market-chart-trigger');
+        if (!btn) return;
+        priceChart.show({
+          url: `${historyUrl}?${new URLSearchParams({ uuid: btn.dataset.uuid })}`,
+          title: btn.dataset.name,
+          subtitle: btn.dataset.meta,
+          subtitleFor: d => `${btn.dataset.meta}${d.available_since ? ` / tracking since ${priceChart.formatDate(d.available_since)}` : ''}`,
+          errorMessage: 'Could not load price history for this product.',
+          emptyMessage: 'No price history yet. Use <strong>Refresh prices</strong> to fetch it.',
+        });
+      });
+
+      // Refresh: POST starts a background job; poll its status until done.
+      const refreshBtn = document.getElementById('sealed-refresh-btn');
+      const detailEl = document.getElementById('sealed-refresh-detail');
+      let poll = null;
+      function finish(text) {
+        if (poll) { clearInterval(poll); poll = null; }
+        refreshBtn.disabled = false;
+        refreshBtn.textContent = 'Refresh prices';
+        detailEl.textContent = text;
+      }
+      function check(jobId) {
+        fetch(`${statusUrl}?job_id=${encodeURIComponent(jobId)}`)
+          .then(r => r.json())
+          .then(job => {
+            if (!job.ok) throw new Error(job.error || 'Status fetch failed');
+            detailEl.textContent = `${job.progress || 0}% · ${job.detail || job.phase || ''}`;
+            if (job.state === 'done') {
+              finish(job.detail || 'Done.');
+              window.setTimeout(() => window.location.reload(), 900);
+            } else if (job.state === 'error') {
+              finish(job.error || job.detail || 'Refresh failed.');
+            }
+          })
+          .catch(() => finish('Could not read refresh status.'));
+      }
+      refreshBtn.addEventListener('click', () => {
+        refreshBtn.disabled = true;
+        refreshBtn.textContent = 'Refreshing...';
+        detailEl.textContent = 'Starting...';
+        const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
+        fetch(refreshUrl, { method: 'POST', headers: { 'X-Requested-With': 'fetch', 'X-CSRFToken': csrf } })
+          .then(r => r.json())
+          .then(data => {
+            if (!data.ok) throw new Error(data.error || 'Could not start refresh');
+            check(data.job_id);
+            poll = window.setInterval(() => check(data.job_id), 1000);
+          })
+          .catch(err => finish(err.message || 'Could not start refresh.'));
+      });
+    })();
+  </script>
+{% endblock %}

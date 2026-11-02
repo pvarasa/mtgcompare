@@ -16,10 +16,11 @@ _jobs: dict[str, dict] = {}
 _lock = Lock()
 
 
-def init(job_id: str) -> None:
+def init(job_id: str, kind: str = "mtgjson") -> None:
     with _lock:
         _jobs[job_id] = {
             "id": job_id,
+            "kind": kind,
             "state": "running",
             "phase": "Queued",
             "detail": "Waiting to start...",
@@ -44,12 +45,17 @@ def get(job_id: str) -> dict | None:
         return dict(job) if job else None
 
 
-def find_running() -> dict | None:
-    """Return a copy of the currently-running job, or None.
+def find_running(kind: str = "mtgjson") -> dict | None:
+    """Return a copy of the currently-running job of ``kind``, or None.
 
     Used to coalesce concurrent download/cron triggers onto the single
-    in-flight import rather than starting a second one.
+    in-flight import rather than starting a second one. Kinds keep a
+    sealed-price refresh (``"sealed"``) from being mistaken for the MTGJSON
+    import and vice versa.
     """
     with _lock:
-        running = next((j for j in _jobs.values() if j["state"] == "running"), None)
+        running = next(
+            (j for j in _jobs.values() if j["state"] == "running" and j.get("kind") == kind),
+            None,
+        )
         return dict(running) if running else None

@@ -232,6 +232,66 @@ _shop_query_log = Table(
 )
 
 
+# --- Sealed product tracking ------------------------------------------------
+# A separate model from the card inventory: a booster box has no collector
+# number / foil / condition, and every card table is keyed on those.
+
+# Catalog of trackable sealed products, sourced from MTGJSON SetList.json
+# (`sealedProduct`). Global, refreshed weekly; rows are never deleted
+# because lots reference them.
+_sealed_products = Table(
+    "sealed_products", metadata,
+    Column("uuid", Text, primary_key=True),
+    Column("set_code", Text, nullable=False),
+    Column("set_name", Text),
+    Column("name", Text, nullable=False),
+    Column("category", Text, nullable=False),   # booster_box / booster_pack
+    Column("subtype", Text),                    # draft / set / collector / play ...
+    Column("release_date", Text),
+    Column("tcgplayer_product_id", Integer),
+    Column("updated_at", Text, nullable=False),
+)
+Index("idx_sealed_products_name", _sealed_products.c.name)
+
+# One row per owned lot (same "lot, not printing" rule as `inventory`).
+# Language matters: a JP and an EN box of one set trade at different prices.
+_sealed_lots = Table(
+    "sealed_lots", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("user_id", Text, nullable=False, server_default="local"),
+    Column("product_uuid", Text, nullable=False),
+    Column("language", Text, nullable=False, server_default="EN"),
+    Column("quantity", Integer, nullable=False),
+    Column("price_bought", Numeric(12, 2)),
+    Column("currency", Text, nullable=False, server_default="JPY"),
+    Column("date_bought", Text),
+)
+Index("idx_sealed_lots_user", _sealed_lots.c.user_id)
+
+# Products a user tracks without owning them.
+_sealed_watch = Table(
+    "sealed_watch", metadata,
+    Column("user_id", Text, nullable=False),
+    Column("product_uuid", Text, nullable=False),
+    Column("created_at", Text, nullable=False),
+    PrimaryKeyConstraint("user_id", "product_uuid"),
+)
+
+# Daily price points per product × source × language. Small (a few hundred
+# products), so no price_rows-style covering index is needed. Price is kept
+# in the source's own currency and converted at render time.
+_sealed_prices = Table(
+    "sealed_prices", metadata,
+    Column("product_uuid", Text, nullable=False),
+    Column("source", Text, nullable=False),
+    Column("language", Text, nullable=False, server_default="EN"),
+    Column("market_date", Date, nullable=False),
+    Column("price", Numeric(12, 2), nullable=False),
+    Column("currency", Text, nullable=False),
+    PrimaryKeyConstraint("product_uuid", "source", "language", "market_date"),
+)
+
+
 def row_to_dict(row) -> dict:
     """Convert a SQLAlchemy RowMapping to a plain dict.
 
