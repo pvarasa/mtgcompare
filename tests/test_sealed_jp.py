@@ -52,7 +52,7 @@ def _by_set(rows=CATALOG):
 
 
 def _hareruya_listings():
-    docs = json.loads((FIXTURES / "hareruya_sealed_docs.json").read_text())["docs"]
+    docs = json.loads((FIXTURES / "hareruya_sealed_docs.json").read_text(encoding="utf-8"))["docs"]
     return jp_shops.hareruya_listings_from_docs(docs)
 
 

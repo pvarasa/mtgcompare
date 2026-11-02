@@ -40,13 +40,15 @@ def test_mode_toggle_shows_and_hides_panels(e2e_base_url, page):
     assert decklist_panel.is_hidden()
 
 
-def test_shipping_toggle_syncs_hidden_input_and_panel(e2e_base_url, page):
+def test_shipping_toggle_syncs_hidden_input_and_panel(e2e_base_url, page, stub_search):
     """A2: the user-facing checkbox toggles the hidden `shipping` input
     that actually gets submitted. Without sync, the user thinks they're
     enabling shipping but the server sees `shipping=0`.
 
     Asserts the form actually serializes the right values by waiting for
-    the navigation triggered by submit and reading the URL.
+    the navigation triggered by submit and reading the URL. ``stub_search``
+    keeps the `?q=` page load off the live shops: one slow shop used to
+    push it past Playwright's 30 s navigation timeout in CI.
     """
     page.goto(f"{e2e_base_url}/?q=Sol+Ring")
 
@@ -72,7 +74,7 @@ def test_shipping_toggle_syncs_hidden_input_and_panel(e2e_base_url, page):
         page.locator('#panel-single button[type="submit"]').click()
 
 
-def test_shop_filter_chips_select_all_none_and_submit(e2e_base_url, page):
+def test_shop_filter_chips_select_all_none_and_submit(e2e_base_url, page, stub_search):
     """A3: filter-shops toggle reveals the panel, sets the hidden flag to 1,
     and the per-shop checkboxes drive the summary + the submitted query.
     All / None bulk buttons must check or uncheck every chip.
