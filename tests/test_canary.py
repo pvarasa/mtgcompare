@@ -162,3 +162,36 @@ def test_mtgjson_setlist_has_sealed_boosters():
     rows = parse_setlist(fetch_setlist(), updated_at="canary")
     boxes = [r for r in rows if r["category"] == "booster_box" and r["tcgplayer_product_id"]]
     assert len(boxes) >= 200, f"SetList.json yielded only {len(boxes)} priced booster boxes"
+
+
+def _sealed_catalog_by_set():
+    from mtgcompare.sealed.catalog import fetch_setlist, parse_setlist
+    by_set: dict[str, list[dict]] = {}
+    for row in parse_setlist(fetch_setlist(), updated_at="canary"):
+        by_set.setdefault(row["set_code"], []).append(row)
+    return by_set
+
+
+@pytest.mark.canary
+def test_hareruya_sealed_crawl_matches_catalog():
+    from mtgcompare.sealed import jp_shops
+    listings = jp_shops.crawl_hareruya()
+    offers, stats = jp_shops.best_offers(
+        jp_shops.HARERUYA, listings, _sealed_catalog_by_set(), jp_shops.hareruya_set_names(listings),
+    )
+    # 2026-11: ~970 parsed titles, all matched, ~240 in stock.
+    assert stats["parsed"] >= 500, f"Hareruya sealed titles stopped parsing: {stats}"
+    assert stats["matched"] >= 0.9 * stats["parsed"], f"Hareruya sealed match rate dropped: {stats}"
+    assert len(offers) >= 50, f"Hareruya sealed in-stock offers suspiciously few: {stats}"
+
+
+@pytest.mark.canary
+def test_singlestar_sealed_crawl_matches_catalog():
+    from mtgcompare.sealed import jp_shops
+    listings = jp_shops.crawl_singlestar()
+    names = jp_shops.hareruya_set_names(jp_shops.crawl_hareruya())
+    offers, stats = jp_shops.best_offers(jp_shops.SINGLESTAR, listings, _sealed_catalog_by_set(), names)
+    # 2026-11: ~400 parsed booster titles, ~97% matched.
+    assert stats["parsed"] >= 200, f"SingleStar sealed titles stopped parsing: {stats}"
+    assert stats["matched"] >= 0.85 * stats["parsed"], f"SingleStar sealed match rate dropped: {stats}"
+    assert len(offers) >= 50, f"SingleStar sealed in-stock offers suspiciously few: {stats}"

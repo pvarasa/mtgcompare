@@ -70,8 +70,10 @@ Repo-specific guidance for coding sessions.
   (MTGJSON `SetList.json` `sealedProduct` → catalog rows), `tcgplayer.py`
   (market price + history endpoints keyed by TCGPlayer product id, pure
   parsers + `TcgSealedClient`), `repo.py` (data access for the `sealed_*`
-  tables), `service.py` (catalog/price refresh, backfill, `/sealed` page
-  computation).
+  tables), `jp_titles.py` (pure parsing of Japanese shop titles + catalog
+  matching), `jp_shops.py` (Hareruya / SingleStar sealed crawlers and
+  cheapest-offer selection), `service.py` (catalog/price refresh, backfill,
+  `/sealed` page computation).
 - `mtgcompare/inventory.py`
   Inventory storage and inventory CLI. All public functions accept a `user_id` parameter.
 - `mtgcompare/compare.py`
@@ -226,11 +228,29 @@ The `users` table is keyed on `workos_user_id`; inventory rows continue to key o
   market price. On first sight of a product (fewer than 2 points),
   `infinite-api…/price/history` is backfilled: `annual` gives 52 weekly
   points, then `month` gives 30 daily ones. All TCGPlayer prices are for
-  the English product. JP lots are valued at that EN reference and flagged
-  `reference_mismatch` in the UI until a JP source (e.g. Hareruya sealed)
-  exists.
-- **Refresh**: the daily cron runs `sealed.service.run_daily_update()` after
-  the card update, in its own try/except so either can fail alone. The
+  the English product.
+- **Japanese shops** (`sealed/jp_shops.py`): each refresh crawls Hareruya's
+  whole sealed listing (two keyword searches through its unisearch JSON API)
+  and SingleStar's 未開封BOX category (1427, slow: up to ~50 s per cold
+  page). `jp_titles` parses each title into set / booster type / box or
+  pack / language and matches the catalog by set + category + subtype.
+  Untyped boosters try `draft`, `default`, `jumpstart` and `premium`. Several
+  candidates resolve to the shortest name; Japan-only editions win for JP
+  listings. Hareruya titles carry set codes (three codes are aliased to
+  MTGJSON's). SingleStar titles don't, so they resolve through a Japanese
+  set-name → code map learned from Hareruya titles and persisted in
+  `app_meta` (`sealed_jp_set_names`), with the hex-encoded image path's set
+  code as a fallback. MTGJSON has no Japanese set names. Only in-stock
+  offers are recorded (cheapest per product × language, with url + stock),
+  for every matched product, not just tracked ones.
+- **Valuation**: EN lots use TCGPlayer. JP lots use the cheapest
+  Japanese-language shop offer seen in the last `SHOP_FRESH_DAYS` (7);
+  older points mean the product sold out. With no such offer, a JP lot
+  falls back to the EN TCGPlayer price and is flagged `reference_mismatch`
+  (JP* in the UI). Shop prices are asking prices, not sales.
+- **Refresh**: the daily cron runs `sealed.service.run_daily_update()`
+  (catalog → TCGPlayer → shops, each shop isolated) after the card update,
+  in its own try/except so either can fail alone. The
   page's **Refresh prices** (`POST /sealed/refresh`) runs the same thing as
   a `jobs` entry of kind `"sealed"`. `jobs.find_running(kind)` keeps it from
   coalescing with the MTGJSON import. Adding a lot or watch for an unpriced
@@ -239,7 +259,9 @@ The `users` table is keyed on `workos_user_id`; inventory rows continue to key o
   `templates/_price_chart_modal.html` + `_price_chart_styles.html` +
   `static/pricechart.js` (`window.mtgcompare.priceChart.show({...})`). The
   x axis is date-based so the weekly backfill and daily points plot at true
-  spacing.
+  spacing. `/sealed/history?series=<source>:<LANG>` picks the series. The
+  payload's `series_options` + the caller's `seriesUrl` render a picker, and
+  `currency: "JPY"` switches formatting to yen.
 
 ## MTGJSON price history
 

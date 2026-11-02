@@ -75,3 +75,30 @@ def test_watch_only_adds_to_watchlist(e2e_base_url, sealed_env, page):
     page.click("#sealed-watch-btn")
     page.locator("#sealed-watch-table tbody tr").first.wait_for(timeout=5000)
     assert page.locator("#sealed-lots-table").count() == 0
+
+
+def test_chart_series_picker_switches_to_shop_in_yen(e2e_base_url, sealed_env, page):
+    today = datetime.now(UTC).date()
+    with db_module.get_conn() as conn:
+        repo.add_watch(conn, "local", _PRODUCT["uuid"], "t")
+        repo.upsert_prices(conn, [
+            {"product_uuid": _PRODUCT["uuid"], "source": src, "language": lang, "market_date": d,
+             "price": price, "currency": cur, "url": None, "stock": None}
+            for src, lang, cur, d, price in [
+                ("tcgplayer", "EN", "USD", today - timedelta(days=3), 140.0),
+                ("tcgplayer", "EN", "USD", today, 150.0),
+                ("hareruya", "JP", "JPY", today - timedelta(days=3), 19800),
+                ("hareruya", "JP", "JPY", today, 18900),
+            ]
+        ])
+    page.goto(f"{e2e_base_url}/sealed")
+    page.locator("#sealed-watch-table .market-chart-trigger").click()
+    page.locator("#market-chart-stage svg").wait_for(timeout=3000)
+    assert page.locator("#market-chart-current").inner_text() == "$150.00"
+
+    page.locator("#market-chart-series button", has_text="Hareruya (JP)").click()
+    page.locator('#market-chart-series button.active', has_text="Hareruya (JP)").wait_for(timeout=3000)
+    page.wait_for_function(
+        "() => document.getElementById('market-chart-current').textContent === '¥18,900'", timeout=3000,
+    )
+    assert page.locator("#market-chart-delta").inner_text() == "-¥900"

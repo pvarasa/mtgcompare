@@ -296,9 +296,21 @@ Each row shows today's price, its change over the last **30 days**, and
 your profit or loss. The **chart button** opens the price history, the same
 chart as on the Market tab.
 
-Prices are TCGPlayer's market price for the **English** product, updated
-once a day. **Refresh prices** fetches them now. Japanese boxes are marked
-**JP\*** because they are valued at the English price for now.
+How a lot is valued depends on its language:
+
+- **English** lots use TCGPlayer's market price (what boxes recently sold for
+  in the US).
+- **Japanese** lots use the cheapest in-stock Japanese-language box at
+  **Hareruya** or **SingleStar**. If neither has it in stock, the English
+  TCGPlayer price is used instead and the lot is marked **JP\***.
+
+**Cheapest in Japan** shows the lowest in-stock price at those two shops for
+the same language, with a link to the shop's page. In the watchlist you see
+both languages side by side. The shop prices are what the shops are asking,
+not what boxes sold for.
+
+Prices update once a day; **Refresh prices** fetches them now. In the chart,
+the buttons above the time ranges switch between TCGPlayer and each shop.
 
 ---
 

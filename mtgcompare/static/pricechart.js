@@ -6,6 +6,9 @@
 // with a history endpoint whose payload has the /market/history shape:
 //   { ok, points: [{market_date, price_usd|null}], available_periods,
 //     period_days, default_period, has_history, source: {detail}, downloaded_at }
+// Optional extras (used by /sealed/history): `currency` ("USD" | "JPY",
+// points then carry `price`), and `series_options` [{key, label}] + `series`,
+// rendered as a picker that re-fetches via the caller's `seriesUrl(key)`.
 //
 // X positions are by date, not by point index: the card history is dense
 // daily (where the two are the same) but sealed history mixes a weekly
@@ -19,15 +22,20 @@
   const deltaEl = document.getElementById('market-chart-delta');
   const lowEl = document.getElementById('market-chart-low');
   const controlsEl = document.getElementById('market-chart-controls');
+  const seriesEl = document.getElementById('market-chart-series');
   const stageEl = document.getElementById('market-chart-stage');
   const footnoteEl = document.getElementById('market-chart-footnote');
   const closeEl = document.getElementById('market-chart-close');
 
   const DAY_MS = 24 * 60 * 60 * 1000;
   let activeHistory = null;
+  let activeOpts = null;
 
-  function formatUsd(value) {
+  const val = point => (point.price !== undefined ? point.price : point.price_usd);
+
+  function formatMoney(value) {
     if (value == null || Number.isNaN(value)) return '-';
+    if (activeHistory && activeHistory.currency === 'JPY') return `¥${Math.round(value).toLocaleString()}`;
     return `$${value.toFixed(2)}`;
   }
 
@@ -47,11 +55,11 @@
   }
 
   function summarize(points) {
-    const priced = points.filter(point => point.price_usd != null);
+    const priced = points.filter(point => val(point) != null);
     if (!priced.length) return { current: null, delta: null, low: null };
-    const current = priced[priced.length - 1].price_usd;
-    const low = Math.min.apply(null, priced.map(point => point.price_usd));
-    return { current, delta: current - priced[0].price_usd, low };
+    const current = val(priced[priced.length - 1]);
+    const low = Math.min.apply(null, priced.map(val));
+    return { current, delta: current - val(priced[0]), low };
   }
 
   function setDelta(delta) {
@@ -60,8 +68,8 @@
       deltaEl.className = 'market-chart-stat-value';
       return;
     }
-    const sign = delta > 0 ? '+' : '';
-    deltaEl.textContent = `${sign}$${delta.toFixed(2)}`;
+    const sign = delta > 0 ? '+' : (delta < 0 ? '-' : '');
+    deltaEl.textContent = `${sign}${formatMoney(Math.abs(delta))}`;
     deltaEl.className = `market-chart-stat-value ${delta > 0 ? 'positive' : (delta < 0 ? 'negative' : '')}`.trim();
   }
 
@@ -69,7 +77,7 @@
     const times = points.map(point => new Date(point.market_date).getTime());
     const priced = points
       .map((point, index) => ({ ...point, t: times[index] }))
-      .filter(point => point.price_usd != null);
+      .filter(point => val(point) != null);
     if (priced.length < 2) return '';
 
     const width = 760;
@@ -77,7 +85,7 @@
     const pad = { top: 18, right: 18, bottom: 34, left: 58 };
     const innerWidth = width - pad.left - pad.right;
     const innerHeight = height - pad.top - pad.bottom;
-    const values = priced.map(point => point.price_usd);
+    const values = priced.map(val);
     const min = Math.min.apply(null, values);
     const max = Math.max.apply(null, values);
     const spread = Math.max(max - min, Math.max(max * 0.08, 0.25));
@@ -93,12 +101,12 @@
     const segments = [];
     let currentSegment = [];
     points.forEach((point, index) => {
-      if (point.price_usd == null) {
+      if (val(point) == null) {
         if (currentSegment.length) segments.push(currentSegment);
         currentSegment = [];
         return;
       }
-      currentSegment.push({ x: xFor(times[index]), y: yFor(point.price_usd) });
+      currentSegment.push({ x: xFor(times[index]), y: yFor(val(point)) });
     });
     if (currentSegment.length) segments.push(currentSegment);
 
@@ -123,7 +131,7 @@
       const y = yFor(value).toFixed(2);
       return `
         <line class="market-chart-grid" x1="${pad.left}" y1="${y}" x2="${width - pad.right}" y2="${y}"></line>
-        <text class="market-chart-axis" x="${pad.left - 8}" y="${Number(y) + 4}" text-anchor="end">$${value.toFixed(2)}</text>
+        <text class="market-chart-axis" x="${pad.left - 8}" y="${Number(y) + 4}" text-anchor="end">${formatMoney(value)}</text>
       `;
     }).join('');
 
@@ -132,7 +140,7 @@
     `).join('');
 
     const dotMarkup = priced.map((point, index) => `
-      <circle cx="${xFor(point.t).toFixed(2)}" cy="${yFor(point.price_usd).toFixed(2)}" r="${index === priced.length - 1 ? 4.5 : 3.2}" fill="${index === priced.length - 1 ? '#c9a84c' : '#5a9fd4'}"></circle>
+      <circle cx="${xFor(point.t).toFixed(2)}" cy="${yFor(val(point)).toFixed(2)}" r="${index === priced.length - 1 ? 4.5 : 3.2}" fill="${index === priced.length - 1 ? '#c9a84c' : '#5a9fd4'}"></circle>
     `).join('');
 
     return `
@@ -162,10 +170,10 @@
     });
 
     const points = slicePoints(activeHistory.points, period);
-    const priced = points.filter(point => point.price_usd != null);
+    const priced = points.filter(point => val(point) != null);
     const stats = summarize(points);
-    currentEl.textContent = formatUsd(stats.current);
-    lowEl.textContent = formatUsd(stats.low);
+    currentEl.textContent = formatMoney(stats.current);
+    lowEl.textContent = formatMoney(stats.low);
     setDelta(stats.delta);
 
     if (!activeHistory.has_history) {
@@ -200,6 +208,7 @@
     lowEl.textContent = '-';
     setDelta(null);
     controlsEl.innerHTML = '';
+    if (seriesEl) seriesEl.innerHTML = '';
     stageEl.innerHTML = '<div class="market-chart-loading">Loading chart...</div>';
     footnoteEl.textContent = '';
   }
@@ -215,7 +224,33 @@
     controlsEl.querySelectorAll('.market-chart-range').forEach(rangeButton => {
       rangeButton.addEventListener('click', () => renderPeriod(rangeButton.dataset.period));
     });
+    renderSeriesPicker(data);
     renderPeriod(data.default_period || '1m');
+  }
+
+  function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+  }
+
+  function renderSeriesPicker(data) {
+    if (!seriesEl) return;
+    const options = data.series_options || [];
+    if (options.length < 2 || !(activeOpts && activeOpts.seriesUrl)) {
+      seriesEl.innerHTML = '';
+      return;
+    }
+    seriesEl.innerHTML = options.map(option => `
+      <button type="button" class="market-chart-range market-chart-series-btn${option.key === data.series ? ' active' : ''}"
+              data-series="${escapeHtml(option.key)}">${escapeHtml(option.label)}</button>
+    `).join('');
+    seriesEl.querySelectorAll('.market-chart-series-btn').forEach(button => {
+      button.addEventListener('click', () => {
+        if (button.dataset.series === data.series) return;
+        show({ ...activeOpts, url: activeOpts.seriesUrl(button.dataset.series) });
+      });
+    });
   }
 
   function showError(message, footnote) {
@@ -224,7 +259,9 @@
     footnoteEl.textContent = footnote || '';
   }
 
-  function show({ url, title, subtitle, subtitleFor, errorMessage, errorFootnote, emptyMessage }) {
+  function show(opts) {
+    const { url, title, subtitle, subtitleFor, errorMessage, errorFootnote, emptyMessage } = opts;
+    activeOpts = opts;
     resetModalChrome(title, subtitle);
     return fetch(url)
       .then(response => response.json())

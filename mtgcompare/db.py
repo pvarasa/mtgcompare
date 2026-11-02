@@ -288,6 +288,10 @@ _sealed_prices = Table(
     Column("market_date", Date, nullable=False),
     Column("price", Numeric(12, 2), nullable=False),
     Column("currency", Text, nullable=False),
+    # Shop sources: the cheapest in-stock offer's page and stock count.
+    # NULL for TCGPlayer (a market price, not an offer).
+    Column("url", Text),
+    Column("stock", Integer),
     PrimaryKeyConstraint("product_uuid", "source", "language", "market_date"),
 )
 
@@ -411,6 +415,10 @@ def _migrate(conn) -> None:
         ))
         conn.execute(text("DROP INDEX IF EXISTS price_rows_uuid_date"))
 
+        # sealed_prices shipped (to stg, sharing this DB) before url/stock.
+        conn.execute(text("ALTER TABLE sealed_prices ADD COLUMN IF NOT EXISTS url TEXT"))
+        conn.execute(text("ALTER TABLE sealed_prices ADD COLUMN IF NOT EXISTS stock INTEGER"))
+
     else:
         cols = {r[1] for r in conn.execute(text("PRAGMA table_info(inventory)")).fetchall()}
         if "user_id" not in cols:
@@ -426,6 +434,12 @@ def _migrate(conn) -> None:
         for col in ("variant", "card_number"):
             if col not in cols:
                 conn.execute(text(f"ALTER TABLE shop_listings ADD COLUMN {col} TEXT"))
+
+        cols = {r[1] for r in conn.execute(text("PRAGMA table_info(sealed_prices)")).fetchall()}
+        if "url" not in cols:
+            conn.execute(text("ALTER TABLE sealed_prices ADD COLUMN url TEXT"))
+        if "stock" not in cols:
+            conn.execute(text("ALTER TABLE sealed_prices ADD COLUMN stock INTEGER"))
 
 
 def init_schema() -> None:

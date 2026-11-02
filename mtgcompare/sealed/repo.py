@@ -148,38 +148,54 @@ def price_counts(conn, uuids: list[str], source: str) -> dict[str, int]:
     return {r[0]: int(r[1]) for r in rows}
 
 
-def latest_prices(
-    conn, uuids: list[str], source: str, *, on_or_before: str | None = None,
-) -> dict[str, dict]:
-    """``{uuid: {market_date, price, currency}}`` — the newest point per
-    product, optionally capped at a date (for "N days ago" comparisons)."""
+def latest_points(
+    conn, uuids: list[str], *, on_or_before: str | None = None,
+) -> dict[tuple[str, str, str], dict]:
+    """``{(uuid, source, language): point}`` — the newest point of every
+    series of the given products, optionally capped at a date (for "N days
+    ago" comparisons). A point is ``{market_date, price, currency, url, stock}``."""
     if not uuids:
         return {}
     sql = text(
-        "SELECT p.product_uuid, p.market_date, p.price, p.currency"
+        "SELECT p.product_uuid, p.source, p.language, p.market_date, p.price,"
+        " p.currency, p.url, p.stock"
         " FROM sealed_prices p JOIN ("
-        "   SELECT product_uuid, MAX(market_date) AS md FROM sealed_prices"
-        "   WHERE source = :s AND product_uuid IN :uuids AND market_date <= :cap"
-        "   GROUP BY product_uuid"
-        " ) m ON m.product_uuid = p.product_uuid AND m.md = p.market_date"
-        " WHERE p.source = :s"
+        "   SELECT product_uuid, source, language, MAX(market_date) AS md"
+        "   FROM sealed_prices"
+        "   WHERE product_uuid IN :uuids AND market_date <= :cap"
+        "   GROUP BY product_uuid, source, language"
+        " ) m ON m.product_uuid = p.product_uuid AND m.source = p.source"
+        "   AND m.language = p.language AND m.md = p.market_date"
     ).bindparams(bindparam("uuids", expanding=True))
-    params = {"s": source, "uuids": list(uuids), "cap": on_or_before or "9999-12-31"}
-    out: dict[str, dict] = {}
+    params = {"uuids": list(uuids), "cap": on_or_before or "9999-12-31"}
+    out: dict[tuple[str, str, str], dict] = {}
     for r in conn.execute(sql, params).mappings():
-        out[r["product_uuid"]] = {
+        out[(r["product_uuid"], r["source"], r["language"])] = {
             "market_date": _iso(r["market_date"]),
             "price": float(r["price"]),
             "currency": r["currency"],
+            "url": r["url"],
+            "stock": r["stock"],
         }
     return out
 
 
-def price_history(conn, uuid: str, source: str) -> list[dict]:
+def list_series(conn, uuid: str) -> list[dict]:
+    """Every (source, language) series a product has, with point counts."""
+    rows = conn.execute(text(
+        "SELECT source, language, currency, COUNT(*) AS n FROM sealed_prices"
+        " WHERE product_uuid = :u GROUP BY source, language, currency"
+        " ORDER BY source, language"
+    ), {"u": uuid}).mappings().fetchall()
+    return [dict(r) for r in rows]
+
+
+def price_history(conn, uuid: str, source: str, language: str = "EN") -> list[dict]:
     rows = conn.execute(text(
         "SELECT market_date, price, currency FROM sealed_prices"
-        " WHERE product_uuid = :u AND source = :s ORDER BY market_date"
-    ), {"u": uuid, "s": source}).mappings().fetchall()
+        " WHERE product_uuid = :u AND source = :s AND language = :l"
+        " ORDER BY market_date"
+    ), {"u": uuid, "s": source, "l": language}).mappings().fetchall()
     return [
         {"market_date": _iso(r["market_date"]), "price": float(r["price"]), "currency": r["currency"]}
         for r in rows

@@ -238,7 +238,7 @@ def test_watch_add_remove_and_history(client, seeded):
 
     hist = client.get("/sealed/history?uuid=box-1").get_json()
     assert hist["ok"] and hist["has_history"]
-    assert hist["points"][-1]["price_usd"] == 120.0
+    assert hist["points"][-1]["price"] == 120.0
     assert client.get("/sealed/history?uuid=nope").status_code == 404
 
     client.post("/sealed/watch/delete", data={"product_uuid": "box-1"})

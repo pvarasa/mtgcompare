@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import sealed_chart_button as chart_button %}
+{% from "_macros.html" import sealed_chart_button as chart_button, sealed_offer as offer %}
 {% block title %}Sealed - mtgcompare{% endblock %}
 {% block extra_css %}
   {% include "_price_chart_styles.html" %}
@@ -50,7 +50,7 @@
   .sealed-section { margin-bottom: 1.75rem; }
   .sealed-table { width: 100%; }
   .sealed-table td, .sealed-table th { white-space: nowrap; }
-  .sealed-table td.product { white-space: normal; min-width: 14rem; }
+  .sealed-table td.product { white-space: normal; min-width: 12rem; }
   .product-name { color: var(--fg); }
   .product-meta { color: var(--muted); font-size: .78rem; }
   .lang-badge {
@@ -67,15 +67,18 @@
     .icon-btn:hover { color: var(--red); border-color: var(--red); background: transparent; }
   }
   .muted { color: var(--muted); }
+  .offer a { color: var(--fg); }
+  .offer .product-meta a { color: var(--blue); }
 {% endblock %}
 {% block content %}
   <div class="sealed-header">
     <div class="refresh-info">
       {% if last_price_date %}
-        Prices as of <strong>{{ last_price_date }}</strong> &middot; TCGPlayer market price.
+        TCGPlayer prices as of <strong>{{ last_price_date }}</strong>.
       {% else %}
         No sealed prices yet.
       {% endif %}
+      {% if shop_prices_updated_at %}Japanese shops read <strong>{{ shop_prices_updated_at[:10] }}</strong>.{% endif %}
       {% if fx %}FX JPY {{ '%.2f'|format(fx) }} per $1.{% endif %}
       <br>
       {% if catalog %}{{ catalog|length }} booster products in the catalog.{% else %}Catalog not loaded yet: click <strong>Refresh prices</strong>.{% endif %}
@@ -122,7 +125,7 @@
         <button type="submit" id="sealed-add-btn"{% if not catalog %} disabled{% endif %}>Add to holdings</button>
       </div>
     </form>
-    <p class="add-hint">Prices are TCGPlayer's market price for the English product. Japanese lots are valued at that English reference for now.</p>
+    <p class="add-hint">English lots are valued at TCGPlayer's market price. Japanese lots are valued at the cheapest in-stock Japanese-language offer at Hareruya or SingleStar (marked * when only the English price is available). Japanese shop prices are asking prices, not sales.</p>
   </div>
 
   <section class="sealed-section">
@@ -163,8 +166,8 @@
         <table class="sealed-table" id="sealed-lots-table">
           <thead>
             <tr>
-              <th>Product</th><th>Lang</th><th class="num">Qty</th><th class="num">Paid / unit</th>
-              <th class="num">Market / unit</th><th class="num">30d</th><th class="num">Value</th>
+              <th>Product</th><th class="num">Qty</th><th class="num">Paid / unit</th>
+              <th class="num">Value / unit</th><th class="num">Cheapest in Japan</th><th class="num">30d</th><th class="num">Value</th>
               <th class="num">PnL</th><th></th>
             </tr>
           </thead>
@@ -173,14 +176,14 @@
             <tr>
               <td class="product">
                 <div class="product-name">{{ r.name }}</div>
-                <div class="product-meta">{{ r.set_code }} · {{ r.kind }}{% if r.date_bought %} · bought {{ r.date_bought }}{% endif %}</div>
-              </td>
-              <td>
-                {% if r.reference_mismatch %}
-                  <span class="lang-badge ref" title="Valued at the English TCGPlayer price">{{ r.language }}*</span>
-                {% else %}
-                  <span class="lang-badge">{{ r.language }}</span>
-                {% endif %}
+                <div class="product-meta">
+                  {% if r.reference_mismatch %}
+                    <span class="lang-badge ref" title="No Japanese shop has this in stock; valued at the English TCGPlayer price">{{ r.language }}*</span>
+                  {% else %}
+                    <span class="lang-badge">{{ r.language }}</span>
+                  {% endif %}
+                  {{ r.set_code }} · {{ r.kind }}{% if r.date_bought %} · bought {{ r.date_bought }}{% endif %}
+                </div>
               </td>
               <td class="num">{{ r.quantity }}</td>
               <td class="num">
@@ -191,9 +194,10 @@
               <td class="num">
                 {% if r.market_usd is not none %}
                   ${{ '{:,.2f}'.format(r.market_usd) }}
-                  {% if r.market_jpy is not none %}<div class="product-meta">¥{{ '{:,.0f}'.format(r.market_jpy) }}</div>{% endif %}
+                  <div class="product-meta">{% if r.market_jpy is not none %}¥{{ '{:,.0f}'.format(r.market_jpy) }} · {% endif %}{{ r.basis_label }}</div>
                 {% else %}<span class="muted">no price</span>{% endif %}
               </td>
+              <td class="num">{{ offer(r.offer) }}</td>
               <td class="num">
                 {% if r.change_pct is not none %}
                   <span class="{% if r.change_pct > 0 %}pnl-up{% elif r.change_pct < 0 %}pnl-down{% endif %}">{% if r.change_pct > 0 %}+{% endif %}{{ r.change_pct }}%</span>
@@ -234,7 +238,7 @@
       <div class="table-scroll">
         <table class="sealed-table" id="sealed-watch-table">
           <thead>
-            <tr><th>Product</th><th class="num">Market</th><th class="num">JPY</th><th class="num">30d</th><th class="num">As of</th><th></th></tr>
+            <tr><th>Product</th><th class="num">TCGPlayer</th><th class="num">Japan (EN)</th><th class="num">Japan (JP)</th><th class="num">30d</th><th></th></tr>
           </thead>
           <tbody>
             {% for r in watch %}
@@ -243,14 +247,19 @@
                 <div class="product-name">{{ r.name }}</div>
                 <div class="product-meta">{{ r.set_code }} · {{ r.kind }}</div>
               </td>
-              <td class="num">{% if r.market_usd is not none %}${{ '{:,.2f}'.format(r.market_usd) }}{% else %}<span class="muted">no price</span>{% endif %}</td>
-              <td class="num">{% if r.market_jpy is not none %}¥{{ '{:,.0f}'.format(r.market_jpy) }}{% else %}<span class="muted">-</span>{% endif %}</td>
+              <td class="num">
+                {% if r.tcg_usd is not none %}
+                  ${{ '{:,.2f}'.format(r.tcg_usd) }}
+                  {% if fx %}<div class="product-meta">¥{{ '{:,.0f}'.format(r.tcg_usd * fx) }}</div>{% endif %}
+                {% else %}<span class="muted">-</span>{% endif %}
+              </td>
+              <td class="num">{{ offer(r.offer_en) }}</td>
+              <td class="num">{{ offer(r.offer_jp) }}</td>
               <td class="num">
                 {% if r.change_pct is not none %}
                   <span class="{% if r.change_pct > 0 %}pnl-up{% elif r.change_pct < 0 %}pnl-down{% endif %}">{% if r.change_pct > 0 %}+{% endif %}{{ r.change_pct }}%</span>
                 {% else %}<span class="muted">-</span>{% endif %}
               </td>
-              <td class="num muted">{{ r.market_date or '-' }}</td>
               <td>
                 <div class="row-actions">
                   {{ chart_button(r) }}
@@ -282,8 +291,10 @@
       document.addEventListener('click', event => {
         const btn = event.target.closest('.market-chart-trigger');
         if (!btn) return;
+        const seriesUrl = series => `${historyUrl}?${new URLSearchParams({ uuid: btn.dataset.uuid, series })}`;
         priceChart.show({
-          url: `${historyUrl}?${new URLSearchParams({ uuid: btn.dataset.uuid })}`,
+          url: seriesUrl(btn.dataset.series),
+          seriesUrl,
           title: btn.dataset.name,
           subtitle: btn.dataset.meta,
           subtitleFor: d => `${btn.dataset.meta}${d.available_since ? ` / tracking since ${priceChart.formatDate(d.available_since)}` : ''}`,

@@ -13,15 +13,17 @@ Read side: ``compute_sealed_ctx`` (holdings + watchlist + summary) and
 """
 from __future__ import annotations
 
+import json
 import logging
 import time
+from collections import defaultdict
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from threading import Lock
 
 from .. import db
 from ..pricing import meta
-from . import catalog, repo
+from . import catalog, jp_shops, repo
 from . import tcgplayer as tcg
 
 logger = logging.getLogger(__name__)
@@ -32,6 +34,12 @@ LANGUAGES = ("EN", "JP")
 CURRENCIES = ("JPY", "USD")
 CATEGORY_LABELS = {"booster_box": "Box", "booster_pack": "Pack"}
 CHANGE_WINDOW_DAYS = 30
+SHOP_SOURCES = (jp_shops.HARERUYA, jp_shops.SINGLESTAR)
+# A shop offer older than this is treated as sold out (shops only record
+# in-stock offers, so the last point outlives the stock).
+SHOP_FRESH_DAYS = 7
+SHOP_PRICES_META_KEY = "sealed_shop_prices_updated_at"
+SET_NAMES_META_KEY = "sealed_jp_set_names"
 # Spacing between products during a refresh: a few hundred products a day
 # is nowhere near crawling, but there is no reason to burst them either.
 _REQUEST_PACING_S = 0.3
@@ -154,11 +162,74 @@ def _fetch_product_points(
     return points
 
 
+ShopCrawler = Callable[[], list[jp_shops.ShopListing]]
+DEFAULT_CRAWLERS: dict[str, ShopCrawler] = {
+    # Hareruya first: its titles teach the set-name map SingleStar needs.
+    jp_shops.HARERUYA: jp_shops.crawl_hareruya,
+    jp_shops.SINGLESTAR: jp_shops.crawl_singlestar,
+}
+
+
+def refresh_shop_prices(
+    *,
+    crawlers: dict[str, ShopCrawler] | None = None,
+    today: date | None = None,
+    progress: ProgressFn = _noop_progress,
+) -> dict[str, dict]:
+    """Crawl each Japanese shop's sealed listing and record today's cheapest
+    in-stock offer per (product, language) for every catalog product found.
+
+    Every matched product is recorded, not just tracked ones, so a product
+    added later already has shop history. A failing shop is logged and
+    skipped; the others still run.
+    """
+    crawlers = crawlers if crawlers is not None else DEFAULT_CRAWLERS
+    today = today or datetime.now(UTC).date()
+    with db.get_conn() as conn:
+        catalog_by_set: dict[str, list[dict]] = defaultdict(list)
+        for p in repo.list_catalog(conn):
+            catalog_by_set[p["set_code"]].append(p)
+        stored_names = meta.read(conn, SET_NAMES_META_KEY)
+    # The set-name map persists so SingleStar still resolves on a day
+    # Hareruya's crawl fails.
+    set_names: dict[str, str] = json.loads(stored_names) if stored_names else {}
+
+    results: dict[str, dict] = {}
+    for i, (shop, crawl) in enumerate(crawlers.items()):
+        label = jp_shops.SHOP_LABELS.get(shop, shop)
+        progress(int(100 * i / max(len(crawlers), 1)), "Shop prices", f"Reading {label}...")
+        try:
+            listings = crawl()
+        except Exception as exc:
+            logger.warning("event=sealed_shop_crawl_failed shop=%s class=%s err=%s", shop, type(exc).__name__, exc)
+            results[shop] = {"error": str(exc)}
+            continue
+        if shop == jp_shops.HARERUYA:
+            set_names.update(jp_shops.hareruya_set_names(listings))
+            with db.get_conn() as conn:
+                meta.write(conn, SET_NAMES_META_KEY, json.dumps(set_names, ensure_ascii=False, sort_keys=True))
+        offers, stats = jp_shops.best_offers(shop, listings, catalog_by_set, set_names)
+        with db.get_conn() as conn:
+            repo.upsert_prices(conn, [
+                {"product_uuid": uuid, "source": shop, "language": lang, "market_date": today,
+                 "price": o.price_jpy, "currency": "JPY", "url": o.url, "stock": o.stock}
+                for (uuid, lang), o in offers.items()
+            ])
+        stats["recorded"] = len(offers)
+        results[shop] = stats
+        logger.info("event=sealed_shop_prices shop=%s %s", shop, " ".join(f"{k}={v}" for k, v in stats.items()))
+    with db.get_conn() as conn:
+        meta.write(conn, SHOP_PRICES_META_KEY, _now_iso())
+    return results
+
+
 def run_daily_update(progress_cb: ProgressFn | None = None) -> dict:
     progress = progress_cb or _noop_progress
     progress(2, "Catalog", "Checking the sealed product catalog...")
     refresh_catalog()
-    return refresh_prices(progress=progress)
+    stats = refresh_prices(progress=lambda p, ph, d: progress(int(p * 0.5), ph, d))
+    stats["shops"] = refresh_shop_prices(progress=lambda p, ph, d: progress(50 + int(p * 0.5), ph, d))
+    return stats
 
 
 # --- add / remove ------------------------------------------------------------
@@ -194,6 +265,22 @@ def _to_usd(amount: float | None, currency: str, fx: float | None) -> float | No
     return None
 
 
+def _to_jpy(amount: float | None, currency: str, fx: float | None) -> float | None:
+    if amount is None:
+        return None
+    if currency == "JPY":
+        return amount
+    if currency == "USD" and fx:
+        return amount * fx
+    return None
+
+
+def series_label(source: str, language: str) -> str:
+    if source == tcg.SOURCE:
+        return "TCGPlayer market"
+    return f"{jp_shops.SHOP_LABELS.get(source, source)} ({language})"
+
+
 def _product_label(p: dict) -> dict:
     return {
         **p,
@@ -205,35 +292,83 @@ def _product_label(p: dict) -> dict:
     }
 
 
-def _attach_market(rows: list[dict], latest: dict, past: dict, fx: float | None) -> None:
-    for r in rows:
-        cur = latest.get(r["uuid"])
-        old = past.get(r["uuid"])
-        r["market_usd"] = cur["price"] if cur else None
-        r["market_date"] = cur["market_date"] if cur else None
-        r["market_jpy"] = round(cur["price"] * fx) if cur and fx else None
-        r["change_pct"] = (
-            round((cur["price"] / old["price"] - 1) * 100, 1)
-            if cur and old and old["price"] and old["market_date"] != cur["market_date"] else None
-        )
+def _cheapest_shop_offer(points: dict, uuid: str, language: str, fresh_since: str) -> dict | None:
+    """Cheapest recent in-stock JP-shop offer for one product × language.
+
+    Shops only record in-stock offers, so a point older than the
+    freshness window means the product has since sold out there."""
+    offers = [
+        {**pt, "source": src, "label": jp_shops.SHOP_LABELS[src]}
+        for src in SHOP_SOURCES
+        if (pt := points.get((uuid, src, language))) and pt["market_date"] >= fresh_since
+    ]
+    return min(offers, key=lambda o: o["price"]) if offers else None
+
+
+def _attach_market(
+    row: dict, language: str | None, points: dict, past: dict,
+    fx: float | None, fresh_since: str,
+) -> None:
+    """Fill a holdings/watch row's prices.
+
+    ``language`` is the lot's; watch rows (None) are valued at TCGPlayer and
+    show both languages' cheapest shop offers. The value basis is TCGPlayer
+    for English product and the cheapest Japanese-language shop offer for
+    Japanese product (TCGPlayer's EN price, flagged, when no shop has it).
+    """
+    uuid = row["uuid"]
+    tcg_pt = points.get((uuid, tcg.SOURCE, "EN"))
+    row["tcg_usd"] = tcg_pt["price"] if tcg_pt else None
+    row["offer_en"] = _cheapest_shop_offer(points, uuid, "EN", fresh_since)
+    row["offer_jp"] = _cheapest_shop_offer(points, uuid, "JP", fresh_since)
+    own_offer = row["offer_jp"] if language == "JP" else row["offer_en"]
+    row["offer"] = own_offer
+
+    basis: dict | None = None
+    if language == "JP" and own_offer:
+        basis = {**own_offer, "language": "JP"}
+    elif tcg_pt:
+        basis = {**tcg_pt, "source": tcg.SOURCE, "label": "TCGPlayer", "language": "EN"}
+    elif own_offer:
+        basis = {**own_offer, "language": language or "EN"}
+    row["reference_mismatch"] = bool(language and basis and basis["language"] != language)
+    row["basis_label"] = basis["label"] if basis else None
+    row["series"] = f"{basis['source']}:{basis['language']}" if basis else f"{tcg.SOURCE}:EN"
+    row["market_date"] = basis["market_date"] if basis else None
+    row["market_usd"] = _to_usd(basis["price"], basis["currency"], fx) if basis else None
+    row["market_jpy"] = _to_jpy(basis["price"], basis["currency"], fx) if basis else None
+    if row["market_usd"] is not None:
+        row["market_usd"] = round(row["market_usd"], 2)
+    if row["market_jpy"] is not None:
+        row["market_jpy"] = round(row["market_jpy"])
+
+    old = past.get((uuid, basis["source"], basis["language"])) if basis else None
+    row["change_pct"] = (
+        round((basis["price"] / old["price"] - 1) * 100, 1)
+        if basis and old and old["price"] and old["market_date"] != basis["market_date"] else None
+    )
 
 
 def compute_sealed_ctx(user_id: str, *, fx: float | None, today: date | None = None) -> dict:
     today = today or datetime.now(UTC).date()
+    fresh_since = (today - timedelta(days=SHOP_FRESH_DAYS)).isoformat()
     with db.get_conn() as conn:
         lots = [_product_label(r) for r in repo.list_lots(conn, user_id)]
         watch = [_product_label(r) for r in repo.list_watch(conn, user_id)]
         catalog_rows = repo.list_catalog(conn)
         catalog_stamp = meta.read(conn, CATALOG_META_KEY)
         uuids = list({r["uuid"] for r in lots + watch})
-        latest = repo.latest_prices(conn, uuids, tcg.SOURCE)
-        past = repo.latest_prices(
-            conn, uuids, tcg.SOURCE,
+        points = repo.latest_points(conn, uuids)
+        past = repo.latest_points(
+            conn, uuids,
             on_or_before=(today - timedelta(days=CHANGE_WINDOW_DAYS)).isoformat(),
         )
 
-    _attach_market(lots, latest, past, fx)
-    _attach_market(watch, latest, past, fx)
+    for lot in lots:
+        _attach_market(lot, lot["language"], points, past, fx, fresh_since)
+    for w in watch:
+        _attach_market(w, None, points, past, fx, fresh_since)
+
     for lot in lots:
         qty = lot["quantity"]
         cost_unit = _to_usd(lot["price_bought"], lot["currency"], fx)
@@ -244,17 +379,19 @@ def compute_sealed_ctx(user_id: str, *, fx: float | None, today: date | None = N
             lot["pnl_pct"] = round((lot["value_usd"] / lot["cost_usd"] - 1) * 100, 1) if lot["cost_usd"] > 0 else None
         else:
             lot["pnl_usd"] = lot["pnl_pct"] = None
-        # TCGPlayer only prices English product; a JP lot is valued at the
-        # EN reference until a JP source exists. Flag it in the UI.
-        lot["reference_mismatch"] = lot["language"] != "EN"
 
+    with db.get_conn() as conn:
+        shop_stamp = meta.read(conn, SHOP_PRICES_META_KEY)
     return {
         "lots": lots,
         "watch": watch,
         "summary": build_summary(lots, fx),
         "catalog": [_product_label(r) for r in catalog_rows],
         "catalog_updated_at": catalog_stamp,
-        "last_price_date": max((r["market_date"] for r in lots + watch if r["market_date"]), default=None),
+        "shop_prices_updated_at": shop_stamp,
+        "last_price_date": max(
+            (pt["market_date"] for (_, src, _), pt in points.items() if src == tcg.SOURCE), default=None,
+        ),
         "fx": fx,
         "languages": LANGUAGES,
         "currencies": CURRENCIES,
@@ -282,13 +419,43 @@ def build_summary(lots: list[dict], fx: float | None) -> dict:
     }
 
 
-def product_history(uuid: str) -> dict | None:
+def parse_series(value: str | None) -> tuple[str, str] | None:
+    source, _, language = (value or "").partition(":")
+    if source in (tcg.SOURCE, *SHOP_SOURCES) and language in LANGUAGES:
+        return source, language
+    return None
+
+
+def product_history(uuid: str, series: tuple[str, str] | None = None) -> dict | None:
+    """Chart payload for one product: the requested series (default: the
+    first of TCGPlayer, then any shop), plus the list of series it has."""
     with db.get_conn() as conn:
         product = repo.get_product(conn, uuid)
         if not product:
             return None
-        points = repo.price_history(conn, uuid, tcg.SOURCE)
+        available = repo.list_series(conn, uuid)
+        keys = [(s["source"], s["language"]) for s in available]
+        if series not in keys:
+            series = (tcg.SOURCE, "EN") if (tcg.SOURCE, "EN") in keys else (keys[0] if keys else (tcg.SOURCE, "EN"))
+        points = repo.price_history(conn, uuid, *series)
     return {
         "product": _product_label(product),
-        "points": [{"market_date": p["market_date"], "price_usd": p["price"]} for p in points],
+        "series": f"{series[0]}:{series[1]}",
+        "currency": points[0]["currency"] if points else ("USD" if series[0] == tcg.SOURCE else "JPY"),
+        "series_options": [
+            {
+                "key": f"{s['source']}:{s['language']}",
+                "label": series_label(s["source"], s["language"]),
+                "count": s["n"],
+            }
+            for s in available
+        ],
+        "points": [{"market_date": p["market_date"], "price": p["price"]} for p in points],
+        "source_detail": (
+            "TCGPlayer market price (recent sales, English product). The first year is"
+            " backfilled at weekly resolution, then one point per day."
+            if series[0] == tcg.SOURCE else
+            f"Cheapest in-stock {series_label(*series)} asking price, recorded daily. Days"
+            " the product was sold out there have no point."
+        ),
     }

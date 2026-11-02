@@ -1107,9 +1107,14 @@ def sealed_refresh():
     def _worker() -> None:
         try:
             stats = sealed_service.run_daily_update(progress_cb=_progress)
-            detail = f"Priced {stats['priced']} of {stats['products']} product(s)."
+            detail = f"TCGPlayer: {stats['priced']} of {stats['products']} product(s)."
             if stats["failed"]:
                 detail += f" {stats['failed']} failed."
+            for shop, shop_stats in stats.get("shops", {}).items():
+                detail += (
+                    f" {shop}: failed." if "error" in shop_stats
+                    else f" {shop}: {shop_stats['recorded']} offers."
+                )
             jobs.update(job_id, state="done", progress=100, phase="Done", detail=detail)
         except Exception as exc:
             app.logger.exception("event=sealed_refresh_failed job_id=%s", job_id)
@@ -1122,13 +1127,19 @@ def sealed_refresh():
 
 @app.route("/sealed/history")
 def sealed_history():
-    result = sealed_service.product_history(request.args.get("uuid", "").strip())
+    result = sealed_service.product_history(
+        request.args.get("uuid", "").strip(),
+        sealed_service.parse_series(request.args.get("series")),
+    )
     if result is None:
         return jsonify({"ok": False, "error": "unknown product"}), 404
     points = result["points"]
     return jsonify({
         "ok": True,
         "product": result["product"],
+        "series": result["series"],
+        "series_options": result["series_options"],
+        "currency": result["currency"],
         "default_period": "all",
         "period": "all",
         "available_periods": list(pricing.MARKET_HISTORY_PERIODS),
@@ -1136,13 +1147,7 @@ def sealed_history():
         "available_since": points[0]["market_date"] if points else None,
         "downloaded_at": points[-1]["market_date"] if points else None,
         "has_history": bool(points),
-        "source": {
-            "label": "TCGPlayer market price",
-            "detail": (
-                "TCGPlayer market price (recent sales, English product). The first"
-                " year is backfilled at weekly resolution, then one point per day."
-            ),
-        },
+        "source": {"label": result["series"], "detail": result["source_detail"]},
         "points": points,
         "all_points_count": len(points),
     })
