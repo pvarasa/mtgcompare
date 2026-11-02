@@ -253,7 +253,11 @@ The `users` table is keyed on `workos_user_id`; inventory rows continue to key o
   in its own try/except so either can fail alone. The
   page's **Refresh prices** (`POST /sealed/refresh`) runs the same thing as
   a `jobs` entry of kind `"sealed"`. `jobs.find_running(kind)` keeps it from
-  coalescing with the MTGJSON import. Adding a lot or watch for an unpriced
+  coalescing with the MTGJSON import. Its status is mirrored to `app_meta`
+  (`sealed_refresh_job`) and polled via `GET /sealed/refresh/status`,
+  because the poll can land on a replica that never saw the POST; that
+  DB row (not pod memory) is also what blocks a second concurrent refresh
+  (a stale `running` row expires after 15 min). Adding a lot or watch for an unpriced
   product fetches its prices synchronously (best-effort).
 - The price-history chart modal is shared with `/market`:
   `templates/_price_chart_modal.html` + `_price_chart_styles.html` +

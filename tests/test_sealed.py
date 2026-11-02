@@ -3,6 +3,7 @@
 All offline: TCGPlayer is replaced by ``FakeClient`` and the DB by the
 per-test SQLite engine from ``tests/conftest.py``.
 """
+import time
 from datetime import date, timedelta
 
 import pytest
@@ -253,3 +254,28 @@ def test_jobs_kinds_do_not_coalesce():
         assert jobs.find_running("sealed")["id"] == "a-sealed"
     finally:
         jobs.update("a-sealed", state="done")
+
+
+def test_refresh_status_is_served_from_the_db_not_pod_memory(client, monkeypatch):
+    # The status poll may land on a replica that never saw the POST.
+    monkeypatch.setattr(service, "run_daily_update",
+                        lambda progress_cb=None: {"products": 1, "priced": 1, "failed": 0, "shops": {}})
+    job_id = client.post("/sealed/refresh").get_json()["job_id"]
+    for _ in range(50):
+        if (service.load_refresh_job(job_id) or {}).get("state") == "done":
+            break
+        time.sleep(0.05)
+    monkeypatch.setattr(jobs, "_jobs", {})  # "another pod": empty registry
+    status = client.get(f"/sealed/refresh/status?job_id={job_id}").get_json()
+    assert status["ok"] and status["state"] == "done"
+    assert "TCGPlayer: 1 of 1" in status["detail"]
+    assert client.get("/sealed/refresh/status?job_id=nope").status_code == 404
+
+
+def test_running_refresh_job_coalesces_until_stale(seeded):
+    from datetime import UTC, datetime
+    now = datetime(2026, 11, 3, 12, 0, tzinfo=UTC)
+    service.save_refresh_job({"id": "j1", "state": "running",
+                              "updated_at": (now - timedelta(minutes=5)).isoformat()})
+    assert service.running_refresh_job(now)["id"] == "j1"
+    assert service.running_refresh_job(now + service.REFRESH_JOB_STALE) is None

@@ -285,7 +285,7 @@
     (function () {
       const historyUrl = {{ url_for('sealed_history')|tojson }};
       const refreshUrl = {{ url_for('sealed_refresh')|tojson }};
-      const statusUrl = {{ url_for('market_history_download_status')|tojson }};
+      const statusUrl = {{ url_for('sealed_refresh_status')|tojson }};
       const priceChart = window.mtgcompare.priceChart;
 
       document.addEventListener('click', event => {
@@ -307,6 +307,7 @@
       const refreshBtn = document.getElementById('sealed-refresh-btn');
       const detailEl = document.getElementById('sealed-refresh-detail');
       let poll = null;
+      let misses = 0;
       function finish(text) {
         if (poll) { clearInterval(poll); poll = null; }
         refreshBtn.disabled = false;
@@ -318,6 +319,7 @@
           .then(r => r.json())
           .then(job => {
             if (!job.ok) throw new Error(job.error || 'Status fetch failed');
+            misses = 0;
             detailEl.textContent = `${job.progress || 0}% · ${job.detail || job.phase || ''}`;
             if (job.state === 'done') {
               finish(job.detail || 'Done.');
@@ -326,7 +328,9 @@
               finish(job.error || job.detail || 'Refresh failed.');
             }
           })
-          .catch(() => finish('Could not read refresh status.'));
+          // One failed poll (a pod restarting, a network blip) is not the end
+          // of the refresh; give up only after ~10 s of consecutive misses.
+          .catch(() => { if (++misses >= 10) finish('Could not read refresh status.'); });
       }
       refreshBtn.addEventListener('click', () => {
         refreshBtn.disabled = true;
@@ -337,6 +341,7 @@
           .then(r => r.json())
           .then(data => {
             if (!data.ok) throw new Error(data.error || 'Could not start refresh');
+            misses = 0;
             check(data.job_id);
             poll = window.setInterval(() => check(data.job_id), 1000);
           })
