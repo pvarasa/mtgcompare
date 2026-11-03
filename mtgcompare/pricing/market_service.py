@@ -21,15 +21,16 @@ from time import monotonic
 
 from cachetools import TTLCache
 
-from .. import db
+from .. import db, meta
 from .. import inventory as inv
-from . import market_repo, meta
+from . import market_repo
 from .common import (
     has_price_history,
     is_foil,
     load_card_map_for_inventory,
     normalize_set_code,
     portfolio_value_series,
+    query_history,
     row_key_for_mapping,
 )
 
@@ -41,6 +42,7 @@ __all__ = [
     "attach_market_prices",
     "attach_pnl_in_place",
     "build_market_summary",
+    "card_history_payload",
     "compute_market_ctx",
     "compute_portfolio_history",
     "densify_daily_points",
@@ -51,6 +53,7 @@ __all__ = [
     "market_cache_get",
     "market_cache_set",
     "paginate_market_rows",
+    "portfolio_history_payload",
     "sort_key_market",
 ]
 
@@ -361,6 +364,92 @@ def compute_portfolio_history(
         # densify spans [min priced day, max priced day]; the first point is
         # always priced, so it marks when coverage begins.
         "available_since": points[0]["market_date"],
+    }
+
+
+_HISTORY_SOURCE_LABEL = "MTGJSON / TCGplayer retail"
+DEFAULT_HISTORY_PERIOD = "1m"
+
+
+def _history_downloaded_at() -> str | None:
+    with db.get_conn() as conn:
+        return meta.read(conn, "mtgjson_history_downloaded_at")
+
+
+def card_history_payload(
+    *, card_name: str, set_code: str, card_number: str, foil: bool, period: str,
+    today: date | None = None,
+) -> dict:
+    """The per-card chart (``GET /market/history``): one printing's daily
+    MTGJSON price, densified to calendar days and cut to ``period``."""
+    if period not in MARKET_HISTORY_PERIODS:
+        period = DEFAULT_HISTORY_PERIOD
+    with db.get_conn() as conn:
+        mapped_uuid = market_repo.find_card_uuid(
+            conn, card_name=card_name, set_code=set_code,
+            card_number=card_number, is_foil=int(foil),
+        )
+    history = query_history(mapped_uuid, "foil" if foil else "normal") if mapped_uuid else {}
+    points = densify_daily_points(history, end_day=today or datetime.now(UTC).date()) if history else []
+    cutoff = history_cutoff(period)  # None for "all"
+    if cutoff is not None:
+        points = [
+            p for p in points
+            if datetime.fromisoformat(p["market_date"]).replace(tzinfo=UTC) >= cutoff
+        ]
+    return {
+        "ok": True,
+        "card_name": card_name,
+        "set_code": set_code,
+        "card_number": card_number,
+        "is_foil": foil,
+        "default_period": DEFAULT_HISTORY_PERIOD,
+        "period": period,
+        "available_periods": list(MARKET_HISTORY_PERIODS),
+        "period_days": MARKET_HISTORY_PERIODS,
+        "available_since": next((p["market_date"] for p in points if p["price_usd"] is not None), None),
+        "downloaded_at": _history_downloaded_at(),
+        "has_history": bool(history),
+        "source": {
+            "label": _HISTORY_SOURCE_LABEL,
+            "detail": (
+                "Imported from MTGJSON price history. Blank days mean MTGJSON has no value"
+                " for that day or the local download is behind."
+            ),
+        },
+        "points": points,
+        "all_points_count": len(points),
+    }
+
+
+def portfolio_history_payload(inventory_rows: list[dict]) -> dict:
+    """The whole-portfolio chart (``GET /market/history/portfolio``), in the
+    per-card payload's shape so the same renderer draws it."""
+    result = compute_portfolio_history(inventory_rows)
+    points = result["points"]
+    return {
+        "ok": True,
+        # The whole series is the point of this view; default to ALL but keep
+        # the period buttons so the chart JS can slice client-side.
+        "default_period": "all",
+        "period": "all",
+        "available_periods": list(MARKET_HISTORY_PERIODS),
+        "period_days": MARKET_HISTORY_PERIODS,
+        "available_since": result["available_since"],
+        "downloaded_at": _history_downloaded_at(),
+        "has_history": result["has_history"],
+        "lot_count": result["lot_count"],
+        "mapped_count": result["mapped_count"],
+        "source": {
+            "label": _HISTORY_SOURCE_LABEL,
+            "detail": (
+                "Whole-portfolio value summed across MTGJSON daily prices, using"
+                " current quantities. Days with no MTGJSON value for a held card"
+                " show as blanks rather than being carried forward."
+            ),
+        },
+        "points": points,
+        "all_points_count": len(points),
     }
 
 

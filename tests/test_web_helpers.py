@@ -8,7 +8,7 @@ from sqlalchemy import text
 
 import mtgcompare.auth as auth_module
 import mtgcompare.db as db_module
-from mtgcompare import decklist, pricing, search, web
+from mtgcompare import decklist, meta, pricing, search, web
 from mtgcompare import inventory as inv
 
 # ``test_db`` fixture (SQLite-temp engine swap) lives in tests/conftest.py.
@@ -1492,7 +1492,7 @@ def _write_market_prices(rows, version):
              "price_usd": p, "fetched_at": "2026-09-23T00:00:00+00:00"}
             for n, num, p in rows
         ])
-        pricing.meta.write(conn, pricing.market_repo.PRICES_VERSION_KEY, version)
+        meta.write(conn, pricing.market_repo.PRICES_VERSION_KEY, version)
 
 
 def test_market_prices_are_keyed_per_collector_number(test_db):

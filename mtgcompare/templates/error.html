@@ -71,7 +71,7 @@
     <p class="err-msg">{{ message }}</p>
     <div class="err-actions">
       <a href="{{ url_for('index') }}">Go home</a>
-      <button type="button" onclick="history.back()">Go back</button>
+      <button type="button" data-action="back">Go back</button>
     </div>
     {% if request_id %}
       <p class="err-trace">request id: {{ request_id }}</p>

@@ -7,8 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from mtgcompare import db
-from mtgcompare.pricing import meta
+from mtgcompare import db, meta
 from mtgcompare.sealed import jp_shops, repo, service
 from mtgcompare.sealed import jp_titles as jt
 from mtgcompare.sealed import tcgplayer as tcg

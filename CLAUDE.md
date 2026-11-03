@@ -50,7 +50,6 @@ Repo-specific guidance for coding sessions.
   - `history_import.py` — MTGJSON ETL (XZ → NDJSON → DuckDB → DuckDB file or
     PostgreSQL). Pure functions taking an engine/path.
   - `market_repo.py` — data access for `market_prices` + `mtgjson_card_map`.
-  - `meta.py` — data access for the `app_meta` key/value table.
   - `run_log.py` — bookkeeping for daily price-update runs (`price_update_runs`).
 - `mtgcompare/scrapers/`
   Scraper stack. `base.py` (the `MtgScrapper` ABC), `html_base.py`
@@ -74,6 +73,9 @@ Repo-specific guidance for coding sessions.
   matching), `jp_shops.py` (Hareruya / SingleStar / Cardshop Serra sealed
   crawlers, the Hareruya buylist crawler, and cheapest-offer selection), `service.py` (catalog/price refresh, backfill,
   `/sealed` page computation).
+- `mtgcompare/meta.py`
+  Data access for the `app_meta` key/value table (price-import and sealed
+  bookkeeping).
 - `mtgcompare/inventory.py`
   Inventory storage and inventory CLI. All public functions accept a `user_id` parameter.
 - `mtgcompare/compare.py`
@@ -85,7 +87,14 @@ Repo-specific guidance for coding sessions.
 - `mtgcompare/auth.py`
   WorkOS AuthKit integration. Exposes the `auth.bp` Flask Blueprint (login/callback/logout/me + `/webhooks/workos`), the `before_app_request` auth gate, and pure helpers (`verify_access_token`, `verify_webhook`, etc.). Inert when `WORKOS_API_KEY`/`WORKOS_CLIENT_ID`/`WORKOS_REDIRECT_URI` are unset.
 - `mtgcompare/templates/`, `mtgcompare/static/`
-  Flask templates and browser assets.
+  Flask templates and browser assets. **No inline JavaScript**: the CSP is
+  `script-src 'self'`, so every script is a file in `static/` (page scripts
+  are `<page>-page.js` / `market-*.js`). Server values reach them through a
+  non-executable `<script type="application/json" id="…-config">` block
+  read with `JSON.parse`. `static/common.js` (loaded by `base.html`) wires
+  `form[data-confirm]` and `[data-action=back]` instead of inline handlers;
+  `static/jobs.js` (`window.mtgcompare.runJob`) starts and polls a
+  background job. `tests/e2e/test_csp.py` fails on any CSP violation.
 - `scripts/`
   Start/stop helpers for local development; `build.ps1` for packaging.
 - `Dockerfile`, `.dockerignore`, `docker-compose.yml`
@@ -134,7 +143,7 @@ Repo-specific guidance for coding sessions.
 - `db.upsert(conn, table, conflict_cols, rows)` — dialect-aware upsert (`INSERT OR REPLACE` on SQLite, `ON CONFLICT DO UPDATE` on PostgreSQL).
 - `db.init_schema()` — creates all tables if absent and runs `_migrate()` to add columns missing from older schemas.
 
-Raw SQL is kept out of `web.py`: each table is reached through a data-access module — `inventory`, `pricing.run_log`, `pricing.market_repo` (`market_prices` + `mtgjson_card_map`), `pricing.meta` (`app_meta`) — or, for price history, through `pricing.history_store.PriceHistoryStore`. New queries belong in those modules, not inline in routes.
+Raw SQL is kept out of `web.py`: each table is reached through a data-access module — `inventory`, `pricing.run_log`, `pricing.market_repo` (`market_prices` + `mtgjson_card_map`), `meta` (`app_meta`) — or, for price history, through `pricing.history_store.PriceHistoryStore`. New queries belong in those modules, not inline in routes.
 
 When adding inventory fields, update `mtgcompare/db.py` (Table definition + `_migrate`), `mtgcompare/inventory.py` (`_INSERT_SQL` and `_dict()`), together.
 

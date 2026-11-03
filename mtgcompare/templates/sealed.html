@@ -232,7 +232,7 @@
                 <div class="row-actions">
                   {{ chart_button(r) }}
                   <form method="post" action="{{ url_for('sealed_delete_lot', lot_id=r.id) }}"
-                        onsubmit="return confirm('Remove this lot?');">
+                        data-confirm="Remove this lot?">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <button type="submit" class="icon-btn" title="Remove lot" aria-label="Remove lot">✕</button>
                   </form>
@@ -298,73 +298,7 @@
   {% include "_price_chart_modal.html" %}
 
   <script src="{{ url_for('static', filename='pricechart.js') }}?v={{ static_token }}"></script>
-  <script>
-    (function () {
-      const historyUrl = {{ url_for('sealed_history')|tojson }};
-      const refreshUrl = {{ url_for('sealed_refresh')|tojson }};
-      const statusUrl = {{ url_for('market_history_download_status')|tojson }};
-      const priceChart = window.mtgcompare.priceChart;
-
-      document.addEventListener('click', event => {
-        const btn = event.target.closest('.market-chart-trigger');
-        if (!btn) return;
-        const seriesUrl = series => `${historyUrl}?${new URLSearchParams({ uuid: btn.dataset.uuid, series })}`;
-        priceChart.show({
-          url: seriesUrl(btn.dataset.series),
-          seriesUrl,
-          title: btn.dataset.name,
-          subtitle: btn.dataset.meta,
-          subtitleFor: d => `${btn.dataset.meta}${d.available_since ? ` / tracking since ${priceChart.formatDate(d.available_since)}` : ''}`,
-          errorMessage: 'Could not load price history for this product.',
-          emptyMessage: {{ ("No price history yet. Use <strong>Refresh prices</strong> to fetch it." if allow_price_update else "No price history yet. Prices update daily.")|tojson }},
-        });
-      });
-
-      // Refresh: POST starts a background job; poll its status until done.
-      const refreshBtn = document.getElementById('sealed-refresh-btn');
-      if (!refreshBtn) return;  // hosted site: the daily cron refreshes
-      const detailEl = document.getElementById('sealed-refresh-detail');
-      let poll = null;
-      let misses = 0;
-      function finish(text) {
-        if (poll) { clearInterval(poll); poll = null; }
-        refreshBtn.disabled = false;
-        refreshBtn.textContent = 'Refresh prices';
-        detailEl.textContent = text;
-      }
-      function check(jobId) {
-        fetch(`${statusUrl}?job_id=${encodeURIComponent(jobId)}`)
-          .then(r => r.json())
-          .then(job => {
-            if (!job.ok) throw new Error(job.error || 'Status fetch failed');
-            misses = 0;
-            detailEl.textContent = `${job.progress || 0}% · ${job.detail || job.phase || ''}`;
-            if (job.state === 'done') {
-              finish(job.detail || 'Done.');
-              window.setTimeout(() => window.location.reload(), 900);
-            } else if (job.state === 'error') {
-              finish(job.error || job.detail || 'Refresh failed.');
-            }
-          })
-          // One failed poll (a pod restarting, a network blip) is not the end
-          // of the refresh; give up only after ~10 s of consecutive misses.
-          .catch(() => { if (++misses >= 10) finish('Could not read refresh status.'); });
-      }
-      refreshBtn.addEventListener('click', () => {
-        refreshBtn.disabled = true;
-        refreshBtn.textContent = 'Refreshing...';
-        detailEl.textContent = 'Starting...';
-        const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
-        fetch(refreshUrl, { method: 'POST', headers: { 'X-Requested-With': 'fetch', 'X-CSRFToken': csrf } })
-          .then(r => r.json())
-          .then(data => {
-            if (!data.ok) throw new Error(data.error || 'Could not start refresh');
-            misses = 0;
-            check(data.job_id);
-            poll = window.setInterval(() => check(data.job_id), 1000);
-          })
-          .catch(err => finish(err.message || 'Could not start refresh.'));
-      });
-    })();
-  </script>
+  <script type="application/json" id="sealed-config">{{ {"historyUrl": url_for('sealed_history'), "refreshUrl": url_for('sealed_refresh'), "statusUrl": url_for('market_history_download_status'), "emptyMessage": ("No price history yet. Use <strong>Refresh prices</strong> to fetch it." if allow_price_update else "No price history yet. Prices update daily.")} | tojson }}</script>
+  <script src="{{ url_for('static', filename='jobs.js') }}?v={{ static_token }}"></script>
+  <script src="{{ url_for('static', filename='sealed-page.js') }}?v={{ static_token }}"></script>
 {% endblock %}

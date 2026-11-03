@@ -349,6 +349,55 @@ def fetch_decklist_prices(
     return prices_by_name
 
 
+EMPTY_TOTALS: dict[str, float] = {
+    "grand_total_usd": 0.0, "grand_total_jpy": 0.0,
+    "grand_total_usd_with_shipping": 0.0, "grand_total_jpy_with_shipping": 0.0,
+    "shipping_total_jpy": 0,
+}
+
+
+@dataclass
+class DecklistResult:
+    """A priced decklist, ready for the template (synchronous /decklist)."""
+    card_rows: list[dict]
+    shop_list: list[dict]
+    totals: dict[str, float]
+    timed_out_shops: list[str]
+
+    @property
+    def rows_with_match(self) -> int:
+        return sum(1 for r in self.card_rows if r["best"] is not None)
+
+
+def price_decklist(
+    prep: "DecklistPrep",
+    *,
+    collect: Callable[..., list[dict]] = collect_prices,
+    logger: logging.Logger = logger,
+) -> DecklistResult:
+    """Run the fan-out for a validated decklist and build its rows and
+    shop totals in one go (the streaming route does the same piecewise in
+    ``produce_decklist_events``). With no FX rate nothing is searched."""
+    timed_out: set[str] = set()
+    prices_by_name = (
+        fetch_decklist_prices(
+            prep.names_to_search, prep.name_canonical, prep.fx, prep.enabled_shops,
+            timeouts_out=timed_out, collect=collect, logger=logger,
+            printings=prep.name_printings,
+        )
+        if prep.fx is not None else {}
+    )
+    # Every requested name gets a row, including ones fully covered by
+    # inventory (no search) and ones no shop carries.
+    for n in prep.name_qty:
+        prices_by_name.setdefault(n, [])
+    card_rows = build_card_rows(
+        prep.name_qty, prep.name_canonical, prep.name_inv_qty, prep.name_needed, prices_by_name,
+    )
+    shop_list, totals = compute_shop_totals(card_rows, prep.shipping_overrides_jpy, prep.fx)
+    return DecklistResult(card_rows, shop_list, totals, sorted(timed_out))
+
+
 def build_one_card_row(
     n: str,
     name_qty: dict[str, int],

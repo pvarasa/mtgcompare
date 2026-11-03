@@ -42,7 +42,7 @@ from .log_context import (
     install_healthz_access_filter,
     install_record_factory,
 )
-from .pricing import market_repo, meta, run_log
+from .pricing import run_log
 from .scrapers import variants
 from .scrapers.registry import (
     ACTIVE_SHOPS,
@@ -134,12 +134,13 @@ csrf = CSRFProtect(app)
 csrf.exempt(auth.webhook)
 
 
-# Inline <style>/<script> blocks throughout the templates require
-# 'unsafe-inline' until those are extracted to /static. Scryfall is the
-# only third-party origin (card image previews + named-card lookup).
+# Scripts are all files under /static (page values ride in non-executable
+# <script type="application/json"> blocks), so script-src needs no
+# 'unsafe-inline'. Inline <style> blocks and style attributes remain.
+# Scryfall is the only third-party origin (card images + named-card lookup).
 _CSP = (
     "default-src 'self'; "
-    "script-src 'self' 'unsafe-inline'; "
+    "script-src 'self'; "
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
     "font-src 'self' https://fonts.gstatic.com; "
     "img-src 'self' data: https://cards.scryfall.io; "
@@ -541,22 +542,6 @@ def _shipping_config(overrides_jpy: dict | None = None) -> list[dict]:
     ]
 
 
-def _fetch_decklist_prices(
-    names_to_search: list[str],
-    name_canonical: dict[str, str],
-    fx: float,
-    enabled_shops: set[str] | None,
-    timeouts_out: set[str] | None = None,
-    printings: dict[str, set[decklist.Printing]] | None = None,
-) -> dict[str, list[dict]]:
-    """Inject web-layer deps into the pure ``decklist.fetch_decklist_prices``."""
-    return decklist.fetch_decklist_prices(
-        names_to_search, name_canonical, fx, enabled_shops,
-        timeouts_out=timeouts_out, collect=collect_prices, logger=app.logger,
-        printings=printings,
-    )
-
-
 def _load_inventory_qty_map(use_inventory: bool) -> dict[str, int]:
     """Return ``{lower_card_name: total_quantity}`` for the current user.
 
@@ -585,43 +570,33 @@ def _parse_decklist_form_basics(form) -> decklist.DecklistFormBasics:
 
 @app.route("/decklist", methods=["POST"])
 def decklist_search():
+    """No-JS fallback for the streaming search: one blocking request."""
     t0 = monotonic()
     basics = _parse_decklist_form_basics(request.form)
-    shipping_overrides_jpy = basics.shipping_overrides_jpy
-    ship_cfg = _shipping_config(shipping_overrides_jpy)
-    use_inventory = basics.use_inventory
-    enabled_shops = basics.enabled_shops
-    shop_filter_active = enabled_shops is not None
-    shop_filter_cfg = _shop_filter_config(enabled_shops)
-    text_raw = basics.decklist_text
+    page = {
+        "decklist": basics.decklist_text,
+        "error": None,
+        "card_rows": [], "shop_list": [], **decklist.EMPTY_TOTALS,
+        "fx": None,
+        "shop_flags": SHOP_FLAGS,
+        "shipping_config": _shipping_config(basics.shipping_overrides_jpy),
+        "shop_filter_config": _shop_filter_config(basics.enabled_shops),
+        "shop_filter_active": basics.enabled_shops is not None,
+        "use_inventory": basics.use_inventory,
+        "match_printings": basics.match_printings,
+        "skipped_basics": 0, "unparsed_lines": [], "skipped_maybeboard": 0,
+        "timed_out_shops": [],
+        "active": "search",
+    }
+    shops_enabled = len(basics.enabled_shops) if basics.enabled_shops is not None else "all"
 
-    def _early_return(error_msg: str, fx_val=None, *, reason: str):
+    def rejected(message: str, reason: str):
         app.logger.info(
             "event=decklist_search status=rejected reason=%s shops_enabled=%s "
             "use_inventory=%d duration_ms=%d",
-            reason,
-            len(enabled_shops) if enabled_shops is not None else "all",
-            int(use_inventory), int((monotonic() - t0) * 1000),
+            reason, shops_enabled, int(basics.use_inventory), int((monotonic() - t0) * 1000),
         )
-        return render_template(
-            "decklist.html",
-            decklist=text_raw,
-            error=error_msg,
-            card_rows=[], shop_list=[],
-            grand_total_usd=0.0, grand_total_jpy=0.0,
-            grand_total_usd_with_shipping=0.0, grand_total_jpy_with_shipping=0.0,
-            shipping_total_jpy=0,
-            fx=fx_val, shop_flags=SHOP_FLAGS,
-            shipping_config=ship_cfg, active="search",
-            shop_filter_config=shop_filter_cfg,
-            shop_filter_active=shop_filter_active,
-            use_inventory=use_inventory,
-            match_printings=basics.match_printings,
-            skipped_basics=0,
-            unparsed_lines=[],
-            skipped_maybeboard=0,
-            timed_out_shops=[],
-        )
+        return render_template("decklist.html", **{**page, "error": message})
 
     prep = decklist.prepare_decklist_search(
         basics,
@@ -629,82 +604,39 @@ def decklist_search():
         get_fx=_get_fx,
     )
     if isinstance(prep, decklist.DecklistReject):
-        return _early_return(prep.message, reason=prep.reason)
+        return rejected(prep.message, prep.reason)
 
     user_id = _get_user_id()
     active = _acquire_search_slot(user_id)
     if active is not None:
-        return _early_return(_too_many_searches_msg(active), reason="rate_limited"), 429
+        return rejected(_too_many_searches_msg(active), "rate_limited"), 429
     try:
-        return _run_decklist_search(prep, basics, ship_cfg, shop_filter_cfg, t0)
+        result = decklist.price_decklist(prep, collect=collect_prices, logger=app.logger)
     finally:
         _release_search_slot(user_id)
 
-
-def _run_decklist_search(prep, basics, ship_cfg, shop_filter_cfg, t0):
-    use_inventory = basics.use_inventory
-    enabled_shops = basics.enabled_shops
-    shop_filter_active = enabled_shops is not None
-    shipping_overrides_jpy = basics.shipping_overrides_jpy
-    text = prep.decklist_text
-    skipped_basics = prep.skipped_basics
-    total_cards = prep.total_cards
-    name_qty = prep.name_qty
-    name_canonical = prep.name_canonical
-    name_inv_qty = prep.name_inv_qty
-    name_needed = prep.name_needed
-    names_to_search = prep.names_to_search
-    inventory_hits = prep.inventory_hits
-    fx = prep.fx
-
-    timed_out_shops: set[str] = set()
-    prices_by_name = (
-        _fetch_decklist_prices(
-            names_to_search, name_canonical, fx, enabled_shops,
-            timeouts_out=timed_out_shops, printings=prep.name_printings,
-        )
-        if fx is not None else {n: [] for n in names_to_search}
-    )
-    # Names without unmet need still need an empty entry for the template.
-    for n in name_qty:
-        prices_by_name.setdefault(n, [])
-
-    card_rows = decklist.build_card_rows(name_qty, name_canonical, name_inv_qty, name_needed, prices_by_name)
-    shop_list, totals = decklist.compute_shop_totals(card_rows, shipping_overrides_jpy, fx)
-
-    rows_with_match = sum(1 for r in card_rows if r["best"] is not None)
-    timed_out_sorted = sorted(timed_out_shops)
     app.logger.info(
         "event=decklist_search status=ok size=%d distinct_names=%d "
         "names_searched=%d inventory_hits=%d shops_enabled=%s use_inventory=%d "
         "rows_with_match=%d skipped_basics=%d timed_out_shops=%s duration_ms=%d",
-        total_cards, len(name_qty), len(names_to_search), inventory_hits,
-        len(decklist.effective_search_shops(enabled_shops)),
-        int(use_inventory), rows_with_match, skipped_basics,
-        ",".join(timed_out_sorted) or "none",
+        prep.total_cards, len(prep.name_qty), len(prep.names_to_search), prep.inventory_hits,
+        len(decklist.effective_search_shops(basics.enabled_shops)),
+        int(basics.use_inventory), result.rows_with_match, prep.skipped_basics,
+        ",".join(result.timed_out_shops) or "none",
         int((monotonic() - t0) * 1000),
     )
-
-    return render_template(
-        "decklist.html",
-        decklist=text,
-        card_rows=card_rows,
-        shop_list=shop_list,
-        fx=fx,
-        shop_flags=SHOP_FLAGS,
-        shipping_config=ship_cfg,
-        shop_filter_config=shop_filter_cfg,
-        shop_filter_active=shop_filter_active,
-        active="search",
-        error=None,
-        use_inventory=use_inventory,
-        match_printings=basics.match_printings,
-        skipped_basics=skipped_basics,
-        unparsed_lines=prep.unparsed_lines,
-        skipped_maybeboard=prep.skipped_maybeboard,
-        timed_out_shops=timed_out_sorted,
-        **totals,
-    )
+    return render_template("decklist.html", **{
+        **page,
+        "decklist": prep.decklist_text,
+        "card_rows": result.card_rows,
+        "shop_list": result.shop_list,
+        **result.totals,
+        "fx": prep.fx,
+        "skipped_basics": prep.skipped_basics,
+        "unparsed_lines": prep.unparsed_lines,
+        "skipped_maybeboard": prep.skipped_maybeboard,
+        "timed_out_shops": result.timed_out_shops,
+    })
 
 
 # Streaming /decklist via SSE.
@@ -942,97 +874,20 @@ def market_history_download_status():
 def market_history():
     card_name = request.args.get("card_name", "").strip()
     set_code = pricing.normalize_set_code(request.args.get("set_code", ""), upper=True)
-    card_number = request.args.get("card_number", "").strip()
-    is_foil = 1 if request.args.get("printing", "").strip().lower() == "foil" else 0
-    period = request.args.get("period", "1m").strip().lower()
-    if period not in pricing.MARKET_HISTORY_PERIODS:
-        period = "1m"
-
     if not card_name or not set_code:
         return jsonify({"ok": False, "error": "card_name and set_code are required"}), 400
-
-    with db.get_conn() as conn:
-        downloaded_at = meta.read(conn, "mtgjson_history_downloaded_at")
-        mapped_uuid = market_repo.find_card_uuid(
-            conn, card_name=card_name, set_code=set_code,
-            card_number=card_number, is_foil=is_foil,
-        )
-
-    finish = "foil" if is_foil else "normal"
-    history = pricing.query_history(mapped_uuid, finish) if mapped_uuid else {}
-    dense_points = pricing.densify_daily_points(
-        history,
-        end_day=datetime.now(UTC).date(),
-    ) if history else []
-    if period != "all" and dense_points:
-        cutoff = pricing.history_cutoff(period)
-        if cutoff is None:
-            raise ValueError(f"Unknown history period: {period!r}")
-        dense_points = [
-            point for point in dense_points
-            if datetime.fromisoformat(point["market_date"]).replace(tzinfo=UTC) >= cutoff
-        ]
-    available_since = next((point["market_date"] for point in dense_points if point["price_usd"] is not None), None)
-
-    return jsonify({
-        "ok": True,
-        "card_name": card_name,
-        "set_code": set_code,
-        "card_number": card_number,
-        "is_foil": bool(is_foil),
-        "default_period": "1m",
-        "period": period,
-        "available_periods": list(pricing.MARKET_HISTORY_PERIODS),
-        "period_days": pricing.MARKET_HISTORY_PERIODS,
-        "available_since": available_since,
-        "downloaded_at": downloaded_at,
-        "has_history": bool(history),
-        "source": {
-            "label": "MTGJSON / TCGplayer retail",
-            "detail": (
-                "Imported from MTGJSON price history. Blank days mean MTGJSON has no value"
-                " for that day or the local download is behind."
-            ),
-        },
-        "points": dense_points,
-        "all_points_count": len(dense_points),
-    })
+    return jsonify(pricing.card_history_payload(
+        card_name=card_name,
+        set_code=set_code,
+        card_number=request.args.get("card_number", "").strip(),
+        foil=request.args.get("printing", "").strip().lower() == "foil",
+        period=request.args.get("period", "").strip().lower(),
+    ))
 
 
 @app.route("/market/history/portfolio")
 def market_history_portfolio():
-    user_id = _get_user_id()
-    inventory_rows = inv.list_all(user_id)
-    with db.get_conn() as conn:
-        downloaded_at = meta.read(conn, "mtgjson_history_downloaded_at")
-
-    result = pricing.compute_portfolio_history(inventory_rows)
-    points = result["points"]
-
-    return jsonify({
-        "ok": True,
-        # The whole series is the point of this view; default to ALL but keep
-        # the period buttons so the per-card chart JS can slice client-side.
-        "default_period": "all",
-        "period": "all",
-        "available_periods": list(pricing.MARKET_HISTORY_PERIODS),
-        "period_days": pricing.MARKET_HISTORY_PERIODS,
-        "available_since": result["available_since"],
-        "downloaded_at": downloaded_at,
-        "has_history": result["has_history"],
-        "lot_count": result["lot_count"],
-        "mapped_count": result["mapped_count"],
-        "source": {
-            "label": "MTGJSON / TCGplayer retail",
-            "detail": (
-                "Whole-portfolio value summed across MTGJSON daily prices, using"
-                " current quantities. Days with no MTGJSON value for a held card"
-                " show as blanks rather than being carried forward."
-            ),
-        },
-        "points": points,
-        "all_points_count": len(points),
-    })
+    return jsonify(pricing.portfolio_history_payload(inv.list_all(_get_user_id())))
 
 
 # --- Sealed products ---------------------------------------------------------
@@ -1215,19 +1070,32 @@ def _parse_table_query(args, *, sort_choices: Collection[str],
     if direction not in ("asc", "desc"):
         direction = default_dir
 
-    q = (args.get("q") or "").strip()
-    price_mode = args.get("price_mode") or "any"
-    if price_mode not in inv.PRICE_MODES:
-        price_mode = "any"
-    price_value = _opt_float(args.get("price_value"))
-    set_code = (args.get("set_code") or "").strip().upper() or None
-    condition = (args.get("condition") or "").strip() or None
-
     return {
-        "q": q, "sort": sort, "direction": direction,
-        "page": page, "per_page": per_page,
-        "price_mode": price_mode, "price_value": price_value,
-        "set_code": set_code, "condition": condition,
+        "sort": sort, "direction": direction, "page": page, "per_page": per_page,
+        **_parse_inventory_filter(args),
+    }
+
+
+def _parse_inventory_filter(source) -> dict:
+    """The inventory filter (name substring, price mode/value, set,
+    condition) from query args or a JSON ``match`` object. Shared by the
+    /inventory and /market tables and filter-based delete, so "delete all
+    matching" removes exactly what the table showed."""
+    price_mode = source.get("price_mode") or "any"
+    return {
+        "q": str(source.get("q") or "").strip(),
+        "price_mode": price_mode if price_mode in inv.PRICE_MODES else "any",
+        "price_value": _opt_float(str(source.get("price_value") or "")),
+        "set_code": str(source.get("set_code") or "").strip().upper() or None,
+        "condition": str(source.get("condition") or "").strip() or None,
+    }
+
+
+def _inventory_filter_kwargs(params: dict) -> dict:
+    return {
+        "q": params["q"] or None,
+        "price_mode": params["price_mode"], "price_value": params["price_value"],
+        "set_code": params["set_code"], "condition": params["condition"],
     }
 
 
@@ -1241,13 +1109,10 @@ def inventory():
     )
 
     # Two server round-trips: aggregate CTE + paginated page query.
+    filters = _inventory_filter_kwargs(params)
     rows, matched, stats = inv.page_with_aggregates(
-        user_id,
-        q=params["q"] or None,
-        sort=params["sort"], direction=params["direction"],
-        page=params["page"], per_page=params["per_page"],
-        price_mode=params["price_mode"], price_value=params["price_value"],
-        set_code=params["set_code"], condition=params["condition"],
+        user_id, sort=params["sort"], direction=params["direction"],
+        page=params["page"], per_page=params["per_page"], **filters,
     )
     total = matched["printings"]
     total_pages = max(1, math.ceil(total / params["per_page"])) if total else 1
@@ -1258,12 +1123,8 @@ def inventory():
     if params["page"] > total_pages:
         params["page"] = total_pages
         rows = inv.list_paginated(
-            user_id,
-            q=params["q"] or None,
-            sort=params["sort"], direction=params["direction"],
-            page=params["page"], per_page=params["per_page"],
-            price_mode=params["price_mode"], price_value=params["price_value"],
-            set_code=params["set_code"], condition=params["condition"],
+            user_id, sort=params["sort"], direction=params["direction"],
+            page=params["page"], per_page=params["per_page"], **filters,
         )
 
     ctx = {
@@ -1406,16 +1267,10 @@ def inventory_delete():
     match = payload.get("match")
     if not isinstance(match, dict):
         return {"ok": False, "error": "Provide 'ids' or 'match'"}, 400
-    q = (match.get("q") or "").strip() or None
-    price_mode = match.get("price_mode") or "any"
-    price_value = _opt_float(str(match.get("price_value", "")))
-    set_code = (match.get("set_code") or "").strip().upper() or None
-    condition = (match.get("condition") or "").strip() or None
+    filters = _inventory_filter_kwargs(_parse_inventory_filter(match))
+    q, price_mode = filters["q"], filters["price_mode"]
     try:
-        count = inv.delete_matching(
-            user_id, q=q, price_mode=price_mode, price_value=price_value,
-            set_code=set_code, condition=condition,
-        )
+        count = inv.delete_matching(user_id, **filters)
     except Exception:
         app.logger.exception(
             "event=inventory_delete_failed source=match q=%r price_mode=%r",

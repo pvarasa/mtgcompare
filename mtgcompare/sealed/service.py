@@ -21,8 +21,7 @@ from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from threading import Lock
 
-from .. import db
-from ..pricing import meta
+from .. import db, meta
 from . import catalog, jp_shops, repo
 from . import tcgplayer as tcg
 
@@ -299,27 +298,22 @@ def _product_label(p: dict) -> dict:
     }
 
 
-def _cheapest_shop_offer(points: dict, uuid: str, language: str, fresh_since: str) -> dict | None:
-    """Cheapest recent in-stock JP-shop offer for one product × language.
+def _recent_offer(
+    points: dict, uuid: str, language: str, fresh_since: str,
+    sources: tuple[str, ...], pick: Callable = min,
+) -> dict | None:
+    """One product × language's price across ``sources``, from points seen
+    since ``fresh_since``: ``min`` for the cheapest asking price, ``max``
+    for the best buylist bid.
 
-    Shops only record in-stock offers, so a point older than the
-    freshness window means the product has since sold out there."""
+    Shops only record in-stock offers (and live bids), so a point older
+    than the freshness window means it has since sold out / stopped."""
     offers = [
         {**pt, "source": src, "label": jp_shops.SHOP_LABELS[src]}
-        for src in SHOP_SOURCES
+        for src in sources
         if (pt := points.get((uuid, src, language))) and pt["market_date"] >= fresh_since
     ]
-    return min(offers, key=lambda o: o["price"]) if offers else None
-
-
-def _best_buy_price(points: dict, uuid: str, language: str, fresh_since: str) -> dict | None:
-    """Highest recent buylist bid for one product × language."""
-    bids = [
-        {**pt, "source": src, "label": jp_shops.SHOP_LABELS[src]}
-        for src in BUY_SOURCES
-        if (pt := points.get((uuid, src, language))) and pt["market_date"] >= fresh_since
-    ]
-    return max(bids, key=lambda o: o["price"]) if bids else None
+    return pick(offers, key=lambda o: o["price"]) if offers else None
 
 
 def _attach_market(
@@ -336,12 +330,12 @@ def _attach_market(
     uuid = row["uuid"]
     tcg_pt = points.get((uuid, tcg.SOURCE, "EN"))
     row["tcg_usd"] = tcg_pt["price"] if tcg_pt else None
-    row["offer_en"] = _cheapest_shop_offer(points, uuid, "EN", fresh_since)
-    row["offer_jp"] = _cheapest_shop_offer(points, uuid, "JP", fresh_since)
+    row["offer_en"] = _recent_offer(points, uuid, "EN", fresh_since, SHOP_SOURCES)
+    row["offer_jp"] = _recent_offer(points, uuid, "JP", fresh_since, SHOP_SOURCES)
     own_offer = row["offer_jp"] if language == "JP" else row["offer_en"]
     row["offer"] = own_offer
-    row["buy_en"] = _best_buy_price(points, uuid, "EN", fresh_since)
-    row["buy_jp"] = _best_buy_price(points, uuid, "JP", fresh_since)
+    row["buy_en"] = _recent_offer(points, uuid, "EN", fresh_since, BUY_SOURCES, max)
+    row["buy_jp"] = _recent_offer(points, uuid, "JP", fresh_since, BUY_SOURCES, max)
     row["buy"] = row["buy_jp"] if language == "JP" else row["buy_en"]
 
     basis: dict | None = None

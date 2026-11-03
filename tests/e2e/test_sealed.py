@@ -102,3 +102,35 @@ def test_chart_series_picker_switches_to_shop_in_yen(e2e_base_url, sealed_env, p
         "() => document.getElementById('market-chart-current').textContent === '¥18,900'", timeout=3000,
     )
     assert page.locator("#market-chart-delta").inner_text() == "-¥900"
+
+
+def test_remove_lot_asks_then_deletes(e2e_base_url, sealed_env, page):
+    """The confirm prompt is wired by data-confirm in common.js (no inline
+    onsubmit under the CSP): dismissing keeps the lot, accepting removes it."""
+    with db_module.get_conn() as conn:
+        repo.add_lot(conn, "local", {"product_uuid": _PRODUCT["uuid"], "language": "EN", "quantity": 1,
+                                     "price_bought": None, "currency": "USD", "date_bought": None})
+    page.goto(f"{e2e_base_url}/sealed")
+    prompts: list[str] = []
+    page.once("dialog", lambda d: (prompts.append(d.message), d.dismiss()))
+    page.click("#sealed-lots-table .icon-btn")
+    assert prompts == ["Remove this lot?"]
+    assert page.locator("#sealed-lots-table tbody tr").count() == 1
+
+    page.once("dialog", lambda d: d.accept())
+    page.click("#sealed-lots-table .icon-btn")
+    page.locator("#sealed-lots-table").wait_for(state="detached", timeout=5000)
+
+
+def test_refresh_button_runs_job_and_reloads(e2e_base_url, sealed_env, page, monkeypatch):
+    """Local app: Refresh prices starts a job through jobs.js, shows its
+    progress, then reloads with the job's summary."""
+    monkeypatch.setattr(sealed_service, "run_daily_update",
+                        lambda progress_cb=None: {"products": 1, "priced": 1, "failed": 0, "shops": {}})
+    page.goto(f"{e2e_base_url}/sealed")
+    with page.expect_navigation(timeout=8000):
+        page.click("#sealed-refresh-btn")
+        page.wait_for_function(
+            "() => document.getElementById('sealed-refresh-detail').textContent.includes('TCGPlayer: 1 of 1')",
+            timeout=5000,
+        )

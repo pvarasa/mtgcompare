@@ -269,106 +269,9 @@
        it used to live in that branch's script, so on a first run (no
        prices yet, the one time the page tells you to click it) the button
        had no handler and did nothing. #}
-    <script>
-      (function () {
-        const isFirstDownload = {{ (not history_db_exists)|tojson }};
-        const historyDownloadUrl = {{ url_for('market_history_download')|tojson }};
-        const historyStatusUrl = {{ url_for('market_history_download_status')|tojson }};
-        const downloadBtn = document.getElementById('mkt-history-download-btn');
-        const progressEl = document.getElementById('mkt-history-progress');
-        const progressFillEl = document.getElementById('mkt-history-fill');
-        const progressPhaseEl = document.getElementById('mkt-history-phase');
-        const progressPctEl = document.getElementById('mkt-history-pct');
-        const progressDetailEl = document.getElementById('mkt-history-detail');
-        let activeJobId = null;
-        let statusPoll = null;
-
-        if (downloadBtn) {
-          function setProgress(job) {
-            progressEl.classList.add('open');
-            const progress = Math.max(0, Math.min(100, job.progress || 0));
-            progressFillEl.style.width = `${progress}%`;
-            progressPhaseEl.textContent = job.phase || 'Working';
-            progressPctEl.textContent = `${progress}%`;
-            progressDetailEl.textContent = job.error || job.detail || '';
-            downloadBtn.disabled = job.state === 'running';
-            if (job.state === 'running') {
-              downloadBtn.textContent = 'Updating...';
-            } else {
-              downloadBtn.textContent = 'Update prices';
-            }
-          }
-
-          function stopPolling() {
-            if (statusPoll) {
-              clearInterval(statusPoll);
-              statusPoll = null;
-            }
-          }
-
-          function pollStatus(jobId) {
-            fetch(`${historyStatusUrl}?job_id=${encodeURIComponent(jobId)}`)
-              .then(response => response.json())
-              .then(job => {
-                if (!job.ok) throw new Error(job.error || 'Status fetch failed');
-                setProgress(job);
-                if (job.state === 'done' || job.state === 'error') {
-                  stopPolling();
-                  if (job.state === 'done') {
-                    window.setTimeout(() => window.location.reload(), 900);
-                  }
-                }
-              })
-              .catch(() => {
-                stopPolling();
-                downloadBtn.disabled = false;
-                downloadBtn.textContent = 'Update prices';
-                progressEl.classList.add('open');
-                progressPhaseEl.textContent = 'Failed';
-                progressPctEl.textContent = '';
-                progressFillEl.style.width = '0%';
-                progressDetailEl.textContent = 'Could not read status.';
-              });
-          }
-
-          downloadBtn.addEventListener('click', () => {
-            if (isFirstDownload && !confirm(
-              'First-time setup fetches a large file (~150 MB) and builds a local price database. This takes 5–15 minutes depending on your connection and machine.\n\nContinue?'
-            )) return;
-            downloadBtn.disabled = true;
-            downloadBtn.textContent = 'Starting...';
-            progressEl.classList.add('open');
-            progressPhaseEl.textContent = 'Queued';
-            progressPctEl.textContent = '0%';
-            progressFillEl.style.width = '0%';
-            progressDetailEl.textContent = 'Starting price update...';
-
-            const csrf = document.querySelector('meta[name="csrf-token"]')?.content || '';
-            fetch(historyDownloadUrl, {
-              method: 'POST',
-              headers: { 'X-Requested-With': 'fetch', 'X-CSRFToken': csrf },
-            })
-              .then(response => response.json())
-              .then(data => {
-                if (!data.ok) throw new Error(data.error || 'Download start failed');
-                activeJobId = data.job_id;
-                pollStatus(activeJobId);
-                stopPolling();
-                statusPoll = window.setInterval(() => pollStatus(activeJobId), 1000);
-              })
-              .catch(err => {
-                downloadBtn.disabled = false;
-                downloadBtn.textContent = 'Update prices';
-                progressPhaseEl.textContent = 'Failed';
-                progressPctEl.textContent = '';
-                progressFillEl.style.width = '0%';
-                progressDetailEl.textContent = err.message || 'Could not start price update.';
-              });
-          });
-        }
-
-      })();
-    </script>
+    <script type="application/json" id="market-download-config">{{ {"isFirstDownload": (not history_db_exists), "historyDownloadUrl": url_for('market_history_download'), "historyStatusUrl": url_for('market_history_download_status')} | tojson }}</script>
+    <script src="{{ url_for('static', filename='jobs.js') }}?v={{ static_token }}"></script>
+    <script src="{{ url_for('static', filename='market-download.js') }}?v={{ static_token }}"></script>
     {% endif %}
   </div>
 
@@ -451,73 +354,8 @@
 
     <script src="{{ url_for('static', filename='paginatedtable.js') }}?v={{ static_token }}"></script>
     <script src="{{ url_for('static', filename='pricechart.js') }}?v={{ static_token }}"></script>
-    <script>
-      (function () {
-        const historyUrl = {{ url_for('market_history')|tojson }};
-        const portfolioHistoryUrl = {{ url_for('market_history_portfolio')|tojson }};
-        const priceChart = window.mtgcompare.priceChart;
-        const formatDate = priceChart.formatDate;
-        const mtgjsonEmpty = 'No MTGJSON price history is available yet.<br>Use <strong>Update prices</strong> to import it.';
-        const mtgjsonFootnote = 'Download history first if MTGJSON data is not available locally.';
-
-        // Delegate chart clicks on the wrapper, not the tbody — the
-        // tbody is replaced on every filter/sort/pagination fetch, but
-        // the wrapper stays put for the page's lifetime.
-        const mktWrapper = document.getElementById('mkt-table-wrapper');
-        (mktWrapper || document).addEventListener('click', event => {
-          const btn = event.target.closest('.market-chart-trigger');
-          if (!btn) return;
-          const params = new URLSearchParams({
-            card_name: btn.dataset.chartCard,
-            set_code: btn.dataset.chartSet,
-            card_number: btn.dataset.chartNumber,
-            printing: btn.dataset.chartPrinting,
-            period: 'all',
-          });
-          priceChart.show({
-            url: `${historyUrl}?${params.toString()}`,
-            title: btn.dataset.chartCard,
-            subtitle: `${btn.dataset.chartSet}${btn.dataset.chartPrinting.toLowerCase() === 'foil' ? ' / Foil' : ' / Non-foil'}`,
-            subtitleFor: d =>
-              `${d.set_code}${d.card_number ? ` #${d.card_number}` : ''}${d.is_foil ? ' / Foil' : ' / Non-foil'}${d.available_since ? ` / tracking since ${formatDate(d.available_since)}` : ''}`,
-            errorMessage: 'Could not load market history for this card.',
-            errorFootnote: mtgjsonFootnote,
-            emptyMessage: mtgjsonEmpty,
-          });
-        });
-
-        const portfolioBtn = document.getElementById('mkt-portfolio-history-btn');
-        if (portfolioBtn) {
-          portfolioBtn.addEventListener('click', () => {
-            priceChart.show({
-              url: portfolioHistoryUrl,
-              title: 'Portfolio total',
-              subtitle: 'Whole-portfolio value across MTGJSON history',
-              subtitleFor: d => {
-                const since = d.available_since ? ` / since ${formatDate(d.available_since)}` : '';
-                return `${d.mapped_count} of ${d.lot_count} lot${d.lot_count === 1 ? '' : 's'} tracked${since}`;
-              },
-              errorMessage: 'Could not load portfolio history.',
-              errorFootnote: mtgjsonFootnote,
-              emptyMessage: mtgjsonEmpty,
-            });
-          });
-        }
-
-        // Chart clicks are delegated on the wrapper (above) so they
-        // survive partial swaps. Filter/sort/pagination is handled by
-        // the shared paginatedtable client.
-        const mktForm = document.getElementById('mkt-filter-form');
-        if (mktForm && mktWrapper && window.mtgcompare && window.mtgcompare.attachPaginatedTable) {
-          window.mtgcompare.attachPaginatedTable({
-            form: mktForm, wrapper: mktWrapper,
-            summaryEl: document.getElementById('mkt-summary'),
-            spinnerClass: 'mkt-loading',
-            defaults: { sort: 'pnl_usd', dir: 'desc', price_mode: 'any', per_page: '50' },
-          });
-        }
-      })();
-    </script>
+    <script type="application/json" id="market-chart-config">{{ {"historyUrl": url_for('market_history'), "portfolioHistoryUrl": url_for('market_history_portfolio')} | tojson }}</script>
+    <script src="{{ url_for('static', filename='market-chart.js') }}?v={{ static_token }}"></script>
   {% endif %}
 
 {% endblock %}

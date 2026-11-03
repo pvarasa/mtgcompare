@@ -24,9 +24,9 @@ from pathlib import Path
 
 import requests
 
-from .. import db
+from .. import db, meta
 from .. import inventory as inv
-from . import history_import, history_store, market_repo, meta
+from . import history_import, history_store, market_repo
 from .common import (
     is_foil,
     load_existing_card_map,
