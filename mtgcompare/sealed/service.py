@@ -34,7 +34,9 @@ LANGUAGES = ("EN", "JP")
 CURRENCIES = ("JPY", "USD")
 CATEGORY_LABELS = {"booster_box": "Box", "booster_pack": "Pack"}
 CHANGE_WINDOW_DAYS = 30
-SHOP_SOURCES = (jp_shops.HARERUYA, jp_shops.SINGLESTAR)
+# Sell sources (asking prices) and buy sources (what a shop pays).
+SHOP_SOURCES = (jp_shops.HARERUYA, jp_shops.SINGLESTAR, jp_shops.SERRA)
+BUY_SOURCES = (jp_shops.HARERUYA_BUY,)
 # A shop offer older than this is treated as sold out (shops only record
 # in-stock offers, so the last point outlives the stock).
 SHOP_FRESH_DAYS = 7
@@ -207,10 +209,14 @@ def _fetch_product_points(
 
 ShopCrawler = Callable[[], list[jp_shops.ShopListing]]
 DEFAULT_CRAWLERS: dict[str, ShopCrawler] = {
-    # Hareruya first: its titles teach the set-name map SingleStar needs.
+    # Hareruya (shop + buylist) first: its titles carry set codes and teach
+    # the set-name map SingleStar and Serra need.
     jp_shops.HARERUYA: jp_shops.crawl_hareruya,
+    jp_shops.HARERUYA_BUY: jp_shops.crawl_hareruya_buylist,
     jp_shops.SINGLESTAR: jp_shops.crawl_singlestar,
+    jp_shops.SERRA: jp_shops.crawl_serra,
 }
+_SET_NAME_TEACHERS = (jp_shops.HARERUYA, jp_shops.HARERUYA_BUY)
 
 
 def refresh_shop_prices(
@@ -220,7 +226,8 @@ def refresh_shop_prices(
     progress: ProgressFn = _noop_progress,
 ) -> dict[str, dict]:
     """Crawl each Japanese shop's sealed listing and record today's cheapest
-    in-stock offer per (product, language) for every catalog product found.
+    in-stock offer (lowest bid, for the buylist) per (product, language)
+    for every catalog product found.
 
     Every matched product is recorded, not just tracked ones, so a product
     added later already has shop history. A failing shop is logged and
@@ -247,7 +254,7 @@ def refresh_shop_prices(
             logger.warning("event=sealed_shop_crawl_failed shop=%s class=%s err=%s", shop, type(exc).__name__, exc)
             results[shop] = {"error": str(exc)}
             continue
-        if shop == jp_shops.HARERUYA:
+        if shop in _SET_NAME_TEACHERS:
             set_names.update(jp_shops.hareruya_set_names(listings))
             with db.get_conn() as conn:
                 meta.write(conn, SET_NAMES_META_KEY, json.dumps(set_names, ensure_ascii=False, sort_keys=True))
@@ -348,6 +355,16 @@ def _cheapest_shop_offer(points: dict, uuid: str, language: str, fresh_since: st
     return min(offers, key=lambda o: o["price"]) if offers else None
 
 
+def _best_buy_price(points: dict, uuid: str, language: str, fresh_since: str) -> dict | None:
+    """Highest recent buylist bid for one product × language."""
+    bids = [
+        {**pt, "source": src, "label": jp_shops.SHOP_LABELS[src]}
+        for src in BUY_SOURCES
+        if (pt := points.get((uuid, src, language))) and pt["market_date"] >= fresh_since
+    ]
+    return max(bids, key=lambda o: o["price"]) if bids else None
+
+
 def _attach_market(
     row: dict, language: str | None, points: dict, past: dict,
     fx: float | None, fresh_since: str,
@@ -366,6 +383,9 @@ def _attach_market(
     row["offer_jp"] = _cheapest_shop_offer(points, uuid, "JP", fresh_since)
     own_offer = row["offer_jp"] if language == "JP" else row["offer_en"]
     row["offer"] = own_offer
+    row["buy_en"] = _best_buy_price(points, uuid, "EN", fresh_since)
+    row["buy_jp"] = _best_buy_price(points, uuid, "JP", fresh_since)
+    row["buy"] = row["buy_jp"] if language == "JP" else row["buy_en"]
 
     basis: dict | None = None
     if language == "JP" and own_offer:
@@ -417,6 +437,8 @@ def compute_sealed_ctx(user_id: str, *, fx: float | None, today: date | None = N
         cost_unit = _to_usd(lot["price_bought"], lot["currency"], fx)
         lot["cost_usd"] = round(cost_unit * qty, 2) if cost_unit is not None else None
         lot["value_usd"] = round(lot["market_usd"] * qty, 2) if lot["market_usd"] is not None else None
+        bid = lot["buy"]
+        lot["buy_value_jpy"] = round(bid["price"] * qty) if bid else None
         if lot["cost_usd"] is not None and lot["value_usd"] is not None:
             lot["pnl_usd"] = round(lot["value_usd"] - lot["cost_usd"], 2)
             lot["pnl_pct"] = round((lot["value_usd"] / lot["cost_usd"] - 1) * 100, 1) if lot["cost_usd"] > 0 else None
@@ -448,6 +470,8 @@ def build_summary(lots: list[dict], fx: float | None) -> dict:
     total_value = sum(r["value_usd"] for r in valued)
     total_cost = sum(r["cost_usd"] for r in pnl_rows)
     total_pnl = sum(r["pnl_usd"] for r in pnl_rows)
+    bid_rows = [r for r in lots if r.get("buy_value_jpy") is not None]
+    total_buy_jpy = sum(r["buy_value_jpy"] for r in bid_rows)
     return {
         "lots_total": len(lots),
         "units_total": sum(r["quantity"] for r in lots),
@@ -459,12 +483,16 @@ def build_summary(lots: list[dict], fx: float | None) -> dict:
         "total_cost_usd": round(total_cost, 2),
         "total_pnl_usd": round(total_pnl, 2),
         "pnl_pct": round(total_pnl / total_cost * 100, 1) if total_cost > 0 else None,
+        # What the buylist would pay today for the lots it bids on.
+        "lots_with_buy": len(bid_rows),
+        "total_buy_jpy": total_buy_jpy,
+        "total_buy_usd": round(total_buy_jpy / fx, 2) if fx else None,
     }
 
 
 def parse_series(value: str | None) -> tuple[str, str] | None:
     source, _, language = (value or "").partition(":")
-    if source in (tcg.SOURCE, *SHOP_SOURCES) and language in LANGUAGES:
+    if source in (tcg.SOURCE, *SHOP_SOURCES, *BUY_SOURCES) and language in LANGUAGES:
         return source, language
     return None
 
@@ -498,6 +526,9 @@ def product_history(uuid: str, series: tuple[str, str] | None = None) -> dict | 
             "TCGPlayer market price (recent sales, English product). The first year is"
             " backfilled at weekly resolution, then one point per day."
             if series[0] == tcg.SOURCE else
+            f"{series_label(*series)}: what the shop pays for the product, recorded daily."
+            " Days it wasn't buying have no point."
+            if series[0] in BUY_SOURCES else
             f"Cheapest in-stock {series_label(*series)} asking price, recorded daily. Days"
             " the product was sold out there have no point."
         ),

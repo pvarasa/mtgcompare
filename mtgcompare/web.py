@@ -1014,7 +1014,10 @@ def market_history_portfolio():
 def sealed_page():
     user_id = _get_user_id()
     ctx = sealed_service.compute_sealed_ctx(user_id, fx=_get_fx())
-    return render_template("sealed.html", active="sealed", **ctx)
+    # On the hosted site the daily cron refreshes sealed prices; only the
+    # local app (no cron) gets a manual button. Same rule as /market.
+    return render_template("sealed.html", active="sealed",
+                           allow_price_update=not db.IS_POSTGRES, **ctx)
 
 
 def _resolve_sealed_product_or_flash() -> dict | None:
@@ -1092,9 +1095,11 @@ def sealed_delete_watch():
 def sealed_refresh():
     """Refresh the catalog (if stale) and every tracked product's price.
 
-    Cheap — one TCGPlayer call per tracked product — so unlike the MTGJSON
-    import it is offered in every mode, not just local.
+    Local mode only: the hosted site has the daily cron, and a user-
+    triggered refresh would crawl both Japanese shops on demand.
     """
+    if db.IS_POSTGRES:
+        return jsonify({"ok": False, "error": "Prices refresh daily on the hosted site."}), 403
     running = sealed_service.running_refresh_job()
     if running:
         return jsonify({"ok": True, "job_id": running["id"], "already_running": True})

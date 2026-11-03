@@ -71,8 +71,8 @@ Repo-specific guidance for coding sessions.
   (market price + history endpoints keyed by TCGPlayer product id, pure
   parsers + `TcgSealedClient`), `repo.py` (data access for the `sealed_*`
   tables), `jp_titles.py` (pure parsing of Japanese shop titles + catalog
-  matching), `jp_shops.py` (Hareruya / SingleStar sealed crawlers and
-  cheapest-offer selection), `service.py` (catalog/price refresh, backfill,
+  matching), `jp_shops.py` (Hareruya / SingleStar / Cardshop Serra sealed
+  crawlers, the Hareruya buylist crawler, and cheapest-offer selection), `service.py` (catalog/price refresh, backfill,
   `/sealed` page computation).
 - `mtgcompare/inventory.py`
   Inventory storage and inventory CLI. All public functions accept a `user_id` parameter.
@@ -243,6 +243,26 @@ The `users` table is keyed on `workos_user_id`; inventory rows continue to key o
   code as a fallback. MTGJSON has no Japanese set names. Only in-stock
   offers are recorded (cheapest per product × language, with url + stock),
   for every matched product, not just tracked ones.
+- **Cardshop Serra** (`serra`): its Shopify collection feed
+  (`collections/sidebar-cat-5/products.json`, 250/page, ~10 pages, paced
+  1.5 s; one Retry-After wait on a 429, then the shop fails for the day).
+  Priced at the NM variant (SP/MP are damaged boxes); the feed says
+  available or not, so `stock` is NULL. Titles carry the English product
+  name after ` / `, matched against catalog names with punctuation dropped
+  (`jp_titles.match_english_name`); the Japanese booster-type word vetoes a
+  disagreeing English match (Serra writes "コレクター・ブースターパック /
+  Ikoria … Booster Pack"). Without an English half it falls back to the
+  set-name route (plus English set names like "Unstable"). Anything after
+  the booster word (cartons, Battle Box) is rejected.
+- **Buy prices** (`hareruya_buy`, `jp_shops.BUY_SOURCES`): Hareruya's
+  buylist categories 506 (BOX) / 507 (pack), same title shape as its shop,
+  so it also teaches the set-name map. Stored in `sealed_prices` like a
+  shop, never used for valuation: shown as the holdings **Buylist** column,
+  a *Buylist value* summary tile (qty × bid) and a chart series. Hareruya
+  bids per printing (WAR first print vs reprint), so the **lowest** bid per
+  product × language is kept. Bids older than `SHOP_FRESH_DAYS` are ignored.
+- Probed and skipped (2026-11): Card Rush (89 sealed, 0 boxes in stock),
+  BLACK FROG (one FIN category, payment-restricted), TokyoMTG (no sealed).
 - **Valuation**: EN lots use TCGPlayer. JP lots use the cheapest
   Japanese-language shop offer seen in the last `SHOP_FRESH_DAYS` (7);
   older points mean the product sold out. With no such offer, a JP lot
@@ -250,8 +270,9 @@ The `users` table is keyed on `workos_user_id`; inventory rows continue to key o
   (JP* in the UI). Shop prices are asking prices, not sales.
 - **Refresh**: the daily cron runs `sealed.service.run_daily_update()`
   (catalog → TCGPlayer → shops, each shop isolated) after the card update,
-  in its own try/except so either can fail alone. The
-  page's **Refresh prices** (`POST /sealed/refresh`) runs the same thing as
+  in its own try/except so either can fail alone. In local (SQLite) mode
+  only, the page's **Refresh prices** (`POST /sealed/refresh`; hidden and
+  403 on the hosted site, where the cron covers it) runs the same thing as
   a `jobs` entry of kind `"sealed"`. `jobs.find_running(kind)` keeps it from
   coalescing with the MTGJSON import. Its status is mirrored to `app_meta`
   (`sealed_refresh_job`) and polled via `GET /sealed/refresh/status`,

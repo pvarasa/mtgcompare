@@ -3,7 +3,9 @@
 Japanese shops name sealed product in one regular shape:
 
     Hareruya:   (36パック)《ブルームバロウ プレイ・ブースターBOX》《○日本語版》[BLB]
+                (its buylist uses the same shape: 《未来予知ブースターBOX 〇日本語版》[FUT])
     SingleStar: ブルームバロウ 日本語版 プレイブースター 1BOX
+    Serra:      (日)ブルームバロウ プレイ・ブースターボックス / Bloomburrow Play Booster Box【BOX】
 
 ``parse_*_title`` turns a title into a ``JpListing`` (set, booster type,
 box/pack, language) or None for anything that isn't a single, sound,
@@ -12,7 +14,9 @@ English/Japanese booster box or pack (bundles, multi-box lots, damaged
 
 SingleStar titles carry no set code, so ``set_name_key`` normalises the
 Japanese set name for a name → code map built from Hareruya's titles (which
-carry both); MTGJSON has no Japanese set names.
+carry both); MTGJSON has no Japanese set names. Serra titles usually carry
+the English product name, which ``match_english_name`` looks up directly;
+without it they fall back to the same set-name route as SingleStar.
 """
 from __future__ import annotations
 
@@ -44,7 +48,7 @@ _LANG = {"日本語": "JP", "英語": "EN"}
 _PRODUCT_PREFIX_RE = re.compile(r"^マジック\s*[:：]\s*ザ・ギャザリング\s*[|｜\-－]\s*")
 # Words that disqualify a listing: damaged stock, multi-unit lots,
 # special editions the catalog files separately.
-_REJECT = ("訳あり", "パックセット", "セット販売", "シュリンク破れ", "外箱破損")
+_REJECT = ("訳あり", "パックセット", "セット販売", "シュリンク破れ", "外箱破損", "カートン", "Carton", "ブリスター")
 
 
 @dataclass(frozen=True)
@@ -54,6 +58,7 @@ class JpListing:
     booster_type: str | None  # key of _TYPE_SUBTYPES
     category: str            # booster_box / booster_pack
     language: str            # EN / JP
+    en_name: str | None = None  # English product name, when the shop gives one
 
 
 def set_name_key(name: str) -> str:
@@ -119,6 +124,94 @@ def parse_singlestar_title(title: str) -> JpListing | None:
         category="booster_box" if tm.group(2) == "BOX" else "booster_pack",
         language=lang,
     )
+
+
+_SERRA_LANG = {"日": "JP", "英": "EN"}
+_SERRA_RE = re.compile(r"^\((日|英)\)(.*?)【(BOX|PACK)】")
+# Serra quotes crossover names: 『マジック：ザ・ギャザリング--FINAL FANTASY』.
+_SERRA_PREFIX_RE = re.compile(r"^マジック\s*[:：]\s*ザ・ギャザリング\s*(?:--|――|—|[|｜\-－])?\s*")
+# Serra's own misspellings of English product words.
+_SERRA_EN_FIXES = {"Collecter": "Collector"}
+
+
+def parse_serra_title(title: str) -> JpListing | None:
+    """Parse a Cardshop Serra sealed title.
+
+    Only (日)/(英) booster boxes and packs; other languages, bundles, decks
+    and Secret Lairs (no ブースター) are skipped."""
+    if any(w in title for w in _REJECT):
+        return None
+    m = _SERRA_RE.match(title)
+    if not m:
+        return None
+    language, body, kind = _SERRA_LANG[m.group(1)], m.group(2).strip(), m.group(3)
+    jp, _, en = body.partition("/")
+    tm = re.search(rf"({_TYPE_WORDS})?・?\s*ブースター(ボックス|BOX|パック)", jp)
+    # Anything after the booster word ("1カートン(6Box)", "Battle Box") is a
+    # different product than the set's plain box / pack.
+    if not tm or jp[tm.end():].strip():
+        return None
+    category = "booster_pack" if tm.group(2) == "パック" else "booster_box"
+    if (kind == "PACK") != (category == "booster_pack"):
+        return None
+    set_name = re.sub(r"[『』「」]", "", jp[:tm.start()]).strip()
+    set_name = _SERRA_PREFIX_RE.sub("", set_name).strip()
+    en = en.strip()
+    for wrong, right in _SERRA_EN_FIXES.items():
+        en = en.replace(wrong, right)
+    return JpListing(
+        set_code=None,
+        set_name=set_name,
+        booster_type=tm.group(1),
+        category=category,
+        language=language,
+        en_name=en or None,
+    )
+
+
+def english_name_key(name: str) -> str:
+    """Catalog names drop punctuation ("Marvels Spider Man"); shops keep it
+    and sometimes prefix "Magic: The Gathering"."""
+    return re.sub(r"[^a-z0-9]", "", name.lower()).replace("magicthegathering", "")
+
+
+def index_by_english_name(catalog_by_set: dict[str, list[dict]]) -> dict[str, dict]:
+    index: dict[str, dict] = {}
+    for rows in catalog_by_set.values():
+        for p in rows:
+            index.setdefault(english_name_key(p["name"]), p)
+    return index
+
+
+def match_english_name(listing: JpListing, index: dict[str, dict]) -> dict | None:
+    """Catalog product whose name equals the listing's English name (same
+    category). A JP listing prefers the Japan-only edition when MTGJSON has
+    one ("War of the Spark Japanese Booster Box")."""
+    if not listing.en_name:
+        return None
+    key = english_name_key(listing.en_name)
+    product = index.get(key)
+    if not product or product["category"] != listing.category:
+        return None
+    # The Japanese half names the booster type more reliably: Serra writes
+    # "コレクター・ブースターパック / Ikoria: Lair of Behemoths Booster Pack".
+    if listing.booster_type and product.get("subtype") not in _TYPE_SUBTYPES[listing.booster_type][0]:
+        return None
+    if listing.language == "JP":
+        product = index.get(key.replace("booster", "japanesebooster", 1), product)
+    return product
+
+
+def english_set_code(set_name: str, catalog_by_set: dict[str, list[dict]]) -> str | None:
+    """Set code for a set name a shop wrote in English ("Unstable")."""
+    key = english_name_key(set_name)
+    if not key:
+        return None
+    codes = {
+        code for code, rows in catalog_by_set.items()
+        if rows and english_name_key(rows[0].get("set_name") or "") == key
+    }
+    return codes.pop() if len(codes) == 1 else None
 
 
 def resolve_set_code(set_name: str, name_map: dict[str, str]) -> str | None:

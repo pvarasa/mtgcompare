@@ -195,3 +195,29 @@ def test_singlestar_sealed_crawl_matches_catalog():
     assert stats["parsed"] >= 200, f"SingleStar sealed titles stopped parsing: {stats}"
     assert stats["matched"] >= 0.85 * stats["parsed"], f"SingleStar sealed match rate dropped: {stats}"
     assert len(offers) >= 50, f"SingleStar sealed in-stock offers suspiciously few: {stats}"
+
+
+@pytest.mark.canary
+def test_serra_sealed_crawl_matches_catalog():
+    from mtgcompare.sealed import jp_shops
+    listings = jp_shops.crawl_serra()
+    names = jp_shops.hareruya_set_names(jp_shops.crawl_hareruya())
+    offers, stats = jp_shops.best_offers(jp_shops.SERRA, listings, _sealed_catalog_by_set(), names)
+    # 2026-11: ~2370 products, ~900 booster titles, ~99% matched, ~130 in stock.
+    assert stats["listings"] >= 1000, f"Serra sealed collection shrank or moved: {stats}"
+    assert stats["parsed"] >= 400, f"Serra sealed titles stopped parsing: {stats}"
+    assert stats["matched"] >= 0.9 * stats["parsed"], f"Serra sealed match rate dropped: {stats}"
+    assert len(offers) >= 30, f"Serra sealed in-stock offers suspiciously few: {stats}"
+
+
+@pytest.mark.canary
+def test_hareruya_buylist_crawl_matches_catalog():
+    from mtgcompare.sealed import jp_shops
+    listings = jp_shops.crawl_hareruya_buylist()
+    offers, stats = jp_shops.best_offers(
+        jp_shops.HARERUYA_BUY, listings, _sealed_catalog_by_set(), jp_shops.hareruya_set_names(listings),
+    )
+    # 2026-11: ~1020 bids (boxes + packs), ~880 parsed, all matched.
+    assert stats["parsed"] >= 400, f"Hareruya buylist titles stopped parsing: {stats}"
+    assert stats["matched"] >= 0.9 * stats["parsed"], f"Hareruya buylist match rate dropped: {stats}"
+    assert len(offers) >= 200, f"Hareruya buylist bids suspiciously few: {stats}"

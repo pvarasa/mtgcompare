@@ -24,6 +24,11 @@
 </button>
 {%- endmacro %}
 
+{# Buylist bids for both languages in one cell (each ``{price, url}`` or None). #}
+{% macro sealed_bids(en, jp) -%}
+{% if en or jp %}{% for lang, b in (('JP', jp), ('EN', en)) if b %}<div class="offer">¥{{ '{:,.0f}'.format(b.price) }} <a class="product-meta" href="{{ b.url }}" target="_blank" rel="noopener">{{ lang }}</a></div>{% endfor %}{% else %}<span class="muted">-</span>{% endif %}
+{%- endmacro %}
+
 {# Cheapest Japanese-shop offer cell (``{price, label, url, stock}`` or None). #}
 {% macro sealed_offer(o) -%}
 {% if o %}<span class="offer">¥{{ '{:,.0f}'.format(o.price) }}<div class="product-meta"><a href="{{ o.url }}" target="_blank" rel="noopener">{{ o.label }}</a></div></span>{% else %}<span class="muted">-</span>{% endif %}

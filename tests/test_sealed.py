@@ -279,3 +279,17 @@ def test_running_refresh_job_coalesces_until_stale(seeded):
                               "updated_at": (now - timedelta(minutes=5)).isoformat()})
     assert service.running_refresh_job(now)["id"] == "j1"
     assert service.running_refresh_job(now + service.REFRESH_JOB_STALE) is None
+
+
+def test_hosted_site_has_no_manual_refresh(client, monkeypatch):
+    from mtgcompare import db
+    body = client.get("/sealed").get_data(as_text=True)
+    assert 'id="sealed-refresh-btn"' in body  # local app keeps the button
+
+    monkeypatch.setattr(db, "IS_POSTGRES", True)
+    hdr = {"X-User-ID": "u1"}
+    body = client.get("/sealed", headers=hdr).get_data(as_text=True)
+    assert 'id="sealed-refresh-btn"' not in body
+    assert "Prices update daily." in body
+    resp = client.post("/sealed/refresh", headers=hdr)
+    assert resp.status_code == 403 and resp.get_json()["ok"] is False

@@ -1,0 +1,175 @@
+{
+ "_note": "Trimmed Cardshop Serra collections/sidebar-cat-5/products.json, captured 2026-11-03",
+ "products": [
+  {
+   "title": "(日)灯争大戦 ブースターボックス / War of the Spark Booster Box【BOX】 ※発送方法は「ゆうパック」を選択してください。",
+   "handle": "war-booster-box-j_nm_8vqp",
+   "variants": [
+    {
+     "title": "NM",
+     "price": "28800",
+     "available": true
+    }
+   ]
+  },
+  {
+   "title": "(英)灯争大戦 ブースターボックス / War of the Spark Booster Box【BOX】 ※発送方法は「ゆうパック」を選択してください。",
+   "handle": "war-booster-box-e_nm_1qud",
+   "variants": [
+    {
+     "title": "NM",
+     "price": "18000",
+     "available": false
+    },
+    {
+     "title": "SP",
+     "price": "14400",
+     "available": false
+    },
+    {
+     "title": "MP",
+     "price": "10800",
+     "available": false
+    }
+   ]
+  },
+  {
+   "title": "(英)Unstable ブースターボックス 【BOX】 ※発送方法は「ゆうパック」を選択してください。",
+   "handle": "ust-booster-box-e_nm_x53m",
+   "variants": [
+    {
+     "title": "NM",
+     "price": "36000",
+     "available": true
+    },
+    {
+     "title": "SP",
+     "price": "28800",
+     "available": false
+    },
+    {
+     "title": "MP",
+     "price": "21600",
+     "available": false
+    }
+   ]
+  },
+  {
+   "title": "(英)Unstable ブースターパック / Unstable Booster Pack【PACK】",
+   "handle": "ust-booster-pack-e_nm_hkpf",
+   "variants": [
+    {
+     "title": "NM",
+     "price": "1000",
+     "available": true
+    },
+    {
+     "title": "SP",
+     "price": "800",
+     "available": false
+    },
+    {
+     "title": "MP",
+     "price": "600",
+     "available": false
+    }
+   ]
+  },
+  {
+   "title": "(日)ファウンデーションズ プレイ・ブースターボックス / Foundations Play Booster Box【BOX】 ※発送方法は「ゆうパック」を選択してください。",
+   "handle": "fdn-play-booster-box-j_nm_kffv",
+   "variants": [
+    {
+     "title": "NM",
+     "price": "19800",
+     "available": true
+    }
+   ]
+  },
+  {
+   "title": "(日)ファウンデーションズ プレイ・ブースターボックス 1カートン(6Box) / Foundations Play Booster Box 1 Carton(6 Boxes)【BOX】 ※発送方法は「ゆうパック」を選択してください。",
+   "handle": "fdn-play-booster-carton-j_nm_j3io",
+   "variants": [
+    {
+     "title": "NM",
+     "price": "100000",
+     "available": false
+    }
+   ]
+  },
+  {
+   "title": "(日)イコリア：巨獣の棲処 コレクター・ブースターパック / Ikoria: Lair of Behemoths Booster Pack【PACK】",
+   "handle": "iko-collector-pack-j_nm_0ds3",
+   "variants": [
+    {
+     "title": "NM",
+     "price": "2500",
+     "available": false
+    },
+    {
+     "title": "SP",
+     "price": "2000",
+     "available": false
+    },
+    {
+     "title": "MP",
+     "price": "1500",
+     "available": false
+    }
+   ]
+  },
+  {
+   "title": "(日)イコリア：巨獣の棲処 ドラフト・ブースターパック / Ikoria: Lair of Behemoths Draft Booster Pack【PACK】",
+   "handle": "iko-booster-pack-j_nm_fznm",
+   "variants": [
+    {
+     "title": "NM",
+     "price": "400",
+     "available": false
+    },
+    {
+     "title": "SP",
+     "price": "320",
+     "available": false
+    },
+    {
+     "title": "MP",
+     "price": "240",
+     "available": false
+    }
+   ]
+  },
+  {
+   "title": "(英)Secret Lair x Uncharted Foil Edition 【BOX】 ※発送方法は「ゆうパック」を選択してください。",
+   "handle": "sld-box-331-e-f_nm_3ufc",
+   "variants": [
+    {
+     "title": "NM",
+     "price": "10",
+     "available": false
+    },
+    {
+     "title": "SP",
+     "price": "8",
+     "available": false
+    },
+    {
+     "title": "MP",
+     "price": "6",
+     "available": false
+    }
+   ]
+  },
+  {
+   "title": "(日)『マジック：ザ・ギャザリング | ミュータント タートルズ』 プレイ・ブースターボックス / Magic: The Gathering | Teenage Mutant Ninja Turtles Play Booster Box【BOX】 ※発送方法は「ゆうパック」を選択してください。",
+   "handle": "tmt-play-box-j_nm_teoy",
+   "variants": [
+    {
+     "title": "NM",
+     "price": "23100",
+     "available": true
+    }
+   ]
+  }
+ ]
+}

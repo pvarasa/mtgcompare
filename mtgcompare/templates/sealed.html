@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import sealed_chart_button as chart_button, sealed_offer as offer %}
+{% from "_macros.html" import sealed_chart_button as chart_button, sealed_offer as offer, sealed_bids as bids %}
 {% block title %}Sealed - mtgcompare{% endblock %}
 {% block extra_css %}
   {% include "_price_chart_styles.html" %}
@@ -81,12 +81,15 @@
       {% if shop_prices_updated_at %}Japanese shops read <strong>{{ shop_prices_updated_at[:10] }}</strong>.{% endif %}
       {% if fx %}FX JPY {{ '%.2f'|format(fx) }} per $1.{% endif %}
       <br>
-      {% if catalog %}{{ catalog|length }} booster products in the catalog.{% else %}Catalog not loaded yet: click <strong>Refresh prices</strong>.{% endif %}
+      {% if catalog %}{{ catalog|length }} booster products in the catalog.{% elif allow_price_update %}Catalog not loaded yet: click <strong>Refresh prices</strong>.{% else %}Catalog not loaded yet; it loads with the daily price update.{% endif %}
+      {% if not allow_price_update %}Prices update daily.{% endif %}
     </div>
+    {% if allow_price_update %}
     <div class="sealed-refresh">
       <button type="button" id="sealed-refresh-btn">Refresh prices</button>
       <div id="sealed-refresh-detail" class="detail" aria-live="polite"></div>
     </div>
+    {% endif %}
   </div>
 
   <div class="add-panel">
@@ -125,7 +128,7 @@
         <button type="submit" id="sealed-add-btn"{% if not catalog %} disabled{% endif %}>Add to holdings</button>
       </div>
     </form>
-    <p class="add-hint">English lots are valued at TCGPlayer's market price. Japanese lots are valued at the cheapest in-stock Japanese-language offer at Hareruya or SingleStar (marked * when only the English price is available). Japanese shop prices are asking prices, not sales.</p>
+    <p class="add-hint">English lots are valued at TCGPlayer's market price. Japanese lots are valued at the cheapest in-stock Japanese-language offer at Hareruya, SingleStar or Cardshop Serra (marked * when only the English price is available). Japanese shop prices are asking prices, not sales. <strong>Buylist</strong> is what Hareruya pays for the product today.</p>
   </div>
 
   <section class="sealed-section">
@@ -160,6 +163,18 @@
             {% if summary.pnl_pct is not none %}{% if summary.pnl_pct >= 0 %}+{% endif %}{{ summary.pnl_pct }}% on costed lots{% else %}no costed lots{% endif %}
           </div>
         </div>
+        <div class="mkt-stat" id="sealed-buy-stat">
+          <div class="stat-label">Buylist value</div>
+          {% if summary.lots_with_buy %}
+            <div class="stat-value">{% if summary.total_buy_usd is not none %}${{ '{:,.2f}'.format(summary.total_buy_usd) }}{% else %}¥{{ '{:,.0f}'.format(summary.total_buy_jpy) }}{% endif %}</div>
+            <div class="stat-sub">
+              {% if summary.total_buy_usd is not none %}JPY {{ '{:,.0f}'.format(summary.total_buy_jpy) }} &middot; {% endif %}what Hareruya would pay{% if summary.lots_with_buy < summary.lots_total %} for {{ summary.lots_with_buy }} of {{ summary.lots_total }} lots{% endif %}
+            </div>
+          {% else %}
+            <div class="stat-value muted">-</div>
+            <div class="stat-sub">Hareruya isn't buying these</div>
+          {% endif %}
+        </div>
       </div>
 
       <div class="table-scroll">
@@ -167,7 +182,7 @@
           <thead>
             <tr>
               <th>Product</th><th class="num">Qty</th><th class="num">Paid / unit</th>
-              <th class="num">Value / unit</th><th class="num">Cheapest in Japan</th><th class="num">30d</th><th class="num">Value</th>
+              <th class="num">Value / unit</th><th class="num">Cheapest in Japan</th><th class="num" title="What Hareruya pays per unit today">Buylist</th><th class="num">30d</th><th class="num">Value</th>
               <th class="num">PnL</th><th></th>
             </tr>
           </thead>
@@ -198,6 +213,7 @@
                 {% else %}<span class="muted">no price</span>{% endif %}
               </td>
               <td class="num">{{ offer(r.offer) }}</td>
+              <td class="num">{{ offer(r.buy) }}</td>
               <td class="num">
                 {% if r.change_pct is not none %}
                   <span class="{% if r.change_pct > 0 %}pnl-up{% elif r.change_pct < 0 %}pnl-down{% endif %}">{% if r.change_pct > 0 %}+{% endif %}{{ r.change_pct }}%</span>
@@ -238,7 +254,7 @@
       <div class="table-scroll">
         <table class="sealed-table" id="sealed-watch-table">
           <thead>
-            <tr><th>Product</th><th class="num">TCGPlayer</th><th class="num">Japan (EN)</th><th class="num">Japan (JP)</th><th class="num">30d</th><th></th></tr>
+            <tr><th>Product</th><th class="num">TCGPlayer</th><th class="num">Japan (EN)</th><th class="num">Japan (JP)</th><th class="num" title="What Hareruya pays today">Buylist</th><th class="num">30d</th><th></th></tr>
           </thead>
           <tbody>
             {% for r in watch %}
@@ -255,6 +271,7 @@
               </td>
               <td class="num">{{ offer(r.offer_en) }}</td>
               <td class="num">{{ offer(r.offer_jp) }}</td>
+              <td class="num">{{ bids(r.buy_en, r.buy_jp) }}</td>
               <td class="num">
                 {% if r.change_pct is not none %}
                   <span class="{% if r.change_pct > 0 %}pnl-up{% elif r.change_pct < 0 %}pnl-down{% endif %}">{% if r.change_pct > 0 %}+{% endif %}{{ r.change_pct }}%</span>
@@ -299,12 +316,13 @@
           subtitle: btn.dataset.meta,
           subtitleFor: d => `${btn.dataset.meta}${d.available_since ? ` / tracking since ${priceChart.formatDate(d.available_since)}` : ''}`,
           errorMessage: 'Could not load price history for this product.',
-          emptyMessage: 'No price history yet. Use <strong>Refresh prices</strong> to fetch it.',
+          emptyMessage: {{ ("No price history yet. Use <strong>Refresh prices</strong> to fetch it." if allow_price_update else "No price history yet. Prices update daily.")|tojson }},
         });
       });
 
       // Refresh: POST starts a background job; poll its status until done.
       const refreshBtn = document.getElementById('sealed-refresh-btn');
+      if (!refreshBtn) return;  // hosted site: the daily cron refreshes
       const detailEl = document.getElementById('sealed-refresh-detail');
       let poll = null;
       let misses = 0;

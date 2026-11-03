@@ -301,15 +301,23 @@ How a lot is valued depends on its language:
 - **English** lots use TCGPlayer's market price (what boxes recently sold for
   in the US).
 - **Japanese** lots use the cheapest in-stock Japanese-language box at
-  **Hareruya** or **SingleStar**. If neither has it in stock, the English
-  TCGPlayer price is used instead and the lot is marked **JP\***.
+  **Hareruya**, **SingleStar** or **Cardshop Serra**. If none has it in
+  stock, the English TCGPlayer price is used instead and the lot is marked
+  **JP\***.
 
-**Cheapest in Japan** shows the lowest in-stock price at those two shops for
+**Buylist** shows what Hareruya would pay you for one unit today, and the
+**Buylist value** tile adds it up over your holdings: closer to what the
+boxes are worth if you sold them now. When Hareruya has more than one price
+for a product (for example a first printing and a reprint), the lower one
+is shown.
+
+**Cheapest in Japan** shows the lowest in-stock price at those shops for
 the same language, with a link to the shop's page. In the watchlist you see
 both languages side by side. The shop prices are what the shops are asking,
 not what boxes sold for.
 
-Prices update once a day; **Refresh prices** fetches them now. In the chart,
+Prices update once a day. In the desktop app, **Refresh prices** fetches them
+now (the website has no button: its daily update does it). In the chart,
 the buttons above the time ranges switch between TCGPlayer and each shop.
 
 ---
