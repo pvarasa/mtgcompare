@@ -14,21 +14,9 @@ Use the platform build scripts to zip and package:
 import os
 import sys
 
-_hidden = [
-    # Belt-and-suspenders: shops.py imports each scraper module statically
-    # so PyInstaller's analyser should already see them, but listing them
-    # explicitly survives any future indirect-import refactor (e.g. an
-    # entry-point or importlib-based discovery scheme).
-    "mtgcompare.scrappers.blackfrog",
-    "mtgcompare.scrappers.cardrush",
-    "mtgcompare.scrappers.enndalgames",
-    "mtgcompare.scrappers.hareruya",
-    "mtgcompare.scrappers.mintmall",
-    "mtgcompare.scrappers.scryfall",
-    "mtgcompare.scrappers.serra",
-    "mtgcompare.scrappers.singlestar",
-    "mtgcompare.scrappers.tokyomtg",
-]
+# The scrapers are imported statically by scrapers/registry.py, so the
+# analyser finds them; only the macOS tray backend is loaded dynamically.
+_hidden = []
 
 # Bundle version pulled from MTGCOMPARE_VERSION when set by the release
 # workflow (it strips the leading "v" from the git tag), otherwise a

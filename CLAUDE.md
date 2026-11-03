@@ -281,11 +281,8 @@ The `users` table is keyed on `workos_user_id`; inventory rows continue to key o
   only, the page's **Refresh prices** (`POST /sealed/refresh`; hidden and
   403 on the hosted site, where the cron covers it) runs the same thing as
   a `jobs` entry of kind `"sealed"`. `jobs.find_running(kind)` keeps it from
-  coalescing with the MTGJSON import. Its status is mirrored to `app_meta`
-  (`sealed_refresh_job`) and polled via `GET /sealed/refresh/status`,
-  because the poll can land on a replica that never saw the POST; that
-  DB row (not pod memory) is also what blocks a second concurrent refresh
-  (a stale `running` row expires after 15 min). Adding a lot or watch for an unpriced
+  coalescing with the MTGJSON import; its status is polled through the
+  shared `/market/history/download/status`. Adding a lot or watch for an unpriced
   product fetches its prices synchronously (best-effort).
 - The price-history chart modal is shared with `/market`:
   `templates/_price_chart_modal.html` + `_price_chart_styles.html` +
@@ -438,7 +435,8 @@ they mean run the **full release pipeline end-to-end**, in this order:
 1. **Confirm tests pass** — `uv run pytest` clean.
 2. **Confirm lint passes** — `uv run ruff check mtgcompare/ tests/` clean.
    **and types** — `uv run pyright` clean (CI's `typecheck` job).
-3. **Commit** with a message that explains the *why*.
+3. **Bump `version` in `pyproject.toml`** to the release you're about to
+   tag, then **commit** with a message that explains the *why*.
 4. **Push** to `origin/master`.
 5. **Tag** the next semver version (`vX.Y.Z`) and push the tag — this
    triggers the GitHub Release workflow, which builds the Windows zip,

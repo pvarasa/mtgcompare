@@ -8,7 +8,6 @@ from .base import MtgScrapper
 from .blackfrog import BlackFrogScrapper
 from .cache import DEFAULT_TTL, CachedScrapper
 from .cardrush import CardRushScrapper
-from .enndalgames import EnndalGamesScrapper
 from .enrich import EnrichingScrapper
 from .hareruya import HareruyaScrapper
 from .mintmall import MintMallScrapper
@@ -67,15 +66,6 @@ _SHOPS: list[Shop] = [
     # fetch was 10-12. Re-enable once https://www.mint-mall.net/ serves
     # listings again and `uv run pytest -m canary -k mintmall` passes.
     Shop("MINT MALL",        _JP_FLAG, _DEFAULT_JP_SHIPPING,   False, False, lambda fx: MintMallScrapper(fx=fx)),
-    # ENNDAL GAMES is disabled for good from this deployment. Its DNS is
-    # Route 53 geolocation routing that answers only Japanese resolvers:
-    # asked from Japan, the authoritative servers return 54.95.59.170 /
-    # 52.199.145.100; asked from vps1 (Hetzner, Germany) — even directly,
-    # or via 1.1.1.1 — they return NOERROR with no A record (checked
-    # 2026-10-05). The apex resolves but its TLS cert is www-only. So no
-    # resolver change fixes it; it needs a Japanese egress. The earlier
-    # theory (the cluster's upstream DNS lagging a recovery) was wrong.
-    Shop("ENNDAL GAMES",     _JP_FLAG, _DEFAULT_JP_SHIPPING,   False, False, lambda fx: EnndalGamesScrapper(fx=fx)),
 ]
 
 

@@ -26,6 +26,8 @@ from sqlalchemy import (
     func,
     text,
 )
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.schema import CreateIndex
 
 
 def _db_path() -> Path:
@@ -56,7 +58,7 @@ if _DATABASE_URL:
         lambda v, _: float(v) if v is not None else None,
     ))
     # GIL caps effective concurrency, so the SQLAlchemy default (5 + 10
-    # overflow) is enough for the current single-worker config. Bumping
+    # overflow) per gunicorn worker process is enough. Bumping
     # it under load measurably hurt — more in-flight queries → more
     # threads contending for the GIL → /healthz misses kubelet probes.
     _pool_size     = int(os.environ.get("DB_POOL_SIZE",     "5"))
@@ -77,6 +79,10 @@ else:
 
 metadata = MetaData()
 
+# MTGJSON card UUIDs: a native UUID on Postgres (half the index size of
+# TEXT on the 19M-row price_rows), plain text on SQLite.
+_UUID_TEXT = Text().with_variant(UUID(as_uuid=False), "postgresql")
+
 _inventory = Table(
     "inventory", metadata,
     Column("id", Integer, primary_key=True, autoincrement=True),
@@ -93,6 +99,10 @@ _inventory = Table(
     Column("date_bought", Text),
 )
 Index("idx_inventory_user_card", _inventory.c.user_id, _inventory.c.card_name)
+# The filter UI's substring match (`LIKE '%bolt%'`) can't use a btree, but
+# this still serves equality lookups and `ORDER BY lower(card_name)`, and
+# the user_id prefix keeps any scan to one user's rows.
+Index("idx_inventory_user_card_name_lower", _inventory.c.user_id, func.lower(_inventory.c.card_name))
 
 # Keyed per printing (collector number included): a set's showcase or
 # borderless variant is priced separately from the regular card.
@@ -109,7 +119,7 @@ _market_prices = Table(
 
 _price_rows = Table(
     "price_rows", metadata,
-    Column("uuid", Text, nullable=False),
+    Column("uuid", _UUID_TEXT, nullable=False),
     Column("finish", Text, nullable=False),
     Column("market_date", Date, nullable=False),
     Column("price_usd", Numeric(10, 4)),
@@ -119,7 +129,7 @@ _price_rows = Table(
 # of uuids, grouped by date): with price_usd in the leaf via INCLUDE, Postgres
 # satisfies it with an index-only scan and never touches the 19M-row heap.
 # INCLUDE is Postgres-only; on the (unused) SQLite price_rows it degrades to a
-# plain key index, which is harmless. Supersedes the old price_rows_uuid_date.
+# plain key index, which is harmless.
 Index(
     "price_rows_covering",
     _price_rows.c.uuid, _price_rows.c.finish, _price_rows.c.market_date,
@@ -132,7 +142,7 @@ _mtgjson_card_map = Table(
     Column("set_code", Text, nullable=False),
     Column("card_number", Text, nullable=False, server_default=""),
     Column("is_foil", Integer, nullable=False, server_default="0"),
-    Column("uuid", Text, nullable=False),
+    Column("uuid", _UUID_TEXT, nullable=False),
     Column("updated_at", Text, nullable=False),
     PrimaryKeyConstraint("card_name", "set_code", "card_number", "is_foil"),
 )
@@ -227,6 +237,8 @@ _shop_query_log = Table(
     Column("card_name", Text, nullable=False),
     Column("queried_at", DateTime(timezone=True), nullable=False),
     Column("result_count", Integer, nullable=False, server_default="0"),
+    # Vestigial: only ever "ok" (failures are not logged, so the next
+    # request retries). Kept for releases that still write it.
     Column("status", Text, nullable=False, server_default="ok"),
     PrimaryKeyConstraint("shop", "card_name"),
 )
@@ -345,8 +357,21 @@ def _column_exists(conn, table: str, column: str) -> bool:
     return column in cols
 
 
+# Columns added after their table first shipped. ``create_all`` only creates
+# missing tables, so an existing DB (a desktop user's old inventory.db, or
+# the shared Postgres while an older release still runs against it) gets
+# them here. Nullable / defaulted, so each ALTER is metadata-only and safe
+# while an older release, which names its columns, shares the table.
+_ADDED_COLUMNS = (
+    ("inventory", "user_id", "TEXT NOT NULL DEFAULT 'local'"),
+    ("shop_listings", "ship_jpy", "NUMERIC(12,2)"),
+    ("shop_listings", "variant", "TEXT"),
+    ("shop_listings", "card_number", "TEXT"),
+)
+
+
 def _migrate(conn) -> None:
-    """Add columns absent from older schema versions."""
+    """Bring a DB created by an older release up to the current schema."""
     # market_prices gained card_number in its primary key. The table is a
     # derived cache the price import rewrites, so drop and recreate it
     # rather than migrate rows keyed without a collector number; the next
@@ -354,92 +379,14 @@ def _migrate(conn) -> None:
     if not _column_exists(conn, "market_prices", "card_number"):
         conn.execute(text("DROP TABLE market_prices"))
         _market_prices.create(conn)
-
-    if IS_POSTGRES:
-        exists = conn.execute(text("""
-            SELECT 1 FROM information_schema.columns
-            WHERE table_name = 'inventory' AND column_name = 'user_id'
-        """)).fetchone()
-        if not exists:
-            conn.execute(text(
-                "ALTER TABLE inventory ADD COLUMN user_id TEXT NOT NULL DEFAULT 'local'"
-            ))
-            conn.execute(text(
-                "CREATE INDEX IF NOT EXISTS idx_inventory_user_card ON inventory (user_id, card_name)"
-            ))
-
-        # Case-insensitive index on (user_id, lower(card_name)). The
-        # filter UI uses substring match (`LIKE '%bolt%'`), which a btree
-        # cannot fully serve — but the index still accelerates equality
-        # lookups and `ORDER BY lower(card_name)`, and the user_id prefix
-        # keeps any sequential scan scoped to a single user's rows.
-        conn.execute(text(
-            "CREATE INDEX IF NOT EXISTS idx_inventory_user_card_name_lower "
-            "ON inventory (user_id, lower(card_name))"
-        ))
-
-        for table in ("price_rows", "mtgjson_card_map"):
-            col_type = conn.execute(text("""
-                SELECT data_type FROM information_schema.columns
-                WHERE table_name = :t AND column_name = 'uuid'
-            """), {"t": table}).scalar()
-            if col_type == "text":
-                conn.execute(text(
-                    f"ALTER TABLE {table} ALTER COLUMN uuid TYPE UUID USING uuid::UUID"
-                ))
-
-        exists = conn.execute(text("""
-            SELECT 1 FROM information_schema.columns
-            WHERE table_name = 'shop_listings' AND column_name = 'ship_jpy'
-        """)).fetchone()
-        if not exists:
-            conn.execute(text(
-                "ALTER TABLE shop_listings ADD COLUMN ship_jpy NUMERIC(12,2)"
-            ))
-        # Nullable, no default: a metadata-only ALTER on Postgres, safe to
-        # run while an older release shares the table (it names its columns).
-        for col in ("variant", "card_number"):
-            conn.execute(text(
-                f"ALTER TABLE shop_listings ADD COLUMN IF NOT EXISTS {col} TEXT"
-            ))
-
-        # Covering index for the portfolio value query, and drop of the
-        # narrower index it supersedes. Non-concurrent CREATE is safe here:
-        # in deployed environments the index already exists (built once via
-        # CONCURRENTLY, so this no-ops), and a fresh price_rows is empty so
-        # the build is instant. Both statements are idempotent across the
-        # per-startup _migrate run.
-        conn.execute(text(
-            "CREATE INDEX IF NOT EXISTS price_rows_covering "
-            "ON price_rows (uuid, finish, market_date) INCLUDE (price_usd)"
-        ))
-        conn.execute(text("DROP INDEX IF EXISTS price_rows_uuid_date"))
-
-        # sealed_prices shipped (to stg, sharing this DB) before url/stock.
-        conn.execute(text("ALTER TABLE sealed_prices ADD COLUMN IF NOT EXISTS url TEXT"))
-        conn.execute(text("ALTER TABLE sealed_prices ADD COLUMN IF NOT EXISTS stock INTEGER"))
-
-    else:
-        cols = {r[1] for r in conn.execute(text("PRAGMA table_info(inventory)")).fetchall()}
-        if "user_id" not in cols:
-            conn.execute(text(
-                "ALTER TABLE inventory ADD COLUMN user_id TEXT NOT NULL DEFAULT 'local'"
-            ))
-
-        cols = {r[1] for r in conn.execute(text("PRAGMA table_info(shop_listings)")).fetchall()}
-        if "ship_jpy" not in cols:
-            conn.execute(text(
-                "ALTER TABLE shop_listings ADD COLUMN ship_jpy NUMERIC(12,2)"
-            ))
-        for col in ("variant", "card_number"):
-            if col not in cols:
-                conn.execute(text(f"ALTER TABLE shop_listings ADD COLUMN {col} TEXT"))
-
-        cols = {r[1] for r in conn.execute(text("PRAGMA table_info(sealed_prices)")).fetchall()}
-        if "url" not in cols:
-            conn.execute(text("ALTER TABLE sealed_prices ADD COLUMN url TEXT"))
-        if "stock" not in cols:
-            conn.execute(text("ALTER TABLE sealed_prices ADD COLUMN stock INTEGER"))
+    for table, column, ddl in _ADDED_COLUMNS:
+        if not _column_exists(conn, table, column):
+            conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
+    # Indexes declared after their table existed (create_all skips them).
+    # IF NOT EXISTS rather than checkfirst: SQLite's index reflection
+    # misses expression indexes like lower(card_name).
+    for index in _inventory.indexes:
+        conn.execute(CreateIndex(index, if_not_exists=True))
 
 
 def init_schema() -> None:

@@ -9,18 +9,21 @@ The candidate list comes from the shops that **Wisdom Guild's WONDER** price agg
 - Hareruya (`mtgcompare/scrapers/hareruya.py`)
 - SingleStar — シングルスター (`mtgcompare/scrapers/singlestar.py`)
 - Card Rush — カードラッシュ (`mtgcompare/scrapers/cardrush.py`) — first ocnk.net shop
-- Cardshop Serra (`mtgcompare/scrapers/serra.py`) — first ec-cube shop, biggest indexed inventory (~1.19M)
-- ENNDAL GAMES (`mtgcompare/scrapers/enndalgames.py`) — second-biggest indexed inventory (~493k); custom platform. **Disabled: unreachable from the prod server.** Its DNS (AWS Route 53) uses geolocation routing and only answers Japanese clients: from Japan `www.enndalgames.com` → `54.95.59.170` / `52.199.145.100`; from vps1 in Germany even the authoritative servers return no A record (verified 2026-10-05). The apex's TLS cert is www-only. Re-enabling needs a Japanese egress (proxy/VPS), not a DNS fix.
+- Cardshop Serra (`mtgcompare/scrapers/serra.py`) — biggest indexed inventory (~1.19M); was ec-cube, a Shopify storefront since 2026
 - BLACK FROG (`mtgcompare/scrapers/blackfrog.py`) — first ColorMe-platform shop (~119k indexed); legacy `/shop/shopbrand.html?search=…` URL, EUC-JP encoded
-- MINT MALL (`mtgcompare/scrapers/mintmall.py`) — multi-tenant ec-cube marketplace (~90k indexed); per-spec stock + price come from a `specificationTreeSearchProductsTree` JS const, not the listing markup
+- MINT MALL (`mtgcompare/scrapers/mintmall.py`) — multi-tenant ec-cube marketplace (~90k indexed); per-spec stock + price come from a `specificationTreeSearchProductsTree` JS const, not the listing markup. **Paused** since 2026-10-22 (the site is down for a security review; see the registry).
 - TokyoMTG (`mtgcompare/scrapers/tokyomtg.py`) — *not on the WONDER list, separate integration*
 - TCGPlayer market (`mtgcompare/scrapers/scryfall.py`) + TCGPlayer → JP (`mtgcompare/scrapers/tcgplayer.py`) — *US, not on the WONDER list, separate integrations.* The first reports Scryfall's TCGPlayer market price (reference only); the second finds the cheapest NM/LP offers that ship to Japan via the undocumented `mp-search-api` listings endpoint, carrying each offer's real shipping as `ship_jpy` (`marketplace=True` in the registry → excluded from decklist totals).
+
+**Removed:**
+
+- **ENNDAL GAMES** (~493k indexed). Its DNS (Route 53 geolocation) answers only Japanese resolvers, so the prod server in Germany can't reach it (verified 2026-10-05); it needs a Japanese egress. The scraper was disabled, then removed in v1.15.2; it's in git history (`mtgcompare/scrapers/enndalgames.py`) if that changes.
 
 **Skipped (data quality):**
 
 - **MTG Guild** (~135k indexed). Listing search and product detail pages neither expose set codes nor have any structured data, breadcrumbs, or JSON-LD from which to extract them. Without set info, our records would pollute price comparisons. Defer until the shop's listing format changes or until we add a set-code inference layer.
 
-Of the 26 shops surfaced by WONDER, we already have 7 (Hareruya, SingleStar, Card Rush, Cardshop Serra, ENNDAL GAMES, BLACK FROG, MINT MALL). The remaining 19 are the candidates below.
+Of the 26 shops surfaced by WONDER, we have integrated 7 (Hareruya, SingleStar, Card Rush, Cardshop Serra, BLACK FROG, MINT MALL, and ENNDAL GAMES, since removed). The remaining 19 are the candidates below.
 
 ## Wisdom Guild itself — not a viable backend
 

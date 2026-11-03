@@ -21,7 +21,6 @@ import requests
 
 from mtgcompare.scrapers.blackfrog import BlackFrogScrapper
 from mtgcompare.scrapers.cardrush import CardRushScrapper
-from mtgcompare.scrapers.enndalgames import EnndalGamesScrapper
 from mtgcompare.scrapers.hareruya import UNISEARCH_API, UNISEARCH_LAZY
 from mtgcompare.scrapers.hareruya import make_session as hareruya_session
 from mtgcompare.scrapers.html_base import HtmlSearchScrapper
@@ -105,7 +104,6 @@ def main() -> int:
     convention_shops: list[tuple[type[HtmlSearchScrapper], str]] = [
         (BlackFrogScrapper,       "blackfrog_force_of_will.html"),
         (CardRushScrapper,        "cardrush_force_of_will.html"),
-        (EnndalGamesScrapper,     "enndalgames_force_of_will.html"),
         (MintMallScrapper,        "mintmall_force_of_will.html"),
         (CardshopSerraScrapper,   "serra_force_of_will.html"),
         (SingleStarScrapper,      "singlestar_force_of_will.html"),

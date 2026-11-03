@@ -528,7 +528,7 @@ def _shipping_config(overrides_jpy: dict | None = None) -> list[dict]:
 
     Marketplace shops never appear: their seller shipping is already in
     the price, so an editable flat override would double count. Disabled
-    shops (ENNDAL GAMES) don't either — they are never searched.
+    shops (MINT MALL while paused) don't either — they are never searched.
     """
     return [
         {
@@ -1123,15 +1123,14 @@ def sealed_refresh():
     """
     if not _manual_price_updates_allowed():
         return _manual_price_update_refused()
-    running = sealed_service.running_refresh_job()
+    running = jobs.find_running("sealed")
     if running:
         return jsonify({"ok": True, "job_id": running["id"], "already_running": True})
     job_id = uuid4().hex
     jobs.init(job_id, kind="sealed")
-    _sealed_job_update(job_id)
 
     def _progress(progress: int, phase: str, detail: str) -> None:
-        _sealed_job_update(job_id, progress=progress, phase=phase, detail=detail)
+        jobs.update(job_id, progress=progress, phase=phase, detail=detail)
 
     def _worker() -> None:
         try:
@@ -1144,38 +1143,14 @@ def sealed_refresh():
                     f" {shop}: failed." if "error" in shop_stats
                     else f" {shop}: {shop_stats['recorded']} offers."
                 )
-            _sealed_job_update(job_id, state="done", progress=100, phase="Done", detail=detail)
+            jobs.update(job_id, state="done", progress=100, phase="Done", detail=detail)
         except Exception as exc:
             app.logger.exception("event=sealed_refresh_failed job_id=%s", job_id)
-            _sealed_job_update(job_id, state="error", phase="Failed",
-                               detail="Sealed price refresh failed.", error=str(exc))
+            jobs.update(job_id, state="error", phase="Failed",
+                        detail="Sealed price refresh failed.", error=str(exc))
 
     Thread(target=_worker, daemon=True).start()
     return jsonify({"ok": True, "job_id": job_id, "already_running": False})
-
-
-def _sealed_job_update(job_id: str, **updates) -> None:
-    """Update the in-memory job and mirror it to the DB for the other pods."""
-    jobs.update(job_id, **updates)
-    job = jobs.get(job_id)
-    if not job:
-        return
-    try:
-        sealed_service.save_refresh_job(job)
-    except Exception:
-        # Status is advisory; never let a bookkeeping write kill the refresh.
-        app.logger.exception("event=sealed_refresh_status_write_failed job_id=%s", job_id)
-
-
-@app.route("/sealed/refresh/status")
-def sealed_refresh_status():
-    job_id = request.args.get("job_id", "").strip()
-    if not job_id:
-        return jsonify({"ok": False, "error": "job_id is required"}), 400
-    job = sealed_service.load_refresh_job(job_id)
-    if not job:
-        return jsonify({"ok": False, "error": "job not found"}), 404
-    return jsonify({"ok": True, **job})
 
 
 @app.route("/sealed/history")

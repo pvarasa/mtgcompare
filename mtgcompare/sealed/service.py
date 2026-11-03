@@ -55,49 +55,6 @@ def _noop_progress(_p: int, _phase: str, _detail: str) -> None:
     pass
 
 
-# --- manual refresh job status -----------------------------------------------
-# The page's Refresh prices runs in a thread on whichever pod took the POST,
-# but its status polls are load-balanced across every replica, so the
-# in-memory ``jobs`` registry alone answers "job not found" half the time.
-# The status is mirrored to ``app_meta`` (shared by all pods) instead.
-REFRESH_JOB_META_KEY = "sealed_refresh_job"
-# A "running" job that has not reported progress for this long belongs to a
-# pod that died mid-refresh; it no longer blocks a new one.
-REFRESH_JOB_STALE = timedelta(minutes=15)
-
-
-def save_refresh_job(job: dict) -> None:
-    with db.get_conn() as conn:
-        meta.write(conn, REFRESH_JOB_META_KEY, json.dumps(job))
-
-
-def load_refresh_job(job_id: str | None = None) -> dict | None:
-    """The last manual refresh's status, or None (or None if ``job_id`` differs)."""
-    with db.get_conn() as conn:
-        raw = meta.read(conn, REFRESH_JOB_META_KEY)
-    try:
-        job = json.loads(raw) if raw else None
-    except ValueError:
-        return None
-    if not isinstance(job, dict) or (job_id is not None and job.get("id") != job_id):
-        return None
-    return job
-
-
-def running_refresh_job(now: datetime | None = None) -> dict | None:
-    """The in-flight manual refresh on any pod, unless it has gone stale."""
-    job = load_refresh_job()
-    if not job or job.get("state") != "running":
-        return None
-    try:
-        updated = datetime.fromisoformat(job.get("updated_at") or "")
-    except ValueError:
-        return None
-    if (now or datetime.now(UTC)) - updated > REFRESH_JOB_STALE:
-        return None
-    return job
-
-
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
 

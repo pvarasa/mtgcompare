@@ -62,7 +62,7 @@ __all__ = [
 ]
 
 MTGJSON_BASE_URL = "https://mtgjson.com/api/v5"
-MTGJSON_HEADERS = {"User-Agent": "mtgcompare/0.1", "Accept": "application/json"}
+MTGJSON_HEADERS = {"User-Agent": "mtgcompare (+https://github.com/pvarasa/mtgcompare)", "Accept": "application/json"}
 
 
 # --- MTGJSON paths / downloads ---------------------------------------------

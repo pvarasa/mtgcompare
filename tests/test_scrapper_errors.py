@@ -70,7 +70,7 @@ class _DummyHtmlScrapper(HtmlSearchScrapper):
 
 # ---------------------------------------------------------------------------
 # HtmlSearchScrapper (covers singlestar / cardrush / serra / blackfrog /
-#                     mintmall / enndalgames / tokyomtg)
+#                     mintmall / tokyomtg)
 # ---------------------------------------------------------------------------
 
 class TestHtmlSearchScrapper:

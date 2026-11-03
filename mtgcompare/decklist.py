@@ -10,7 +10,8 @@ import-light and unit-testable without spinning up the app.
 
 Pipeline:
 
-  parse_decklist          raw text → [(qty, name)]
+  parse_decklist_report   raw text → [(qty, name)] + unparsed lines +
+                          maybeboard count
   parse_printings         raw text → {name: {(SET, number)}} for opt-in
                           printing matching ("1 Rhystic Study (C21) 79")
   strip_basic_lands       drop basics (shops carry hundreds of printings)
@@ -89,7 +90,6 @@ _SECTION_HEADER_RE = re.compile(
 # holds "Name <deck name>"; maybeboard / considering cards are counted
 # and reported, not priced.
 _MAYBE_SECTIONS = frozenset({"maybeboard", "considering"})
-_SKIPPED_SECTIONS = _MAYBE_SECTIONS | {"about"}
 
 # Hard cap on the total card count of a single decklist search. Sized to
 # fit a full Commander deck (99 + commander = 100). Beyond this the
@@ -184,10 +184,6 @@ def _deck_lines(text: str) -> Iterator[re.Match]:
     for kind, _, m in _scan_deck_lines(text):
         if kind == "card" and m is not None:
             yield m
-
-
-def parse_decklist(text: str) -> list[tuple[int, str]]:
-    return [(_qty(m), m.group(2).strip()) for m in _deck_lines(text)]
 
 
 def parse_decklist_report(text: str) -> ParsedDecklist:

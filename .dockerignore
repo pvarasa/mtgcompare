@@ -26,5 +26,14 @@ dist/
 .tk_home.html
 .tk_search.html
 
+# Not needed at runtime: tests (8 MB of HTML fixtures), docs, dev
+# scripts, desktop packaging, CI config.
+tests/
+docs/
+scripts/
+examples/
+mtgcompare.spec
+.github/
+
 # Claude
 .claude/

@@ -10,7 +10,6 @@ import requests
 
 from mtgcompare.scrapers.blackfrog import BlackFrogScrapper
 from mtgcompare.scrapers.cardrush import CardRushScrapper
-from mtgcompare.scrapers.enndalgames import EnndalGamesScrapper
 from mtgcompare.scrapers.hareruya import HareruyaScrapper
 from mtgcompare.scrapers.mintmall import MintMallScrapper
 from mtgcompare.scrapers.scryfall import ScryfallScrapper
@@ -46,7 +45,6 @@ _SHOPS = [
     pytest.param(TokyoMtgScrapper,        "TokyoMTG",            "https://tokyomtg.com/",        id="tokyomtg"),
     pytest.param(CardRushScrapper,        "Card Rush",           "https://www.cardrush-mtg.jp/", id="cardrush"),
     pytest.param(CardshopSerraScrapper,   "Cardshop Serra",      "https://cardshop-serra.com/",  id="serra"),
-    pytest.param(EnndalGamesScrapper,     "ENNDAL GAMES",        "https://www.enndalgames.com/", id="enndal"),
     pytest.param(BlackFrogScrapper,       "BLACK FROG",          "https://blackfrog.jp/",        id="blackfrog"),
     pytest.param(MintMallScrapper,        "MINT MALL",           "https://www.mint-mall.net/",   id="mintmall"),
     pytest.param(ScryfallScrapper,        "TCGPlayer market",    "http",                         id="scryfall"),

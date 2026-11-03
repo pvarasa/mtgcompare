@@ -73,7 +73,7 @@ def _coerce_aware(value) -> datetime | None:
 def read_log(conn, shop: str, card_name: str) -> dict | None:
     row = conn.execute(
         text(
-            "SELECT queried_at, result_count, status"
+            "SELECT queried_at, result_count"
             " FROM shop_query_log"
             " WHERE shop = :shop AND card_name = :card"
         ),
@@ -84,7 +84,6 @@ def read_log(conn, shop: str, card_name: str) -> dict | None:
     return {
         "queried_at": _coerce_aware(row[0]),
         "result_count": int(row[1]),
-        "status": row[2],
     }
 
 
@@ -93,7 +92,6 @@ def upsert_log(
     shop: str,
     card_name: str,
     result_count: int,
-    status: str = "ok",
     now: datetime | None = None,
 ) -> None:
     db.upsert(
@@ -105,7 +103,6 @@ def upsert_log(
             "card_name": card_name,
             "queried_at": now or _now(),
             "result_count": result_count,
-            "status": status,
         }],
     )
 
@@ -293,7 +290,7 @@ class CachedScrapper(MtgScrapper):
         _ensure_schema()
         with db.get_conn() as conn:
             log = read_log(conn, self.shop_name, norm)
-            if log and log["status"] == "ok" and self._is_fresh(log["queried_at"]):
+            if log and self._is_fresh(log["queried_at"]):
                 try:
                     cached = read_listings(conn, self.shop_name, norm)
                 except StaleListings:
@@ -331,7 +328,7 @@ class CachedScrapper(MtgScrapper):
 
         with db.get_conn() as conn:
             replace_listings(conn, self.shop_name, norm, records)
-            upsert_log(conn, self.shop_name, norm, len(records), status="ok")
+            upsert_log(conn, self.shop_name, norm, len(records))
         self.logger.debug(
             "cache miss %s %r → %d rows", self.shop_name, card_name, len(records),
         )

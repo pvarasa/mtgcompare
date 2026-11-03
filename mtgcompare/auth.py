@@ -110,7 +110,7 @@ def logout_url(*, session_id: str | None = None) -> str:
 
     Uses `api.workos.com` directly. A tenant-specific `<team>.authkit.com`
     URL only exists when the paid custom-domain feature is enabled, which
-    is deliberately skipped — see docs/workos-setup.md.
+    this deployment deliberately does without.
 
     Without a `session_id` WorkOS logs the user out of its own session
     but can't tell which device's session is being revoked.

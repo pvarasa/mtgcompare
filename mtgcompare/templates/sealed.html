@@ -302,7 +302,7 @@
     (function () {
       const historyUrl = {{ url_for('sealed_history')|tojson }};
       const refreshUrl = {{ url_for('sealed_refresh')|tojson }};
-      const statusUrl = {{ url_for('sealed_refresh_status')|tojson }};
+      const statusUrl = {{ url_for('market_history_download_status')|tojson }};
       const priceChart = window.mtgcompare.priceChart;
 
       document.addEventListener('click', event => {

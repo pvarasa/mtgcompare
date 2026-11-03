@@ -120,6 +120,38 @@ class TestSchema:
         assert "user_id" in cols
         assert row[0] == "local"
 
+    def test_migration_upgrades_an_old_desktop_db(self, tmp_path, monkeypatch):
+        """Every _ADDED_COLUMNS entry, the market_prices rebuild and the
+        late-declared inventory indexes reach a DB from an old release."""
+        db_path = tmp_path / "old.db"
+        old_engine = create_engine(f"sqlite:///{db_path}")
+        with old_engine.begin() as conn:
+            conn.execute(text("CREATE TABLE inventory (id INTEGER PRIMARY KEY, card_name TEXT NOT NULL,"
+                              " set_code TEXT NOT NULL, quantity INTEGER NOT NULL)"))
+            conn.execute(text("CREATE TABLE shop_listings (shop TEXT, card_name TEXT, last_checked TEXT)"))
+            conn.execute(text("CREATE TABLE market_prices (card_name TEXT, set_code TEXT, is_foil INTEGER,"
+                              " price_usd NUMERIC, fetched_at TEXT)"))
+        monkeypatch.setattr(db_module, "engine", old_engine)
+        monkeypatch.setattr(db_module, "IS_POSTGRES", False)
+        db_module.init_schema()
+        db_module.init_schema()  # idempotent
+
+        with old_engine.connect() as conn:
+            def cols(t):
+                return {r[1] for r in conn.execute(text(f"PRAGMA table_info({t})"))}  # noqa: S608
+            indexes = {r[0] for r in conn.execute(text("SELECT name FROM sqlite_master WHERE type='index'"))}
+            for table, column, _ in db_module._ADDED_COLUMNS:
+                assert column in cols(table), (table, column)
+            assert "card_number" in cols("market_prices")
+        assert {"idx_inventory_user_card", "idx_inventory_user_card_name_lower"} <= indexes
+
+    def test_postgres_schema_uses_native_uuid(self):
+        from sqlalchemy.dialects import postgresql
+        from sqlalchemy.schema import CreateTable
+        for table in ("price_rows", "mtgjson_card_map"):
+            ddl = str(CreateTable(db_module.metadata.tables[table]).compile(dialect=postgresql.dialect()))
+            assert "uuid UUID NOT NULL" in ddl, ddl
+
 
 # ---------------------------------------------------------------------------
 # inventory.py — user_id scoping

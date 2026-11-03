@@ -286,7 +286,7 @@ def test_decklist_lines_with_export_suffixes_keep_a_clean_name():
     1 Sol Ring (SLD) 1234★
     1 Rhystic Study (C21) 79
     """
-    assert [n for _, n in decklist.parse_decklist(text)] == ["Sol Ring"] * 3 + ["Rhystic Study"]
+    assert [n for _, n in decklist.parse_decklist_report(text).items] == ["Sol Ring"] * 3 + ["Rhystic Study"]
 
 
 def test_parse_printings_collects_sets_and_drops_unconstrained_cards():

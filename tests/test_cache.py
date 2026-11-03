@@ -146,7 +146,6 @@ class TestStorage:
             log = read_log(conn, "FakeShop", "lightning bolt")
         assert log is not None
         assert log["result_count"] == 3
-        assert log["status"] == "ok"
         assert log["queried_at"].tzinfo is not None
 
     def test_log_upsert_overwrites(self, test_db):

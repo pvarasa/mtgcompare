@@ -154,9 +154,9 @@ def test_shipping_config_excludes_marketplace_shops():
 
 
 def test_shipping_config_excludes_disabled_shops():
-    """ENNDAL GAMES is known but never searched; no shipping box for it."""
+    """MINT MALL is known but paused (never searched); no shipping box for it."""
     shops = {c["shop"] for c in web._shipping_config()}
-    assert "ENNDAL GAMES" not in shops
+    assert "MINT MALL" not in shops
     assert "Hareruya" in shops
 
 
@@ -534,7 +534,7 @@ def test_parse_decklist_skips_headers_and_comments():
     2 Rhystic Study (C21) 79
     """
 
-    assert decklist.parse_decklist(text) == [
+    assert decklist.parse_decklist_report(text).items == [
         (1, "Sol Ring"),
         (4, "Force of Will"),
         (2, "Rhystic Study"),
@@ -564,7 +564,7 @@ def test_parse_decklist_skips_headers_and_comments():
      [(1, "Borrowing 100,000 Arrows"), (1, "Fire // Ice")]),
 ])
 def test_parse_decklist_export_formats(text, expected):
-    assert decklist.parse_decklist(text) == expected
+    assert decklist.parse_decklist_report(text).items == expected
 
 
 def test_parse_decklist_report_lists_what_was_left_out():
