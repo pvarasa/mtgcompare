@@ -270,7 +270,20 @@ def _inject_current_user():
     return {
         "current_user": _get_display_name(),
         "workos_enabled": auth.WORKOS_ENABLED,
+        "allow_price_update": _manual_price_updates_allowed(),
     }
+
+
+def _manual_price_updates_allowed() -> bool:
+    """Only the local app triggers price downloads by hand. The hosted site
+    has the daily cron, and a user-triggered MTGJSON import or shop crawl
+    is heavy, shared-DB work no visitor should be able to start (nor two
+    replicas run at once: the jobs registry is per process)."""
+    return not db.IS_POSTGRES
+
+
+def _manual_price_update_refused():
+    return jsonify({"ok": False, "error": "Prices update daily on the hosted site."}), 403
 
 
 # Marketplace shops are skipped by decklist pricing (see registry), so the
@@ -278,6 +291,18 @@ def _inject_current_user():
 # rows are already absent everywhere via _shipping_config.)
 app.jinja_env.globals["marketplace_shops"] = MARKETPLACE_SHOPS
 app.jinja_env.filters["variant_label"] = variants.label
+
+
+def _internal_error_message(action: str) -> str:
+    """What a user sees when an unexpected exception was caught: never the
+    exception text (it can carry SQL or paths), but the request id that
+    finds the logged traceback."""
+    rid = getattr(g, "request_id", None)
+    return f"{action} failed unexpectedly." + (f" Reference: {rid}." if rid else "")
+
+
+def _internal_error_json(action: str):
+    return {"ok": False, "error": _internal_error_message(action)}, 500
 
 
 def _render_error(code: int, title: str, message: str):
@@ -860,6 +885,8 @@ def market():
 
 @app.route("/market/history/download", methods=["POST"])
 def market_history_download():
+    if not _manual_price_updates_allowed():
+        return _manual_price_update_refused()
     # Use global inventory so all users' cards get UUID-mapped and priced.
     inventory_rows = inv.list_all_global()
 
@@ -1014,10 +1041,7 @@ def market_history_portfolio():
 def sealed_page():
     user_id = _get_user_id()
     ctx = sealed_service.compute_sealed_ctx(user_id, fx=_get_fx())
-    # On the hosted site the daily cron refreshes sealed prices; only the
-    # local app (no cron) gets a manual button. Same rule as /market.
-    return render_template("sealed.html", active="sealed",
-                           allow_price_update=not db.IS_POSTGRES, **ctx)
+    return render_template("sealed.html", active="sealed", **ctx)
 
 
 def _resolve_sealed_product_or_flash() -> dict | None:
@@ -1095,11 +1119,10 @@ def sealed_delete_watch():
 def sealed_refresh():
     """Refresh the catalog (if stale) and every tracked product's price.
 
-    Local mode only: the hosted site has the daily cron, and a user-
-    triggered refresh would crawl both Japanese shops on demand.
+    Local mode only (see ``_manual_price_updates_allowed``).
     """
-    if db.IS_POSTGRES:
-        return jsonify({"ok": False, "error": "Prices refresh daily on the hosted site."}), 403
+    if not _manual_price_updates_allowed():
+        return _manual_price_update_refused()
     running = sealed_service.running_refresh_job()
     if running:
         return jsonify({"ok": True, "job_id": running["id"], "already_running": True})
@@ -1278,8 +1301,6 @@ def inventory():
         "per_page_choices": _PER_PAGE_CHOICES,
         "set_choices": inv.distinct_sets(user_id),
         "condition_choices": inv.distinct_conditions(user_id),
-        # Only read by the empty-inventory explainer; same rule as /market.
-        "allow_price_update": not db.IS_POSTGRES,
         "active": "inventory",
     }
     if request.args.get("partial") == "tbody":
@@ -1324,12 +1345,15 @@ def inventory_add():
             flash("Card name and set are required.")
             return redirect(url_for("inventory"))
         inv.add_one(record, user_id)
-    except Exception as exc:
+    except ValueError:
+        flash("Quantity must be a whole number.")
+        return redirect(url_for("inventory"))
+    except Exception:
         app.logger.exception(
             "event=inventory_add_failed source=manual card=%r set_code=%r",
             record.get("card_name"), record.get("set_code"),
         )
-        flash(f"Add failed: {exc}")
+        flash(_internal_error_message("Add"))
         return redirect(url_for("inventory"))
 
     app.logger.info(
@@ -1349,12 +1373,12 @@ def inventory_add_bulk():
         return {"ok": False, "error": "No records"}, 400
     try:
         count = inv.add_many(records, user_id)
-    except Exception as exc:
+    except Exception:
         app.logger.exception(
             "event=inventory_add_failed source=decklist record_count=%d",
             len(records),
         )
-        return {"ok": False, "error": str(exc)}, 500
+        return _internal_error_json("Add")
     app.logger.info(
         "event=inventory_add source=decklist record_count=%d added=%d",
         len(records), count,
@@ -1392,12 +1416,12 @@ def inventory_delete():
             return {"ok": False, "error": "Invalid ids"}, 400
         try:
             count = inv.delete(ids, user_id)
-        except Exception as exc:
+        except Exception:
             app.logger.exception(
                 "event=inventory_delete_failed source=ids requested=%d",
                 len(ids),
             )
-            return {"ok": False, "error": str(exc)}, 500
+            return _internal_error_json("Delete")
         app.logger.info(
             "event=inventory_delete source=ids requested=%d deleted=%d",
             len(ids), count,
@@ -1417,12 +1441,12 @@ def inventory_delete():
             user_id, q=q, price_mode=price_mode, price_value=price_value,
             set_code=set_code, condition=condition,
         )
-    except Exception as exc:
+    except Exception:
         app.logger.exception(
             "event=inventory_delete_failed source=match q=%r price_mode=%r",
             q, price_mode,
         )
-        return {"ok": False, "error": str(exc)}, 500
+        return _internal_error_json("Delete")
     app.logger.info(
         "event=inventory_delete source=match q=%r price_mode=%r deleted=%d",
         q, price_mode, count,
@@ -1446,12 +1470,18 @@ def inventory_import():
         tmp_path = tmp.name
     try:
         count = inv.import_csv(tmp_path, replace=replace, user_id=user_id)
-    except Exception as exc:
+    except KeyError as exc:
+        flash(f"Import failed: the file has no {exc} column. Upload a Deckbox CSV export.")
+        return redirect(url_for("inventory"))
+    except (ValueError, UnicodeDecodeError):
+        flash("Import failed: the file couldn't be read as a Deckbox CSV export.")
+        return redirect(url_for("inventory"))
+    except Exception:
         app.logger.exception(
             "event=inventory_import_failed filename=%r replace_mode=%d",
             uploaded.filename, int(replace),
         )
-        flash(f"Import failed: {exc}")
+        flash(_internal_error_message("Import"))
         return redirect(url_for("inventory"))
     finally:
         Path(tmp_path).unlink(missing_ok=True)

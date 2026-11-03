@@ -235,18 +235,24 @@ def test_webhook_user_created_upserts_row(monkeypatch):
     assert row["first_name"] == "Nu"
 
 
-def test_webhook_user_deleted_clears_user_and_inventory(monkeypatch):
-    """A `user.deleted` event must remove both the user row and any inventory
-    they owned — keeping orphaned rows around would re-attach to a future
-    sub-collision."""
+def test_webhook_user_deleted_clears_every_per_user_table(monkeypatch):
+    """A `user.deleted` event must remove the user row and everything they
+    owned (inventory, sealed lots, sealed watchlist) — keeping orphaned
+    rows around would re-attach to a future sub-collision. Other users'
+    rows are untouched."""
+    from mtgcompare.sealed import repo as sealed_repo
     db_module.init_schema()
     auth_module._upsert_user({"id": "user_GONE", "email": "g@example.com"})
     with db_module.get_conn() as conn:
-        conn.execute(text(
-            "INSERT INTO inventory (user_id, card_name, set_code, quantity,"
-            " condition, printing, language)"
-            " VALUES ('user_GONE', 'Sol Ring', 'CMM', 1, 'NM', 'normal', 'EN')"
-        ))
+        for uid in ("user_GONE", "user_STAYS"):
+            conn.execute(text(
+                "INSERT INTO inventory (user_id, card_name, set_code, quantity,"
+                " condition, printing, language)"
+                " VALUES (:uid, 'Sol Ring', 'CMM', 1, 'NM', 'normal', 'EN')"
+            ), {"uid": uid})
+            sealed_repo.add_lot(conn, uid, {"product_uuid": "box", "language": "EN", "quantity": 1,
+                                            "price_bought": None, "currency": "USD", "date_bought": None})
+            sealed_repo.add_watch(conn, uid, "box", "t")
 
     monkeypatch.setattr(
         auth_module, "verify_webhook",
@@ -268,8 +274,13 @@ def test_webhook_user_deleted_clears_user_and_inventory(monkeypatch):
         inv_row = conn.execute(text(
             "SELECT 1 FROM inventory WHERE user_id = 'user_GONE'"
         )).first()
+        leftovers = {
+            t: conn.execute(text(f"SELECT user_id FROM {t}")).scalars().all()  # noqa: S608
+            for t in ("inventory", "sealed_lots", "sealed_watch")
+        }
     assert user_row is None
     assert inv_row is None
+    assert leftovers == {t: ["user_STAYS"] for t in leftovers}
 
 
 def test_webhook_unknown_event_type_is_ignored(monkeypatch):

@@ -23,7 +23,7 @@ class EnrichingScrapper(MtgScrapper):
     def __init__(self, scrapper: MtgScrapper, shop_name: str):
         super().__init__()
         self.scrapper = scrapper
-        self.shop_name = shop_name  # read by collect_prices' timeout report
+        self.shop_name = shop_name  # read by collect_prices for its logs and timeout report
 
     def get_prices(self, card_name: str) -> list[dict]:
         records = self.scrapper.get_prices(card_name)

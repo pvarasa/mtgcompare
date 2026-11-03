@@ -412,7 +412,6 @@ def compute_market_ctx(
     common = {
         "last_refreshed": format_ago(last_fetched_at),
         "history_db_exists": history_db_exists,
-        "allow_price_update": not db.IS_POSTGRES,
         "active": "market",
         "params": params,
         "per_page_choices": per_page_choices,

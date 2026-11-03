@@ -128,6 +128,12 @@ def build_scrapers(fx: float, enabled: set[str] | None = None) -> list:
     return [CachedScrapper(s, shop_name=name, ttl=DEFAULT_TTL) for name, s in raw]
 
 
+def _shop_label(scraper) -> str:
+    # The fan-out runs wrappers (CachedScrapper / EnrichingScrapper), whose
+    # class name says nothing; both carry the shop's display name.
+    return getattr(scraper, "shop_name", None) or scraper.__class__.__name__
+
+
 def collect_prices(
     card_name: str,
     fx: float,
@@ -157,21 +163,17 @@ def collect_prices(
         futures = {ex.submit(s.get_prices, card_name): s for s in scrapers}
         done, not_done = wait(futures, timeout=SHOP_QUERY_TIMEOUT_S)
         for fut in done:
-            scraper = futures[fut]
             try:
                 results.extend(fut.result())
             except Exception as exc:
                 if logger is not None:
                     logger.error(
-                        "Scraper %s failed for %r: %s",
-                        scraper.__class__.__name__,
-                        card_name,
-                        exc,
+                        "event=shop_query_failed shop=%s card=%r class=%s detail=%s",
+                        _shop_label(futures[fut]), card_name, type(exc).__name__, exc,
                     )
         for fut in not_done:
-            scraper = futures[fut]
             fut.cancel()
-            shop_label = getattr(scraper, "shop_name", scraper.__class__.__name__)
+            shop_label = _shop_label(futures[fut])
             if timeouts_out is not None:
                 timeouts_out.add(shop_label)
             if logger is not None:

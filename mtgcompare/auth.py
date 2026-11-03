@@ -40,6 +40,8 @@ from jwt import PyJWKClient
 from sqlalchemy import text
 
 from . import db
+from . import inventory as inv
+from .sealed import repo as sealed_repo
 
 WORKOS_API_KEY        = os.environ.get("WORKOS_API_KEY", "")
 WORKOS_CLIENT_ID      = os.environ.get("WORKOS_CLIENT_ID", "")
@@ -504,6 +506,19 @@ def me():
     return jsonify({"authenticated": True, "user": g.user})
 
 
+def delete_user_data(user_id: str) -> None:
+    """Remove everything a deleted account owns, in one transaction.
+
+    Every per-user table must be purged here: rows left behind would
+    re-attach to a future account that reuses the id. Each module owns
+    its own tables' DELETE.
+    """
+    with db.get_conn() as conn:
+        inv.purge_user(conn, user_id)
+        sealed_repo.purge_user(conn, user_id)
+        conn.execute(text("DELETE FROM users WHERE workos_user_id = :uid"), {"uid": user_id})
+
+
 @bp.route("/webhooks/workos", methods=["POST"])
 def webhook():
     if not WORKOS_ENABLED:
@@ -529,9 +544,7 @@ def webhook():
     if data is None or user_id is None or event_type is None:
         return jsonify({"ok": True, "ignored": "unsupported event"}), 200
     if event_type == "user.deleted":
-        with db.get_conn() as conn:
-            conn.execute(text("DELETE FROM inventory WHERE user_id = :uid"), {"uid": user_id})
-            conn.execute(text("DELETE FROM users WHERE workos_user_id = :uid"), {"uid": user_id})
+        delete_user_data(user_id)
     elif event_type in ("user.created", "user.updated"):
         _upsert_user({
             "id": user_id,

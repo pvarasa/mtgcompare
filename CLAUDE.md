@@ -206,6 +206,13 @@ The `users` table is keyed on `workos_user_id`; inventory rows continue to key o
   opt-in (`match_printings`).
 - Market prices are cached in the `market_prices` table (global, not per-user).
 - The Market page does not fetch live prices on GET. Prices are populated via **Update prices** (`POST /market/history/download`), which downloads MTGJSON history and writes the latest price per mapped lot into `market_prices` as a side effect (`pricing.populate_market_prices_from_history`).
+- Manual price downloads (that route and `POST /sealed/refresh`) are
+  local-app only: `web._manual_price_updates_allowed()` (also the
+  `allow_price_update` template global) is false on Postgres, where the
+  daily cron does it and the routes answer 403.
+- Account deletion (`user.deleted` webhook → `auth.delete_user_data`) must
+  purge every per-user table; each module owns a `purge_user(conn, uid)`.
+  A new per-user table needs one too.
 - There is no separate Scryfall refresh; prices come from MTGJSON/TCGPlayer daily data.
 - Market cache keys are `(card_name, normalized set_code, is_foil)`.
 - The Market page serves two price-history charts in one modal (shared SVG renderer in `static/pricechart.js`, also used by `/sealed`): **per-card** (the chart button on each row → `GET /market/history`) and **whole-portfolio** (the *Portfolio history* tile in the summary row → `GET /market/history/portfolio`). The portfolio chart values the *current* inventory at every MTGJSON-priced day via a single DB-side weighted `SUM(qty × price_usd) GROUP BY market_date` (`pricing.compute_portfolio_history` → `PriceHistoryStore.portfolio_value_series`, with lots resolved through the set-scoped `pricing.load_card_map_for_inventory`). It is a deliberate simplification: it ignores when lots were bought/sold and does **not** forward-fill MTGJSON blank days (a day with no priced holding shows blank, same as the per-card chart).
@@ -398,7 +405,12 @@ The `users` table is keyed on `workos_user_id`; inventory rows continue to key o
 - Tests import the package from repo root via `tests/conftest.py`, so `uv run pytest` should work without setting `PYTHONPATH`.
 - `.\.venv\Scripts\python -m pytest`
   Fallback if `uv` has cache or permission issues in this environment.
-- DB-layer tests use a per-test temporary SQLite engine via `monkeypatch` on `db.engine`/`db.DB_PATH`/`db.IS_POSTGRES` — they never touch `inventory.db`.
+- Every unit test runs against its own SQLite file: an autouse fixture in
+  `tests/conftest.py` copies a once-per-session migrated template and points
+  `db.engine`/`db.DB_PATH`/`db.IS_POSTGRES` at it (e2e, pg and canary tests
+  are exempt). `test_db` just hands a test the `db` module. Before this was
+  automatic, tests that didn't request `test_db` wrote to the real
+  `inventory.db`.
 - E2E tests run the Flask app in a background thread (werkzeug) against a temp SQLite DB; fixtures live in `tests/e2e/conftest.py`. Per-test isolation comes from truncating the `inventory` table between tests.
 
 ## Git workflow

@@ -29,6 +29,8 @@ class _SleepyScraper(MtgScrapper):
 
 
 class _FailingScraper(MtgScrapper):
+    shop_name = "Broken Shop"  # like the CachedScrapper wrapper the fan-out sees
+
     def get_prices(self, card_name):
         raise RuntimeError("simulated shop outage")
 
@@ -65,7 +67,8 @@ def test_collect_prices_isolates_per_scraper_failures(monkeypatch, caplog):
     shops_returned = {r["shop"] for r in results}
     assert shops_returned == {"OK1", "OK2"}
     assert any("simulated shop outage" in rec.message for rec in caplog.records)
-    assert any("_FailingScraper" in rec.message for rec in caplog.records)
+    # The display name, not the wrapper class (prod logged "CachedScrapper").
+    assert any("shop=Broken Shop" in rec.message for rec in caplog.records)
 
 
 def test_collect_prices_returns_empty_when_all_shops_empty(monkeypatch):

@@ -95,10 +95,7 @@ def import_csv(path: str, replace: bool = True, user_id: str = "local") -> int:
         ]
     with get_conn() as conn:
         if replace:
-            conn.execute(
-                text("DELETE FROM inventory WHERE user_id = :uid"),
-                {"uid": user_id},
-            )
+            purge_user(conn, user_id)
         conn.execute(_INSERT_SQL, [_dict(r, user_id) for r in records])
     return len(records)
 
@@ -147,6 +144,12 @@ def delete(ids: list[int], user_id: str = "local") -> int:
             {"uid": user_id, "ids": ids},
         )
     return result.rowcount or 0
+
+
+def purge_user(conn, user_id: str) -> None:
+    """Delete every inventory row a user owns, inside the caller's
+    transaction (account deletion; see ``auth.delete_user_data``)."""
+    conn.execute(text("DELETE FROM inventory WHERE user_id = :uid"), {"uid": user_id})
 
 
 def list_all_global() -> list[dict]:

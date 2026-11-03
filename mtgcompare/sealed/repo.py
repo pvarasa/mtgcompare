@@ -14,6 +14,14 @@ from sqlalchemy import bindparam, text
 
 from .. import db
 
+
+def purge_user(conn, user_id: str) -> None:
+    """Delete a user's sealed lots and watchlist (account deletion). The
+    catalog and price tables are global and untouched."""
+    for table in ("sealed_lots", "sealed_watch"):
+        conn.execute(text(f"DELETE FROM {table} WHERE user_id = :uid"), {"uid": user_id})  # noqa: S608
+
+
 _PRODUCT_COLS = (
     "p.uuid, p.set_code, p.set_name, p.name, p.category, p.subtype,"
     " p.release_date, p.tcgplayer_product_id"
