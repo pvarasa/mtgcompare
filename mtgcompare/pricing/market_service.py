@@ -378,20 +378,21 @@ def _history_downloaded_at() -> str | None:
 
 def card_history_payload(
     *, card_name: str, set_code: str, card_number: str, foil: bool, period: str,
-    today: date | None = None,
+    now: datetime | None = None,
 ) -> dict:
     """The per-card chart (``GET /market/history``): one printing's daily
     MTGJSON price, densified to calendar days and cut to ``period``."""
     if period not in MARKET_HISTORY_PERIODS:
         period = DEFAULT_HISTORY_PERIOD
+    now = now or datetime.now(UTC)
     with db.get_conn() as conn:
         mapped_uuid = market_repo.find_card_uuid(
             conn, card_name=card_name, set_code=set_code,
             card_number=card_number, is_foil=int(foil),
         )
     history = query_history(mapped_uuid, "foil" if foil else "normal") if mapped_uuid else {}
-    points = densify_daily_points(history, end_day=today or datetime.now(UTC).date()) if history else []
-    cutoff = history_cutoff(period)  # None for "all"
+    points = densify_daily_points(history, end_day=now.date()) if history else []
+    cutoff = history_cutoff(period, now=now)  # None for "all"
     if cutoff is not None:
         points = [
             p for p in points

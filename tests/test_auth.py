@@ -1,5 +1,5 @@
 """Tests for `mtgcompare.auth` — focused on the paths not already exercised
-by `test_web_helpers.py`: the refresh-token flow inside `_auth_gate`, the
+by `test_identity.py`: the refresh-token flow inside `_auth_gate`, the
 `/auth/callback` code-exchange + state validation, the webhook event-type
 dispatch, and the security attributes on session cookies.
 

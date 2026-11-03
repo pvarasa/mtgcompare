@@ -8,7 +8,7 @@ from datetime import UTC, date, datetime
 
 from sqlalchemy import text
 
-from ..db import engine
+from .. import db
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +36,7 @@ _FINISH = text("""
 def record_start(triggered_at: datetime, trigger_source: str, job_id: str) -> int | None:
     """Insert a 'running' row and return its id. Returns None on DB error."""
     try:
-        with engine.begin() as conn:
+        with db.get_conn() as conn:
             return conn.execute(_INSERT, {
                 "triggered_at": triggered_at,
                 "started_at": triggered_at,
@@ -62,7 +62,7 @@ def record_finish(
     if run_id is None:
         return
     try:
-        with engine.begin() as conn:
+        with db.get_conn() as conn:
             conn.execute(_FINISH, {
                 "id": run_id,
                 "status": status,
