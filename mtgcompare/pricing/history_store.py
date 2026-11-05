@@ -139,7 +139,7 @@ class PostgresPriceStore(PriceHistoryStore):
                     FROM price_rows p
                     JOIN (VALUES {values_sql}) AS w(uuid, finish, qty)
                       ON p.uuid = w.uuid AND p.finish = w.finish
-                    WHERE p.uuid = ANY(:uuids) AND p.price_usd IS NOT NULL
+                    WHERE p.uuid = ANY(CAST(:uuids AS uuid[])) AND p.price_usd IS NOT NULL
                     GROUP BY p.market_date
                     ORDER BY p.market_date
                 """),  # noqa: S608

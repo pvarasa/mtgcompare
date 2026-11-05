@@ -677,7 +677,7 @@ wheels = [
 
 [[package]]
 name = "mtgcompare"
-version = "1.15.5"
+version = "1.15.6"
 source = { virtual = "." }
 dependencies = [
     { name = "cachetools" },

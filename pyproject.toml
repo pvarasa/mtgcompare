@@ -1,6 +1,6 @@
 [project]
 name = "mtgcompare"
-version = "1.15.5"
+version = "1.15.6"
 description = "Compares prices for Magic The Gathering cards across online shops."
 readme = "README.md"
 requires-python = ">=3.12"

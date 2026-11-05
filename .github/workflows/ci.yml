@@ -88,6 +88,48 @@ jobs:
       - name: Audit dependencies
         run: uv run --with pip-audit pip-audit --strict
 
+  # The Postgres-only paths (COPY import, the portfolio query's uuid[] ANY)
+  # were opt-in and never ran in CI, which let a `uuid = text` error break
+  # the prod portfolio chart unnoticed. Same major as prod (18).
+  pg:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_PASSWORD: pgtest
+          POSTGRES_DB: mtgtest
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql+psycopg2://postgres:pgtest@localhost:5432/mtgtest
+      SECRET_KEY: ci
+      CRON_SECRET: ci
+      TRUST_USER_HEADER: "1"
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install dependencies
+        run: uv sync --group dev
+
+      - name: PostgreSQL tests
+        run: uv run pytest -m pg -q
+
   e2e:
     runs-on: ubuntu-latest
 
