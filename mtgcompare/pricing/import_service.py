@@ -414,7 +414,7 @@ def import_mtgjson_history(rows: list[dict], *, progress_cb=None) -> tuple[int, 
 
 def run_daily_price_update(
     progress_cb=None,
-) -> tuple[int, int, int, "date | None"]:
+) -> tuple[int, int, int, date | None]:
     """Download today's prices for all cards and update UUID mappings for inventory.
 
     Used by the cron endpoint. Returns

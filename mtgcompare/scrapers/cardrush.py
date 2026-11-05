@@ -30,7 +30,7 @@ The ``parse_search_html`` function is pure and is what tests exercise.
 """
 import re
 
-from selectolax.parser import HTMLParser
+from selectolax.lexbor import LexborHTMLParser as HTMLParser
 
 from .html_base import HtmlSearchScrapper, node_text_ws, to_usd
 from .names import matched_name

@@ -370,7 +370,7 @@ class DecklistResult:
 
 
 def price_decklist(
-    prep: "DecklistPrep",
+    prep: DecklistPrep,
     *,
     collect: Callable[..., list[dict]] = collect_prices,
     logger: logging.Logger = logger,

@@ -25,7 +25,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 import requests
-from selectolax.parser import HTMLParser
+from selectolax.lexbor import LexborHTMLParser as HTMLParser
 
 from ..scrapers.hareruya import UNISEARCH_API
 from ..scrapers.hareruya import make_session as hareruya_session

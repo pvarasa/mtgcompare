@@ -81,7 +81,7 @@ Prices are shown in both ¥ and $ using a live FX rate fetched at startup. Resul
 
 ### Requirements
 
-- Python 3.12+
+- Python 3.14+
 - [uv](https://github.com/astral-sh/uv)
 
 ### Install & run (local / SQLite)

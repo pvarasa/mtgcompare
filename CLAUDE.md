@@ -334,7 +334,7 @@ The `users` table is keyed on `workos_user_id`; inventory rows continue to key o
 
 ## Docker
 
-- `Dockerfile`: multi-stage build — `uv` installs deps in a builder stage, `python:3.12-slim` is the runtime.
+- `Dockerfile`: multi-stage build — `uv` installs deps in a builder stage, `python:3.14-slim` is the runtime.
 - `docker-compose.yml`: local dev stack with app + `postgres:16-alpine`. Start with `docker compose up`.
 - The app is stateless when `DATABASE_URL` is set; no volumes needed for the app container.
 

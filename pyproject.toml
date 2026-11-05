@@ -1,13 +1,13 @@
 [project]
 name = "mtgcompare"
-version = "1.15.6"
+version = "1.16.0"
 description = "Compares prices for Magic The Gathering cards across online shops."
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.14"
 dependencies = [
     "cachetools>=5.5",
-    "selectolax>=0.3.21",
-    "duckdb>=1.2",
+    "selectolax>=1.0",
+    "duckdb>=2.0",
     "flask>=3.1",
     "flask-wtf>=1.2",
     "gunicorn>=23.0",
@@ -15,7 +15,7 @@ dependencies = [
     "psycopg2-binary>=2.9",
     "pyjwt[crypto]>=2.8",
     "requests>=2.33",
-    "sqlalchemy>=2.0",
+    "sqlalchemy>=2.1",
     # >=10.1.1 is a security floor, not a feature one: every workos 9.x pins
     # cryptography~=49.0, which hard-blocks the CVE-2026-69247 fix that only
     # lands in cryptography 50.0.0.
@@ -42,14 +42,14 @@ desktop = [
 ]
 
 [tool.ruff]
-target-version = "py312"
+target-version = "py314"
 line-length = 120
 
 [tool.ruff.lint]
 # E/F/W/I: pycodestyle, pyflakes, isort
 # B:       flake8-bugbear (likely bugs: mutable defaults, unused loop vars, etc.)
 # S:       flake8-bandit (security: shell=True, weak hashes, hardcoded secrets, dynamic SQL)
-# UP:      pyupgrade (modern Python idioms — we target 3.12)
+# UP:      pyupgrade (modern Python idioms — we target 3.14)
 # SIM:     flake8-simplify (small readability wins)
 select = ["E", "F", "W", "I", "B", "S", "UP", "SIM"]
 ignore = ["E701"]  # allow compact single-line if/return style
@@ -68,7 +68,7 @@ ignore = ["E701"]  # allow compact single-line if/return style
 # codebase that's adopting types gradually.
 include = ["mtgcompare"]
 exclude = ["**/__pycache__", ".venv", "mtgjson", "dist", "build"]
-pythonVersion = "3.12"
+pythonVersion = "3.14"
 typeCheckingMode = "basic"
 reportMissingImports = "error"
 reportMissingTypeStubs = false

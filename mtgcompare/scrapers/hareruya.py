@@ -30,7 +30,7 @@ import re
 from time import monotonic
 
 import requests
-from selectolax.parser import HTMLParser
+from selectolax.lexbor import LexborHTMLParser as HTMLParser
 
 from ..utils import get_fx
 from .base import MtgScrapper

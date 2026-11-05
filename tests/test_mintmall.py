@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import pytest
-from selectolax.parser import HTMLParser
+from selectolax.lexbor import LexborHTMLParser as HTMLParser
 
 from mtgcompare.scrapers.mintmall import _stock_map_from_tree, parse_search_html
 
