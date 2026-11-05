@@ -95,6 +95,13 @@ if db.IS_POSTGRES and not _SECRET_KEY:
     )
 app.secret_key = _SECRET_KEY or "mtgcompare-local-dev"
 
+# Cap every request body. Werkzeug bounds non-file form fields
+# (MAX_FORM_MEMORY_SIZE, 500 kB) but not uploads or JSON bodies, so without
+# this one signed-in user could stream a multi-GB CSV to /inventory/import or
+# a JSON body to /inventory/add-bulk and exhaust the pod's memory/disk. A
+# Deckbox export of a few thousand lots is well under 1 MB.
+app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024
+
 
 # Stamp a per-request id BEFORE the auth blueprint's gate runs, so even
 # the kick-to-login redirect carries a correlatable id in its log line.
@@ -422,7 +429,7 @@ def _parse_shipping_overrides(source) -> dict[str, int]:
         raw = source.get(f"ship_{shop_slug(shop)}", "").strip()
         try:
             overrides[shop] = max(0, int(float(raw))) if raw else default_cost
-        except ValueError:
+        except (ValueError, OverflowError):  # "oops" / "nan" / "inf"
             overrides[shop] = default_cost
     return overrides
 

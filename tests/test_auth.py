@@ -136,6 +136,28 @@ def test_callback_rejects_state_mismatch(monkeypatch):
     assert exchanges["called"] is False, "code-exchange must not run on state mismatch"
 
 
+def test_callback_non_ascii_state_is_rejected_not_crashed(monkeypatch):
+    monkeypatch.setattr(auth_module, "exchange_code", lambda _c: pytest.fail("must not exchange"))
+    with web.app.test_client() as client:
+        client.set_cookie(auth_module.STATE_COOKIE, "expected-state")
+        resp = client.get("/auth/callback?code=abc&state=%C3%A9t%C3%A9", follow_redirects=False)
+    assert resp.status_code == 302
+    assert resp.headers["Location"].endswith("/auth/login")
+
+
+def test_callback_exchange_failure_does_not_echo_exception_text(monkeypatch):
+    def boom(_code):
+        raise RuntimeError("secret-ish SDK detail")
+
+    monkeypatch.setattr(auth_module, "exchange_code", boom)
+    with web.app.test_client() as client:
+        client.set_cookie(auth_module.STATE_COOKIE, "s")
+        client.get("/auth/callback?code=abc&state=s", follow_redirects=False)
+        with client.session_transaction() as sess:
+            flashes = [m for _cat, m in sess.get("_flashes", [])]
+    assert flashes and all("secret-ish" not in m for m in flashes)
+
+
 def test_callback_happy_path_sets_cookies_and_redirects(monkeypatch):
     """Matching state + working code-exchange must set both session cookies
     with HttpOnly+Secure+SameSite=Lax, then redirect to the saved return-to."""

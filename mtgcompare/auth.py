@@ -442,7 +442,7 @@ def callback():
     code = request.args.get("code", "")
     state = request.args.get("state", "")
     expected_state = request.cookies.get(STATE_COOKIE, "")
-    if not code or not state or state != expected_state:
+    if not code or not state or not secrets.compare_digest(state.encode(), expected_state.encode()):
         current_app.logger.info("event=auth_callback_fail reason=invalid_state")
         flash("Login failed — invalid state. Please try again.")
         return redirect(url_for("auth.login"))
@@ -454,7 +454,8 @@ def callback():
             "event=auth_callback_fail reason=code_exchange class=%s",
             type(exc).__name__,
         )
-        flash(f"Login failed: {exc}")
+        # Never the exception text: SDK errors can echo request details.
+        flash("Login failed. Please try again.")
         return redirect(url_for("auth.login"))
 
     _upsert_user(session["user"])

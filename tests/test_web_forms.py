@@ -162,3 +162,25 @@ def test_parse_shipping_overrides_clamps_and_falls_back_to_defaults():
     assert overrides["TokyoMTG"] == web.SHIPPING_JPY["TokyoMTG"]
     # Non-numeric input falls back to the default, not a crash or 0.
     assert overrides["TCGPlayer market"] == web.SHIPPING_JPY["TCGPlayer market"]
+
+
+def test_parse_shipping_overrides_rejects_non_finite_numbers():
+    """float() accepts "inf"/"nan"; int(inf) raised OverflowError → a 500."""
+    overrides = web._parse_shipping_overrides({"ship_hareruya": "inf", "ship_singlestar": "nan"})
+
+    assert overrides["Hareruya"] == web.SHIPPING_JPY["Hareruya"]
+    assert overrides["SingleStar"] == web.SHIPPING_JPY["SingleStar"]
+
+
+def test_oversized_request_body_is_rejected_before_parsing():
+    """MAX_CONTENT_LENGTH bounds uploads/JSON bodies, which Werkzeug's form
+    limits don't cover."""
+    limit = web.app.config["MAX_CONTENT_LENGTH"]
+    assert limit
+    with web.app.test_client() as client:
+        resp = client.post(
+            "/inventory/add-bulk",
+            data=b"x" * (limit + 1),
+            content_type="application/json",
+        )
+    assert resp.status_code == 413

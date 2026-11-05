@@ -105,6 +105,38 @@ jobs:
             type=semver,pattern={{version}}
             type=raw,value=latest
 
+      # The image is the only thing nothing else CVE-scans: the GHCR package
+      # is private, so server_admin's weekly image-scan and the pentest run
+      # can't pull it (they report "scan unavailable"), and pip-audit in CI
+      # only sees the Python deps, not the Debian base. Scan it here, before
+      # it is pushed: a fixable CRITICAL fails the release (bump the base
+      # digest in the Dockerfile and re-tag); HIGHs are reported only.
+      - name: Build for scanning
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          load: true
+          push: false
+          tags: mtgcompare:scan
+
+      - name: Install trivy
+        # Installer and binary pinned to one release (same as server_admin's
+        # image-scan workflow); install.sh verifies the release checksum.
+        env:
+          TRIVY_VERSION: v0.74.0
+        run: |
+          curl -sfL "https://raw.githubusercontent.com/aquasecurity/trivy/${TRIVY_VERSION}/contrib/install.sh" \
+            | sudo sh -s -- -b /usr/local/bin "${TRIVY_VERSION}"
+
+      - name: Scan image
+        run: |
+          trivy image --quiet --scanners vuln --ignore-unfixed \
+            --severity HIGH,CRITICAL --format table mtgcompare:scan \
+            | tee trivy.txt
+          { echo '### Image CVE scan (fixable HIGH/CRITICAL)'; echo '```'; cat trivy.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          trivy image --quiet --scanners vuln --ignore-unfixed \
+            --severity CRITICAL --exit-code 1 mtgcompare:scan > /dev/null
+
       - name: Build and push
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
