@@ -12,7 +12,9 @@
 # then update BOTH FROM lines together.
 FROM python:3.14-slim@sha256:930e1abba7c4e8f96ed93e8012c35d174d7732752731bbd5e8e757d7ec6f3966 AS builder
 
-RUN pip install uv
+# uv from its official image, pinned like the base: `pip install uv` took
+# whatever PyPI served at build time.
+COPY --from=ghcr.io/astral-sh/uv:0.13.7@sha256:96f40d3904aad8d0bd010539001d36c8e2188b981e1334471a90c4a1d93bb490 /uv /bin/uv
 
 WORKDIR /app
 COPY pyproject.toml uv.lock ./
@@ -24,7 +26,12 @@ FROM python:3.14-slim@sha256:930e1abba7c4e8f96ed93e8012c35d174d7732752731bbd5e8e
 
 # Run as a non-root user. UID matches the deployment manifest's
 # securityContext.runAsUser so volume permissions line up.
-RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin mtgc
+# The base image's pip is never used at runtime (deps live in /app/.venv),
+# but it carries vendored msgpack / urllib3 / setuptools that trivy flags
+# HIGH. Remove it rather than scan around it.
+RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin mtgc \
+    && python -m pip uninstall -y -q pip \
+    && rm -rf /root/.cache
 
 WORKDIR /app
 

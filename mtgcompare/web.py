@@ -385,26 +385,34 @@ def _condition_abbr(value: str) -> str:
     return _CONDITION_ABBR.get(key, value)
 
 _fx: float | None = None
+_fx_at: float = 0.0          # monotonic time _fx was fetched
+_fx_refreshing = False       # one refresh in flight; others keep the old rate
 _fx_lock = Lock()
 _fx_failed_at: float | None = None
+_FX_TTL_S = 6 * 3600.0  # a daily ECB fixing; pods run for weeks, so re-fetch
 _FX_RETRY_S = 60.0    # back off this long after a failed fetch
 _FX_TIMEOUT_S = 10.0  # wall-clock cap on one FX fetch
 
 
 def _get_fx() -> float | None:
-    """Fetch the JPY/USD rate once per process.
+    """The JPY/USD rate, re-fetched every ``_FX_TTL_S``.
 
-    The network call runs outside the lock and under a wall-clock cap, so
-    a hung upstream can't serialize every request behind one socket.
-    Failures are remembered for ``_FX_RETRY_S`` so an outage costs one
-    bounded fetch per window instead of one per request.
+    It used to be fetched once per process, so a pod that ran for weeks
+    priced in a weeks-old rate. The network call runs outside the lock and
+    under a wall-clock cap, so a hung upstream can't serialize every request
+    behind one socket. While a refresh is in flight, or after it failed,
+    callers keep the last good rate; only a process that never got one
+    returns None. Failures are remembered for ``_FX_RETRY_S`` so an outage
+    costs one bounded fetch per window instead of one per request.
     """
-    global _fx, _fx_failed_at
+    global _fx, _fx_at, _fx_failed_at, _fx_refreshing
     with _fx_lock:
-        if _fx is not None:
+        now = monotonic()
+        if _fx is not None and now - _fx_at < _FX_TTL_S:
             return _fx
-        if _fx_failed_at is not None and monotonic() - _fx_failed_at < _FX_RETRY_S:
-            return None
+        if _fx_refreshing or (_fx_failed_at is not None and now - _fx_failed_at < _FX_RETRY_S):
+            return _fx
+        _fx_refreshing = True
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="fx")
     try:
         rate = executor.submit(get_fx, "jpy").result(timeout=_FX_TIMEOUT_S)
@@ -413,13 +421,14 @@ def _get_fx() -> float | None:
         app.logger.error("FX lookup failed: %s: %s", type(exc).__name__, exc)
         with _fx_lock:
             _fx_failed_at = monotonic()
-        return None
+            _fx_refreshing = False
+            return _fx
     finally:
         # Never wait on a hung fetch; the stray worker thread exits on its
         # own once the underlying socket finally gives up.
         executor.shutdown(wait=False)
     with _fx_lock:
-        _fx = rate
+        _fx, _fx_at, _fx_refreshing = rate, monotonic(), False
     return rate
 
 

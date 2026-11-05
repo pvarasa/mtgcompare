@@ -184,3 +184,29 @@ def test_oversized_request_body_is_rejected_before_parsing():
             content_type="application/json",
         )
     assert resp.status_code == 413
+
+
+def test_get_fx_refetches_after_ttl_and_keeps_last_rate_on_failure(monkeypatch):
+    rates = iter([150.0, RuntimeError("down"), 152.0])
+
+    def fake_get_fx(_ccy):
+        r = next(rates)
+        if isinstance(r, Exception):
+            raise r
+        return r
+
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(web, "get_fx", fake_get_fx)
+    monkeypatch.setattr(web, "monotonic", lambda: clock["t"])
+    monkeypatch.setattr(web, "_fx", None)
+    monkeypatch.setattr(web, "_fx_at", 0.0)
+    monkeypatch.setattr(web, "_fx_failed_at", None)
+    monkeypatch.setattr(web, "_fx_refreshing", False)
+
+    assert web._get_fx() == 150.0
+    clock["t"] += 60
+    assert web._get_fx() == 150.0          # cached, no fetch
+    clock["t"] += web._FX_TTL_S
+    assert web._get_fx() == 150.0          # refresh failed → last good rate
+    clock["t"] += web._FX_RETRY_S + 1
+    assert web._get_fx() == 152.0          # retried after the back-off
