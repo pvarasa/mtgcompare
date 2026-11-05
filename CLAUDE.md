@@ -65,14 +65,17 @@ Repo-specific guidance for coding sessions.
   `registry.py` (the `Shop` NamedTuple registry incl. the `marketplace`
   flag + parallel `collect_prices()` fan-out), and one module per shop.
 - `mtgcompare/sealed/`
-  Sealed-product (booster box / pack) tracking, Flask-free. `catalog.py`
-  (MTGJSON `SetList.json` `sealedProduct` → catalog rows), `tcgplayer.py`
+  Sealed-product (booster box / pack / precon / Secret Lair) tracking,
+  Flask-free. `catalog.py` (MTGJSON `SetList.json` `sealedProduct` →
+  catalog rows, deck products linked to `DeckList.json` deck files),
+  `decks.py` (MTGJSON deck files → inventory card records, for opening a
+  precon), `tcgplayer.py`
   (market price + history endpoints keyed by TCGPlayer product id, pure
   parsers + `TcgSealedClient`), `repo.py` (data access for the `sealed_*`
   tables), `jp_titles.py` (pure parsing of Japanese shop titles + catalog
   matching), `jp_shops.py` (Hareruya / SingleStar / Cardshop Serra sealed
   crawlers, the Hareruya buylist crawler, and cheapest-offer selection), `service.py` (catalog/price refresh, backfill,
-  `/sealed` page computation).
+  `/sealed` page computation, precon preview + `add_precon_cards`).
 - `mtgcompare/meta.py`
   Data access for the `app_meta` key/value table (price-import and sealed
   bookkeeping).
@@ -173,6 +176,12 @@ The `users` table is keyed on `workos_user_id`; inventory rows continue to key o
 - Resolved preview rows default the date field to today.
 - The preview `Set` field is editable as a 3-character set code only.
 - Inventory filtering is server-side: name (substring), set (dropdown of sets the user owns), condition (dropdown), and `price_bought` mode + value. Filters round-trip through `paginatedtable.js` as `?partial=tbody` fetches.
+- The **Precon / Secret Lair** add mode reuses the same preview (one
+  `createPreview` controller per mode in `static/inventoryadd.js`): search
+  openable sealed products (`GET /sealed/precons/search`), load their cards
+  (`GET /sealed/precons/<uuid>/cards`, basics skipped by default, sideboard
+  opt-in), commit through `/inventory/add-bulk` with a `precon` object.
+  `price_bought` stays blank. See "Opening precons" below.
 - Decklist search on the main Search page is separate from inventory add: it prices pasted lists across shops and shows per-shop shipping-aware totals.
 
 ## Search and market behavior
@@ -236,9 +245,15 @@ The `users` table is keyed on `workos_user_id`; inventory rows continue to key o
   language, stored in the source's own currency).
 - **Catalog**: MTGJSON `SetList.json` (~12 MB) carries every set's
   `sealedProduct` with UUID, category/subtype and `tcgplayerProductId`.
-  Only `booster_box` / `booster_pack` are kept. It is reloaded when it is
-  older than 7 days, and rows are upserted, never deleted, because lots
-  reference them.
+  Kept: `booster_box` / `booster_pack`, plus fixed-content products
+  (`deck`, `multiple_decks`, `deck_box`, `box_set` minus
+  `mtgo_redemption`) that list `contents.deck`. Bundles and kits are left
+  out: they are mostly boosters. It is reloaded when it is older than 7
+  days (or when `service.CATALOG_VERSION`, bumped whenever the parser
+  keeps something new, differs from the stored one), and rows are
+  upserted, never deleted, because lots reference them. The same refresh stores a `{SET CODE: name}` map in `app_meta`
+  (`mtgjson_set_names`) for deck cards' set names. The Japanese shop
+  matching only ever sees the booster rows.
 - **Prices**: MTGJSON's AllPrices feed has **no** sealed prices, so they
   come from TCGPlayer by product id. `mpapi…/pricepoints` gives today's
   market price. On first sight of a product (fewer than 2 points),
@@ -293,6 +308,26 @@ The `users` table is keyed on `workos_user_id`; inventory rows continue to key o
   coalescing with the MTGJSON import; its status is polled through the
   shared `/market/history/download/status`. Adding a lot or watch for an unpriced
   product fetches its prices synchronously (best-effort).
+- **Opening precons** (`sealed/decks.py`, `service.add_precon_cards`):
+  each deck product's `contents.deck` `{name, set}` refs resolve against
+  `DeckList.json` (name + code → `fileName`) into the
+  `sealed_products.contents` JSON `{"decks": [fileName], "cards": [bonus
+  cards]}`. NULL means not openable (a boosters row, or a deck MTGJSON
+  doesn't list, e.g. the Star Trek precons in 2026-11). Both files are
+  fetched before anything is written, so a DeckList outage can't null last
+  week's contents. Deck files (`decks/<fileName>.json`, ~500 KB) are
+  fetched on demand behind an in-process 24 h cache. They are
+  `commander` + `mainBoard` + `planes` / `schemes`, optionally `sideBoard`,
+  never `displayCommander` (the oversized duplicate) or `tokens`.
+  Etched → Foil. On commit, `mtgjson_card_map` rows are written **from the
+  server's own deck data, never from the request**: the map is global, so
+  a client uuid would let one user mis-price everyone's copies. Edited
+  rows (other set or finish) aren't mapped and fall back to the import's
+  matching. The new lots are then priced right away from price history
+  (best-effort). The sealed page's **Open** link
+  (`/inventory?open_lot=<id>`) preloads the precon mode; committing with
+  `lot_id` consumes one unit (`repo.consume_lot`) in the same transaction
+  as the inventory insert.
 - The price-history chart modal is shared with `/market`:
   `templates/_price_chart_modal.html` + `_price_chart_styles.html` +
   `static/pricechart.js` (`window.mtgcompare.priceChart.show({...})`). The

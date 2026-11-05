@@ -105,13 +105,13 @@ def test_parse_setlist_keeps_boosters_only():
 
 @pytest.fixture
 def seeded(test_db):
-    service.refresh_catalog(force=True, fetch=lambda: SETLIST)
+    service.refresh_catalog(force=True, fetch=lambda: SETLIST, fetch_decks=lambda: {"data": []})
     return test_db
 
 
 def test_refresh_catalog_skips_when_fresh(seeded):
     calls = []
-    assert service.refresh_catalog(fetch=lambda: calls.append(1) or SETLIST) is None
+    assert service.refresh_catalog(fetch=lambda: calls.append(1) or SETLIST, fetch_decks=lambda: {"data": []}) is None
     assert calls == []
 
 
@@ -119,7 +119,7 @@ def test_refresh_catalog_upsert_keeps_existing_lots_valid(seeded):
     with seeded.get_conn() as conn:
         repo.add_lot(conn, "u1", {"product_uuid": "box-1", "language": "EN", "quantity": 1,
                                   "price_bought": None, "currency": "USD", "date_bought": None})
-    service.refresh_catalog(force=True, fetch=lambda: SETLIST)
+    service.refresh_catalog(force=True, fetch=lambda: SETLIST, fetch_decks=lambda: {"data": []})
     with seeded.get_conn() as conn:
         assert len(repo.list_lots(conn, "u1")) == 1
 

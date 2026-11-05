@@ -1,0 +1,185 @@
+{
+ "meta": {
+  "note": "Trimmed from https://mtgjson.com/api/v5/decks/VirtueAndValor_WOC.json (2026-11-05)"
+ },
+ "data": {
+  "code": "WOC",
+  "name": "Virtue and Valor",
+  "type": "Commander Deck",
+  "releaseDate": "2023-09-08",
+  "commander": [
+   {
+    "name": "Ellivere of the Wild Court",
+    "setCode": "WOC",
+    "number": "2",
+    "count": 1,
+    "isFoil": true,
+    "isEtched": false,
+    "uuid": "f2347475-c4ba-55b8-a691-74423976e518",
+    "supertypes": [
+     "Legendary"
+    ],
+    "types": [
+     "Creature"
+    ],
+    "finishes": [
+     "foil",
+     "nonfoil"
+    ]
+   }
+  ],
+  "displayCommander": [
+   {
+    "name": "Ellivere of the Wild Court",
+    "setCode": "WOC",
+    "number": "57",
+    "count": 1,
+    "isFoil": true,
+    "isEtched": true,
+    "uuid": "efd9ef04-7f72-5028-959e-6034d83b3e9d",
+    "supertypes": [
+     "Legendary"
+    ],
+    "types": [
+     "Creature"
+    ],
+    "finishes": [
+     "etched"
+    ]
+   }
+  ],
+  "mainBoard": [
+   {
+    "name": "Gylwain, Casting Director",
+    "setCode": "WOC",
+    "number": "4",
+    "count": 1,
+    "isFoil": true,
+    "isEtched": false,
+    "uuid": "9942fa0c-6aec-5b70-9b89-b8876768d694",
+    "supertypes": [
+     "Legendary"
+    ],
+    "types": [
+     "Creature"
+    ],
+    "finishes": [
+     "foil",
+     "nonfoil"
+    ]
+   },
+   {
+    "name": "Liberated Livestock",
+    "setCode": "WOC",
+    "number": "5",
+    "count": 1,
+    "isFoil": false,
+    "isEtched": false,
+    "uuid": "d5fc2c8d-f5ab-5dbe-9e64-fd8aa006a8b1",
+    "supertypes": [],
+    "types": [
+     "Creature"
+    ],
+    "finishes": [
+     "nonfoil"
+    ]
+   },
+   {
+    "name": "Realm-Cloaked Giant // Cast Off",
+    "setCode": "WOC",
+    "number": "71",
+    "count": 1,
+    "isFoil": false,
+    "isEtched": false,
+    "uuid": "53366691-021c-5d45-9d31-be59a4924604",
+    "supertypes": [],
+    "types": [
+     "Creature"
+    ],
+    "finishes": [
+     "nonfoil"
+    ]
+   },
+   {
+    "name": "Forest",
+    "setCode": "WOE",
+    "number": "275",
+    "count": 8,
+    "isFoil": false,
+    "isEtched": false,
+    "uuid": "ce43ab42-734a-5b98-ae8b-b29ba26293cf",
+    "supertypes": [
+     "Basic"
+    ],
+    "types": [
+     "Land"
+    ],
+    "finishes": [
+     "foil",
+     "nonfoil"
+    ]
+   },
+   {
+    "name": "Forest",
+    "setCode": "WOE",
+    "number": "276",
+    "count": 7,
+    "isFoil": false,
+    "isEtched": false,
+    "uuid": "fb64325c-6a8f-5fca-8469-48be32a5ad36",
+    "supertypes": [
+     "Basic"
+    ],
+    "types": [
+     "Land"
+    ],
+    "finishes": [
+     "foil",
+     "nonfoil"
+    ]
+   },
+   {
+    "name": "Plains",
+    "setCode": "WOE",
+    "number": "267",
+    "count": 7,
+    "isFoil": false,
+    "isEtched": false,
+    "uuid": "ff9bd747-5b27-57a5-9fd1-831349822771",
+    "supertypes": [
+     "Basic"
+    ],
+    "types": [
+     "Land"
+    ],
+    "finishes": [
+     "foil",
+     "nonfoil"
+    ]
+   },
+   {
+    "name": "Plains",
+    "setCode": "WOE",
+    "number": "268",
+    "count": 7,
+    "isFoil": false,
+    "isEtched": false,
+    "uuid": "ce2a4840-e3d3-5372-8063-ba8a1e3e4e27",
+    "supertypes": [
+     "Basic"
+    ],
+    "types": [
+     "Land"
+    ],
+    "finishes": [
+     "foil",
+     "nonfoil"
+    ]
+   }
+  ],
+  "sideBoard": [],
+  "tokens": [],
+  "planes": [],
+  "schemes": []
+ }
+}

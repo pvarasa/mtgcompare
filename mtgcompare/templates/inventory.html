@@ -154,6 +154,12 @@
       resize: vertical;
       box-sizing: border-box;
     }
+    .add-form label.check {
+      flex-direction: row; align-items: center; gap: .4rem;
+      padding-bottom: .55rem; text-transform: none; letter-spacing: 0; font-size: .85rem;
+    }
+    .add-form label.check input { padding: 0; }
+    .precon-note { color: var(--muted); font-size: .8rem; margin: .5rem 0 0; }
     .decklist-actions { display: flex; gap: .6rem; align-items: center; margin: .75rem 0 .25rem; flex-wrap: wrap; }
     .decklist-status { color: var(--muted); font-size: .85rem; }
     .preview-table { font-size: .88rem; margin-top: .5rem; }
@@ -305,6 +311,7 @@
     <div class="add-mode">
       <button type="button" data-mode="single" class="active">Single card</button>
       <button type="button" data-mode="decklist">Paste decklist</button>
+      <button type="button" data-mode="precon">Precon / Secret Lair</button>
       <button type="button" data-mode="csv">Import CSV</button>
     </div>
 
@@ -364,6 +371,28 @@
         <span id="decklist-status" class="decklist-status"></span>
       </div>
       <div id="decklist-preview"></div>
+    </div>
+
+    <div id="add-precon" style="display: none;">
+      <div class="add-form">
+        <label class="grow">Product
+          <input id="precon-product" list="precon-suggest" autocomplete="off"
+                 placeholder="e.g. Virtue and Valor, Secret Lair Box of Rocks">
+        </label>
+        <datalist id="precon-suggest"></datalist>
+        <label>Lang
+          <select class="w-lang" id="precon-language"><option>EN</option><option>JP</option></select>
+        </label>
+        <label class="check"><input type="checkbox" id="precon-skip-basics" checked> Skip basic lands</label>
+        <label class="check"><input type="checkbox" id="precon-sideboard"> Include sideboard</label>
+      </div>
+      <p class="precon-note" id="precon-note">Lists every card of a Commander or other precon deck, or a Secret Lair drop, at its exact printing (from MTGJSON).</p>
+      <div class="decklist-actions">
+        <button type="button" id="precon-load">Load &amp; preview</button>
+        <button type="button" id="precon-commit" disabled>Add to inventory</button>
+        <span id="precon-status" class="decklist-status" aria-live="polite"></span>
+      </div>
+      <div id="precon-preview"></div>
     </div>
 
     <form id="add-csv" class="csv-body" method="post" action="{{ url_for('inventory_import') }}"
@@ -444,8 +473,8 @@
     {% endwith %}
   {% endif %}
 
+  <script type="application/json" id="inventory-config">{{ {"inventoryDeleteUrl": url_for('inventory_delete'), "preconSearchUrl": url_for('sealed_precon_search'), "preconCardsUrl": url_for('sealed_precon_cards', product_uuid='__UUID__'), "openLot": open_lot} | tojson }}</script>
   <script src="{{ url_for('static', filename='inventoryadd.js') }}?v={{ static_token }}"></script>
   <script src="{{ url_for('static', filename='paginatedtable.js') }}?v={{ static_token }}"></script>
-  <script type="application/json" id="inventory-config">{{ {"inventoryDeleteUrl": url_for('inventory_delete')} | tojson }}</script>
   <script src="{{ url_for('static', filename='inventory-page.js') }}?v={{ static_token }}"></script>
 {% endblock %}

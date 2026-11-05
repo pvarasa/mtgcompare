@@ -63,8 +63,13 @@
   .icon-btn {
     padding: .15rem .5rem; font-size: .8rem; border-color: var(--border); color: var(--muted);
   }
+  a.open-btn {
+    display: inline-block; padding: .15rem .5rem; font-size: .8rem; color: var(--muted);
+    border: 1px solid var(--border); border-radius: 5px; text-decoration: none; line-height: 1.4;
+  }
   @media (hover: hover) {
     .icon-btn:hover { color: var(--red); border-color: var(--red); background: transparent; }
+    a.open-btn:hover { color: var(--gold); border-color: var(--gold); }
   }
   .muted { color: var(--muted); }
   .offer a { color: var(--fg); }
@@ -81,7 +86,7 @@
       {% if shop_prices_updated_at %}Japanese shops read <strong>{{ shop_prices_updated_at[:10] }}</strong>.{% endif %}
       {% if fx %}FX JPY {{ '%.2f'|format(fx) }} per $1.{% endif %}
       <br>
-      {% if catalog %}{{ catalog|length }} booster products in the catalog.{% elif allow_price_update %}Catalog not loaded yet: click <strong>Refresh prices</strong>.{% else %}Catalog not loaded yet; it loads with the daily price update.{% endif %}
+      {% if catalog %}{{ catalog|length }} sealed products in the catalog.{% elif allow_price_update %}Catalog not loaded yet: click <strong>Refresh prices</strong>.{% else %}Catalog not loaded yet; it loads with the daily price update.{% endif %}
       {% if not allow_price_update %}Prices update daily.{% endif %}
     </div>
     {% if allow_price_update %}
@@ -93,12 +98,12 @@
   </div>
 
   <div class="add-panel">
-    <h2>Add a booster box or pack</h2>
+    <h2>Add a sealed product</h2>
     <form id="sealed-add-form" class="add-form" method="post" action="{{ url_for('sealed_add_lot') }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <label class="grow">Product
         <input id="sealed-product" name="product" list="sealed-catalog" required autocomplete="off"
-               placeholder="e.g. Foundations Play Booster Box"{% if not catalog %} disabled{% endif %}>
+               placeholder="e.g. Foundations Play Booster Box, a Commander deck, a Secret Lair"{% if not catalog %} disabled{% endif %}>
       </label>
       <datalist id="sealed-catalog">
         {% for p in catalog %}<option value="{{ p.name }}">{{ p.set_code }} · {{ p.kind }}{% if p.release_date %} · {{ p.release_date[:4] }}{% endif %}</option>{% endfor %}
@@ -128,7 +133,7 @@
         <button type="submit" id="sealed-add-btn"{% if not catalog %} disabled{% endif %}>Add to holdings</button>
       </div>
     </form>
-    <p class="add-hint">English lots are valued at TCGPlayer's market price. Japanese lots are valued at the cheapest in-stock Japanese-language offer at Hareruya, SingleStar or Cardshop Serra (marked * when only the English price is available). Japanese shop prices are asking prices, not sales. <strong>Buylist</strong> is what Hareruya pays for the product today.</p>
+    <p class="add-hint">English lots are valued at TCGPlayer's market price. Japanese lots are valued at the cheapest in-stock Japanese-language offer at Hareruya, SingleStar or Cardshop Serra (marked * when only the English price is available). Japanese shop prices are asking prices, not sales. <strong>Buylist</strong> is what Hareruya pays for the product today. Precons and Secret Lairs are valued at TCGPlayer only; <strong>Open</strong> adds their cards to your inventory.</p>
   </div>
 
   <section class="sealed-section">
@@ -231,6 +236,10 @@
               <td>
                 <div class="row-actions">
                   {{ chart_button(r) }}
+                  {% if r.openable %}
+                    <a class="open-btn" href="{{ url_for('inventory', open_lot=r.id) }}"
+                       title="Open one: add its cards to your inventory">Open</a>
+                  {% endif %}
                   <form method="post" action="{{ url_for('sealed_delete_lot', lot_id=r.id) }}"
                         data-confirm="Remove this lot?">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

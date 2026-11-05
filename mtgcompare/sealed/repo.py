@@ -22,9 +22,12 @@ def purge_user(conn, user_id: str) -> None:
         conn.execute(text(f"DELETE FROM {table} WHERE user_id = :uid"), {"uid": user_id})  # noqa: S608
 
 
+# ``openable``: the product has fixed contents MTGJSON lists card by card
+# (a precon / Secret Lair), so a lot of it can be opened into inventory.
 _PRODUCT_COLS = (
     "p.uuid, p.set_code, p.set_name, p.name, p.category, p.subtype,"
-    " p.release_date, p.tcgplayer_product_id"
+    " p.release_date, p.tcgplayer_product_id,"
+    " CASE WHEN p.contents IS NULL THEN 0 ELSE 1 END AS openable"
 )
 
 
@@ -62,6 +65,36 @@ def find_product_by_name(conn, name: str) -> dict | None:
     return dict(row) if row else None
 
 
+def get_product_contents(conn, uuid: str) -> str | None:
+    """The product's raw ``contents`` JSON (None for boosters and for decks
+    MTGJSON doesn't list)."""
+    return conn.execute(
+        text("SELECT contents FROM sealed_products WHERE uuid = :u"), {"u": uuid},
+    ).scalar()
+
+
+def search_openable(conn, q: str, limit: int = 20) -> list[dict]:
+    """Openable products whose name (or set code) contains every word of
+    ``q``, newest first (the inventory's "Precon" add mode). LIKE
+    wildcards typed into ``q`` just widen the match, as in the inventory
+    name filter."""
+    terms = [f"%{w}%" for w in q.lower().split()[:6]]
+    if not terms:
+        return []
+    where = " AND ".join(
+        f"(lower(p.name) LIKE :t{i} OR lower(p.set_code) LIKE :t{i})" for i in range(len(terms))
+    )
+    rows = conn.execute(
+        text(
+            f"SELECT {_PRODUCT_COLS} FROM sealed_products p"  # noqa: S608
+            f" WHERE p.contents IS NOT NULL AND {where}"
+            " ORDER BY p.release_date DESC, p.name LIMIT :lim"
+        ),
+        {**{f"t{i}": t for i, t in enumerate(terms)}, "lim": limit},
+    ).mappings().fetchall()
+    return [dict(r) for r in rows]
+
+
 def list_catalog(conn) -> list[dict]:
     """Every catalog product, newest set first (for the add-form picker)."""
     rows = conn.execute(text(
@@ -87,6 +120,33 @@ def delete_lot(conn, user_id: str, lot_id: int) -> int:
         text("DELETE FROM sealed_lots WHERE id = :id AND user_id = :u"),
         {"id": lot_id, "u": user_id},
     ).rowcount
+
+
+def get_lot(conn, user_id: str, lot_id: int) -> dict | None:
+    row = conn.execute(text(
+        f"SELECT l.id, l.language, l.quantity, l.price_bought, l.currency,"  # noqa: S608
+        f" l.date_bought, {_PRODUCT_COLS}"
+        " FROM sealed_lots l JOIN sealed_products p ON p.uuid = l.product_uuid"
+        " WHERE l.id = :id AND l.user_id = :u"
+    ), {"id": lot_id, "u": user_id}).mappings().fetchone()
+    return dict(row) if row else None
+
+
+def consume_lot(conn, user_id: str, lot_id: int, product_uuid: str) -> bool:
+    """Take one unit out of a lot (opening it): decrement, or delete the
+    lot when it was the last one. False when the user has no such lot of
+    that product. Two statements, each guarded on the quantity, so two
+    concurrent opens of a 2-unit lot consume both units, not one twice."""
+    params = {"id": lot_id, "u": user_id, "p": product_uuid}
+    where = "id = :id AND user_id = :u AND product_uuid = :p"
+    if conn.execute(
+        text(f"UPDATE sealed_lots SET quantity = quantity - 1 WHERE {where} AND quantity > 1"),  # noqa: S608
+        params,
+    ).rowcount:
+        return True
+    return bool(conn.execute(
+        text(f"DELETE FROM sealed_lots WHERE {where} AND quantity <= 1"), params,  # noqa: S608
+    ).rowcount)
 
 
 def list_lots(conn, user_id: str) -> list[dict]:

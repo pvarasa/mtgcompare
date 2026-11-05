@@ -249,18 +249,21 @@ _shop_query_log = Table(
 # number / foil / condition, and every card table is keyed on those.
 
 # Catalog of trackable sealed products, sourced from MTGJSON SetList.json
-# (`sealedProduct`). Global, refreshed weekly; rows are never deleted
-# because lots reference them.
+# (`sealedProduct`): boosters, precon decks and Secret Lair drops. Global,
+# refreshed weekly; rows are never deleted because lots reference them.
 _sealed_products = Table(
     "sealed_products", metadata,
     Column("uuid", Text, primary_key=True),
     Column("set_code", Text, nullable=False),
     Column("set_name", Text),
     Column("name", Text, nullable=False),
-    Column("category", Text, nullable=False),   # booster_box / booster_pack
-    Column("subtype", Text),                    # draft / set / collector / play ...
+    Column("category", Text, nullable=False),   # booster_box / booster_pack / deck / box_set ...
+    Column("subtype", Text),                    # draft / set / collector / play / commander ...
     Column("release_date", Text),
     Column("tcgplayer_product_id", Integer),
+    # Fixed-content products only: JSON {"decks": [MTGJSON deck fileName],
+    # "cards": [bonus cards]} (see sealed.catalog). NULL = can't be opened.
+    Column("contents", Text),
     Column("updated_at", Text, nullable=False),
 )
 Index("idx_sealed_products_name", _sealed_products.c.name)
@@ -367,6 +370,7 @@ _ADDED_COLUMNS = (
     ("shop_listings", "ship_jpy", "NUMERIC(12,2)"),
     ("shop_listings", "variant", "TEXT"),
     ("shop_listings", "card_number", "TEXT"),
+    ("sealed_products", "contents", "TEXT"),
 )
 
 

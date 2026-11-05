@@ -106,13 +106,21 @@ def add_one(record: dict, user_id: str = "local") -> None:
         conn.execute(_INSERT_SQL, _dict(record, user_id))
 
 
+def insert_many(conn, records: list[dict], user_id: str = "local") -> int:
+    """``add_many`` on the caller's connection, so the insert can share a
+    transaction (opening a sealed lot consumes the lot in the same one)."""
+    if not records:
+        return 0
+    conn.execute(_INSERT_SQL, [_dict(r, user_id) for r in records])
+    return len(records)
+
+
 def add_many(records: list[dict], user_id: str = "local") -> int:
     """Append multiple lots in a single transaction. Returns count inserted."""
     if not records:
         return 0
     with get_conn() as conn:
-        conn.execute(_INSERT_SQL, [_dict(r, user_id) for r in records])
-    return len(records)
+        return insert_many(conn, records, user_id)
 
 
 def list_all(user_id: str = "local") -> list[dict]:

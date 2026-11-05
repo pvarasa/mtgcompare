@@ -7,9 +7,13 @@ Write side:
   backfill a year of TCGPlayer history the first time, then record today's
   market price. Per-product failures are logged and counted, never fatal.
 - ``run_daily_update`` — both of the above; called by the daily cron.
+- ``add_precon_cards`` — "open" a precon / Secret Lair: add its cards to
+  the inventory (optionally consuming one unit of a held lot) and record
+  their exact MTGJSON uuids in ``mtgjson_card_map``.
 
-Read side: ``compute_sealed_ctx`` (holdings + watchlist + summary) and
-``product_history`` (chart payload).
+Read side: ``compute_sealed_ctx`` (holdings + watchlist + summary),
+``product_history`` (chart payload), ``precon_preview`` /
+``search_openable`` (the inventory's Precon add mode).
 """
 from __future__ import annotations
 
@@ -21,17 +25,34 @@ from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from threading import Lock
 
-from .. import db, meta
-from . import catalog, jp_shops, repo
+from .. import db, inventory, meta
+from ..pricing import common as pricing_common
+from ..pricing import import_service as pricing_import
+from ..pricing import market_repo
+from ..pricing.market_service import market_cache_clear
+from . import catalog, decks, jp_shops, repo
 from . import tcgplayer as tcg
 
 logger = logging.getLogger(__name__)
 
 CATALOG_META_KEY = "sealed_catalog_updated_at"
 CATALOG_MAX_AGE = timedelta(days=7)
+# Bumped when parse_setlist starts keeping something new, so the next daily
+# run reloads the catalog instead of waiting out CATALOG_MAX_AGE.
+# 2: precons / Secret Lairs (+ contents).
+CATALOG_VERSION = "2"
+CATALOG_VERSION_META_KEY = "sealed_catalog_version"
 LANGUAGES = ("EN", "JP")
 CURRENCIES = ("JPY", "USD")
-CATEGORY_LABELS = {"booster_box": "Box", "booster_pack": "Pack"}
+CATEGORY_LABELS = {
+    "booster_box": "Box", "booster_pack": "Pack", "deck": "Deck",
+    "multiple_decks": "Decks", "deck_box": "Deck box", "box_set": "Box set",
+}
+SUBTYPE_LABELS = {"secret_lair": "Secret Lair"}
+# app_meta: {SET CODE: set name} from SetList.json, for deck cards' set names.
+SET_NAMES_ALL_META_KEY = "mtgjson_set_names"
+# Inventory ``language`` for a lot opened from a sealed lot of that language.
+INVENTORY_LANGUAGES = {"EN": "English", "JP": "Japanese"}
 CHANGE_WINDOW_DAYS = 30
 # Sell sources (asking prices) and buy sources (what a shop pays).
 SHOP_SOURCES = (jp_shops.HARERUYA, jp_shops.SINGLESTAR, jp_shops.SERRA)
@@ -66,7 +87,8 @@ def catalog_is_stale(now: datetime | None = None) -> bool:
         if repo.count_products(conn) == 0:
             return True
         stamp = meta.read(conn, CATALOG_META_KEY)
-    if not stamp:
+        version = meta.read(conn, CATALOG_VERSION_META_KEY)
+    if not stamp or version != CATALOG_VERSION:
         return True
     try:
         return now - datetime.fromisoformat(stamp) > CATALOG_MAX_AGE
@@ -75,18 +97,31 @@ def catalog_is_stale(now: datetime | None = None) -> bool:
 
 
 def refresh_catalog(
-    *, force: bool = False, fetch: Callable[[], dict] = catalog.fetch_setlist,
+    *, force: bool = False,
+    fetch: Callable[[], dict] = catalog.fetch_setlist,
+    fetch_decks: Callable[[], dict] = catalog.fetch_deck_list,
 ) -> int | None:
     """Reload the catalog if stale (or forced). Returns rows written, or
-    None when the existing catalog was fresh enough to keep."""
+    None when the existing catalog was fresh enough to keep.
+
+    Both MTGJSON files are read before anything is written: a failed
+    DeckList download must not upsert every deck product with NULL
+    contents (the upsert would overwrite contents resolved last week)."""
     if not force and not catalog_is_stale():
         return None
     updated_at = _now_iso()
-    rows = catalog.parse_setlist(fetch(), updated_at=updated_at)
+    setlist = fetch()
+    deck_files = catalog.deck_file_index(fetch_decks())
+    rows = catalog.parse_setlist(setlist, updated_at=updated_at, deck_files=deck_files)
     with db.get_conn() as conn:
         repo.upsert_products(conn, rows)
         meta.write(conn, CATALOG_META_KEY, updated_at)
-    logger.info("event=sealed_catalog_refreshed products=%d", len(rows))
+        meta.write(conn, CATALOG_VERSION_META_KEY, CATALOG_VERSION)
+        meta.write(conn, SET_NAMES_ALL_META_KEY, json.dumps(catalog.set_names(setlist), sort_keys=True))
+    logger.info(
+        "event=sealed_catalog_refreshed products=%d openable=%d",
+        len(rows), sum(1 for r in rows if r["contents"]),
+    )
     return len(rows)
 
 
@@ -193,8 +228,11 @@ def refresh_shop_prices(
     today = today or datetime.now(UTC).date()
     with db.get_conn() as conn:
         catalog_by_set: dict[str, list[dict]] = defaultdict(list)
+        # Boosters only: the Japanese shop crawls read booster listings, and
+        # deck names would only widen the English-name match.
         for p in repo.list_catalog(conn):
-            catalog_by_set[p["set_code"]].append(p)
+            if p["category"] in catalog.BOOSTER_CATEGORIES:
+                catalog_by_set[p["set_code"]].append(p)
         stored_names = meta.read(conn, SET_NAMES_META_KEY)
     # The set-name map persists so SingleStar still resolves on a day
     # Hareruya's crawl fails.
@@ -287,10 +325,16 @@ def series_label(source: str, language: str) -> str:
     return f"{jp_shops.SHOP_LABELS.get(source, source)} ({language})"
 
 
+def product_kind(p: dict) -> str:
+    category = p.get("category") or ""
+    return SUBTYPE_LABELS.get(p.get("subtype") or "") or CATEGORY_LABELS.get(category, category)
+
+
 def _product_label(p: dict) -> dict:
     return {
         **p,
-        "kind": CATEGORY_LABELS.get(p.get("category") or "", p.get("category") or ""),
+        "openable": bool(p.get("openable")),
+        "kind": product_kind(p),
         "tcgplayer_url": (
             tcg.PRODUCT_URL.format(product_id=p["tcgplayer_product_id"])
             if p.get("tcgplayer_product_id") else None
@@ -484,3 +528,115 @@ def product_history(uuid: str, series: tuple[str, str] | None = None) -> dict | 
             " the product was sold out there have no point."
         ),
     }
+
+
+# --- opening precons into the inventory ---------------------------------------
+
+class PreconError(LookupError):
+    """The product (or lot) can't be opened; ``str()`` is user-facing."""
+
+
+def search_openable(q: str, limit: int = 20) -> list[dict]:
+    with db.get_conn() as conn:
+        rows = repo.search_openable(conn, q, limit)
+    return [
+        {"uuid": r["uuid"], "name": r["name"], "set_code": r["set_code"],
+         "kind": product_kind(r), "year": (r["release_date"] or "")[:4]}
+        for r in rows
+    ]
+
+
+def _openable(uuid: str) -> tuple[dict, dict]:
+    with db.get_conn() as conn:
+        product = repo.get_product(conn, uuid)
+        contents = decks.parse_contents(repo.get_product_contents(conn, uuid)) if product else None
+    if not product:
+        raise PreconError("Unknown product.")
+    if not contents:
+        raise PreconError(f"MTGJSON doesn't list the cards in {product['name']}.")
+    return product, contents
+
+
+def precon_preview(
+    uuid: str, *, skip_basics: bool = True, include_sideboard: bool = False,
+    language: str = "EN", load: Callable[[str], dict] | None = None,
+) -> dict:
+    """The cards of an openable product as inventory add-preview records
+    (the same shape the decklist preview builds). Raises PreconError;
+    deck download failures propagate (the route reports them)."""
+    product, contents = _openable(uuid)
+    cards = decks.product_cards(contents, include_sideboard=include_sideboard, load=load or decks.load_deck)
+    with db.get_conn() as conn:
+        stored = meta.read(conn, SET_NAMES_ALL_META_KEY)
+    set_names: dict[str, str] = json.loads(stored) if stored else {}
+    kept = [c for c in cards if not (skip_basics and c["is_basic"])]
+    records = [
+        {
+            "card_name": c["card_name"], "set_code": c["set_code"],
+            "set_name": set_names.get(c["set_code"], ""), "card_number": c["card_number"],
+            "quantity": c["quantity"], "condition": "NM", "printing": c["printing"],
+            "language": INVENTORY_LANGUAGES.get(language, "English"),
+            "price_bought": None, "date_bought": None,
+        }
+        for c in kept
+    ]
+    return {
+        "product": _product_label(product),
+        "records": records,
+        "cards_total": sum(c["quantity"] for c in kept),
+        "basics_skipped": sum(c["quantity"] for c in cards if c["is_basic"]) if skip_basics else 0,
+    }
+
+
+def _identity(row: dict) -> tuple[str, str, str, int]:
+    return pricing_common.row_key_for_mapping(row)
+
+
+def add_precon_cards(
+    user_id: str, records: list[dict], *, product_uuid: str, lot_id: int | None = None,
+    load: Callable[[str], dict] | None = None,
+) -> int:
+    """Add an opened product's (previewed, possibly edited) cards to the
+    user's inventory, in one transaction with consuming one unit of
+    ``lot_id`` when given. Returns the number of inventory rows added.
+
+    The card-map rows come from the product's own MTGJSON deck data, never
+    from the request: ``mtgjson_card_map`` is shared by every user, so a
+    submitted uuid would let one user mis-price everyone's copies of a
+    card. A record the user edited (other set / finish) just isn't mapped
+    here and goes through the price import's usual matching.
+    """
+    _product, contents = _openable(product_uuid)
+    trusted = {
+        _identity(c): c
+        for c in decks.product_cards(contents, include_sideboard=True, load=load or decks.load_deck)
+    }
+    now = _now_iso()
+    card_maps: list[tuple[str, str, str, int, str, str]] = []
+    seen: set[tuple[str, str, str, int]] = set()
+    for r in records:
+        key = _identity(r)
+        if key in trusted and key not in seen:
+            seen.add(key)
+            card_maps.append((r["card_name"], key[1], key[2], key[3], trusted[key]["uuid"], now))
+
+    with db.get_conn() as conn:
+        if lot_id is not None and not repo.consume_lot(conn, user_id, lot_id, product_uuid):
+            raise PreconError("That sealed lot isn't in your holdings any more.")
+        added = inventory.insert_many(conn, records, user_id)
+        market_repo.upsert_card_map(conn, [
+            {"card_name": m[0], "set_code": m[1], "card_number": m[2],
+             "is_foil": m[3], "uuid": m[4], "updated_at": m[5]}
+            for m in card_maps
+        ])
+
+    # Price the new lots now rather than at tomorrow's import. Best-effort:
+    # the daily run prices them anyway.
+    try:
+        pricing_import.populate_market_prices_from_history(
+            card_maps, None if db.IS_POSTGRES else pricing_common.mtgjson_history_duckdb_path(), now,
+        )
+        market_cache_clear()
+    except Exception:
+        logger.exception("event=precon_initial_price_failed product=%s", product_uuid)
+    return added

@@ -162,6 +162,27 @@ def test_mtgjson_setlist_has_sealed_boosters():
     assert len(boxes) >= 200, f"SetList.json yielded only {len(boxes)} priced booster boxes"
 
 
+@pytest.mark.canary
+def test_mtgjson_precons_resolve_to_deck_files():
+    """SetList ``contents.deck`` refs must keep resolving against DeckList.json
+    (name + set code) and deck files must keep their per-card shape, or the
+    sealed Open / inventory Precon flows silently lose products."""
+    from mtgcompare.sealed import catalog, decks
+    rows = catalog.parse_setlist(
+        catalog.fetch_setlist(), updated_at="canary",
+        deck_files=catalog.deck_file_index(catalog.fetch_deck_list()),
+    )
+    openable = [r for r in rows if r["contents"]]
+    # 2026-11: ~1,780 openable (876 decks, 863 box sets / Secret Lairs).
+    assert len(openable) >= 1200, f"only {len(openable)} sealed products resolve to MTGJSON decks"
+    assert sum(1 for r in openable if r["subtype"] == "secret_lair") >= 500
+    vv = next(r for r in openable if r["name"] == "Wilds of Eldraine Commander Deck Virtue and Valor")
+    cards = decks.product_cards(decks.parse_contents(vv["contents"]), include_sideboard=False,
+                                load=decks.fetch_deck)
+    assert sum(c["quantity"] for c in cards) == 100, "Virtue and Valor no longer lists 100 cards"
+    assert all(c["uuid"] and c["set_code"] and c["card_number"] for c in cards)
+
+
 def _sealed_catalog_by_set():
     from mtgcompare.sealed.catalog import fetch_setlist, parse_setlist
     by_set: dict[str, list[dict]] = {}

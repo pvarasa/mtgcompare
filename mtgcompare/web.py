@@ -19,6 +19,7 @@ from time import monotonic
 from uuid import uuid4
 
 import orjson
+import requests
 from flask import (
     Flask,
     Response,
@@ -1024,6 +1025,36 @@ def sealed_refresh():
     return jsonify({"ok": True, "job_id": job_id, "already_running": False})
 
 
+@app.route("/sealed/precons/search")
+def sealed_precon_search():
+    """Autocomplete for the inventory's Precon add mode: openable products
+    (precons, Secret Lairs) matching every word typed."""
+    q = request.args.get("q", "").strip()[:100]
+    return jsonify({"ok": True, "results": sealed_service.search_openable(q) if len(q) >= 2 else []})
+
+
+@app.route("/sealed/precons/<product_uuid>/cards")
+def sealed_precon_cards(product_uuid: str):
+    """An openable product's cards as inventory add-preview records."""
+    language = request.args.get("language", "EN").strip().upper()
+    try:
+        result = sealed_service.precon_preview(
+            product_uuid,
+            skip_basics=request.args.get("skip_basics", "1") == "1",
+            include_sideboard=request.args.get("sideboard", "0") == "1",
+            language=language if language in sealed_service.LANGUAGES else "EN",
+        )
+    except sealed_service.PreconError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    except requests.RequestException as exc:
+        app.logger.warning(
+            "event=precon_deck_fetch_failed product=%s class=%s err=%s",
+            product_uuid, type(exc).__name__, exc,
+        )
+        return jsonify({"ok": False, "error": "MTGJSON is unreachable right now. Try again later."}), 502
+    return jsonify({"ok": True, **result})
+
+
 @app.route("/sealed/history")
 def sealed_history():
     result = sealed_service.product_history(
@@ -1115,6 +1146,21 @@ def _inventory_filter_kwargs(params: dict) -> dict:
     }
 
 
+def _open_lot_config(user_id: str, lot_id: str | None) -> dict | None:
+    """``/inventory?open_lot=<id>`` (the sealed page's Open button): the lot
+    the Precon add mode should preload, or None."""
+    if not lot_id or not lot_id.isdigit():
+        return None
+    with db.get_conn() as conn:
+        lot = sealed_repo.get_lot(conn, user_id, int(lot_id))
+    if not lot or not lot["openable"]:
+        return None
+    return {
+        "lot_id": lot["id"], "product_uuid": lot["uuid"], "name": lot["name"],
+        "language": lot["language"], "quantity": lot["quantity"],
+    }
+
+
 @app.route("/inventory")
 def inventory():
     user_id = _get_user_id()
@@ -1153,6 +1199,7 @@ def inventory():
         "per_page_choices": _PER_PAGE_CHOICES,
         "set_choices": inv.distinct_sets(user_id),
         "condition_choices": inv.distinct_conditions(user_id),
+        "open_lot": _open_lot_config(user_id, request.args.get("open_lot")),
         "active": "inventory",
     }
     if request.args.get("partial") == "tbody":
@@ -1221,21 +1268,43 @@ def inventory_add_bulk():
     user_id = _get_user_id()
     payload = request.get_json(silent=True) or {}
     records = payload.get("records") or []
-    if not records:
+    if not records or not isinstance(records, list):
         return {"ok": False, "error": "No records"}, 400
+    # Cards opened from a precon / Secret Lair: also record their MTGJSON
+    # uuids, and consume one unit of the sealed lot when opening one.
+    precon = payload.get("precon") if isinstance(payload.get("precon"), dict) else None
+    source = "precon" if precon else "decklist"
     try:
-        count = inv.add_many(records, user_id)
+        if precon:
+            lot_id = precon.get("lot_id")
+            count = sealed_service.add_precon_cards(
+                user_id, records,
+                product_uuid=str(precon.get("product_uuid") or ""),
+                lot_id=int(lot_id) if lot_id not in (None, "") else None,
+            )
+        else:
+            count = inv.add_many(records, user_id)
+    except sealed_service.PreconError as exc:
+        return {"ok": False, "error": str(exc)}, 404
+    except (ValueError, TypeError, KeyError):
+        return {"ok": False, "error": "Malformed records"}, 400
+    except requests.RequestException:
+        app.logger.warning("event=inventory_add_failed source=precon reason=mtgjson_unreachable")
+        return {"ok": False, "error": "MTGJSON is unreachable right now. Try again later."}, 502
     except Exception:
         app.logger.exception(
-            "event=inventory_add_failed source=decklist record_count=%d",
-            len(records),
+            "event=inventory_add_failed source=%s record_count=%d",
+            source, len(records),
         )
         return _internal_error_json("Add")
     app.logger.info(
-        "event=inventory_add source=decklist record_count=%d added=%d",
-        len(records), count,
+        "event=inventory_add source=%s record_count=%d added=%d",
+        source, len(records), count,
     )
-    flash(f"Added {count} card(s) from decklist.")
+    if precon and precon.get("lot_id") not in (None, ""):
+        flash(f"Opened the sealed lot: added {count} card(s).")
+    else:
+        flash(f"Added {count} card(s) from {source}.")
     return {"ok": True, "count": count}
 
 

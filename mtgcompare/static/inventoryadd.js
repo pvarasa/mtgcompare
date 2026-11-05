@@ -2,6 +2,9 @@
 // - mode toggle (single / decklist / csv)
 // - single card: Scryfall name autocomplete + set-select populate
 // - decklist: parse -> resolve via /cards/collection -> preview -> POST
+// - precon: pick an openable sealed product -> server lists its cards ->
+//   the same editable preview -> POST (with the product, so the server can
+//   record exact MTGJSON uuids, and the sealed lot when opening one)
 (function () {
   const AUTOCOMPLETE = "https://api.scryfall.com/cards/autocomplete";
   const SEARCH = "https://api.scryfall.com/cards/search";
@@ -13,8 +16,11 @@
   const panels = {
     single: document.getElementById("add-single"),
     decklist: document.getElementById("add-decklist"),
+    precon: document.getElementById("add-precon"),
     csv: document.getElementById("add-csv"),
   };
+  const configEl = document.getElementById("inventory-config");
+  const config = configEl ? JSON.parse(configEl.textContent) : {};
   const panelEntries = Object.entries(panels);
 
   const nameInput = document.getElementById("add-name");
@@ -32,19 +38,19 @@
   let acTimer = null;
   let lastAutocomplete = "";
   let lastSetsFor = "";
-  let resolved = [];
-  let previewRows = [];
+  const dlView = createPreview(dlPreview, dlStatus, dlCommitBtn);
   const today = new Date().toISOString().slice(0, 10);
 
-  modeButtons.forEach(btn => {
-    btn.addEventListener("click", () => {
-      modeButtons.forEach(candidate => {
-        candidate.classList.toggle("active", candidate === btn);
-      });
-      panelEntries.forEach(([mode, panel]) => {
-        if (panel) panel.style.display = mode === btn.dataset.mode ? "" : "none";
-      });
+  function showMode(name) {
+    modeButtons.forEach(candidate => {
+      candidate.classList.toggle("active", candidate.dataset.mode === name);
     });
+    panelEntries.forEach(([mode, panel]) => {
+      if (panel) panel.style.display = mode === name ? "" : "none";
+    });
+  }
+  modeButtons.forEach(btn => {
+    btn.addEventListener("click", () => showMode(btn.dataset.mode));
   });
 
   if (nameInput) {
@@ -80,17 +86,124 @@
   }
 
   if (dlResolveBtn) dlResolveBtn.addEventListener("click", resolveDecklist);
-  if (dlCommitBtn) dlCommitBtn.addEventListener("click", commitDecklist);
+  if (dlCommitBtn) dlCommitBtn.addEventListener("click", () => dlView.commit({}));
 
   if (dlText) {
-    dlText.addEventListener("input", () => {
-      if (resolved.length === 0 && !dlPreview.innerHTML) return;
-      resolved = [];
-      previewRows = [];
-      dlCommitBtn.disabled = true;
-      dlPreview.innerHTML = "";
-      dlStatus.textContent = "";
+    dlText.addEventListener("input", () => dlView.clear());
+  }
+
+  // --- precon mode ---------------------------------------------------------
+  const preconInput = document.getElementById("precon-product");
+  const preconList = document.getElementById("precon-suggest");
+  const preconLang = document.getElementById("precon-language");
+  const preconSkipBasics = document.getElementById("precon-skip-basics");
+  const preconSideboard = document.getElementById("precon-sideboard");
+  const preconLoadBtn = document.getElementById("precon-load");
+  const preconCommitBtn = document.getElementById("precon-commit");
+  const preconStatus = document.getElementById("precon-status");
+  const preconNote = document.getElementById("precon-note");
+  const preconView = preconInput
+    ? createPreview(document.getElementById("precon-preview"), preconStatus, preconCommitBtn)
+    : null;
+  const preconDefaultNote = preconNote ? preconNote.textContent : "";
+  // Product name -> uuid, from the suggestions shown so far.
+  const preconChoices = new Map();
+  let preconTimer = null;
+  let lastPreconQuery = "";
+  // The product the current preview lists, and the sealed lot being
+  // opened (from the sealed page's Open button) if any.
+  let preconLoaded = null;
+  let openLot = config.openLot || null;
+
+  if (preconInput) {
+    preconInput.addEventListener("input", () => {
+      preconView.clear();
+      preconLoaded = null;
+      if (openLot && preconInput.value !== openLot.name) {
+        openLot = null;
+        preconNote.textContent = preconDefaultNote;
+      }
+      clearTimeout(preconTimer);
+      const query = preconInput.value.trim();
+      if (query.length < 2 || query === lastPreconQuery || preconChoices.has(query)) return;
+      preconTimer = setTimeout(() => {
+        lastPreconQuery = query;
+        fetchPreconSuggestions(query);
+      }, 200);
     });
+    [preconLang, preconSkipBasics, preconSideboard].forEach(el => {
+      el.addEventListener("change", () => {
+        preconView.clear();
+        preconLoaded = null;
+      });
+    });
+    preconLoadBtn.addEventListener("click", loadPrecon);
+    preconCommitBtn.addEventListener("click", () => {
+      if (!preconLoaded) return;
+      preconView.commit({
+        precon: { product_uuid: preconLoaded, lot_id: openLot ? openLot.lot_id : null },
+      });
+    });
+
+    if (openLot) {
+      showMode("precon");
+      preconInput.value = openLot.name;
+      preconChoices.set(openLot.name, openLot.product_uuid);
+      preconLang.value = openLot.language;
+      preconNote.textContent = `Opening one ${openLot.name} from your sealed holdings`
+        + ` (${openLot.quantity} held). Adding the cards takes it out of your holdings.`;
+      loadPrecon();
+    }
+  }
+
+  async function fetchPreconSuggestions(query) {
+    try {
+      const response = await fetch(`${config.preconSearchUrl}?q=${encodeURIComponent(query)}`);
+      if (!response.ok) return;
+      const { results = [] } = await response.json();
+      preconList.replaceChildren(
+        ...results.map(product => {
+          preconChoices.set(product.name, product.uuid);
+          const meta = [product.set_code, product.kind, product.year].filter(Boolean).join(" · ");
+          return createOption(product.name, meta);
+        }),
+      );
+    } catch (_) {
+      // best effort
+    }
+  }
+
+  async function loadPrecon() {
+    const uuid = preconChoices.get(preconInput.value.trim());
+    preconView.clear();
+    preconLoaded = null;
+    if (!uuid) {
+      preconStatus.textContent = "Pick a product from the suggestions.";
+      return;
+    }
+    preconStatus.textContent = "Loading the deck list...";
+    const params = new URLSearchParams({
+      language: preconLang.value,
+      skip_basics: preconSkipBasics.checked ? "1" : "0",
+      sideboard: preconSideboard.checked ? "1" : "0",
+    });
+    const url = `${config.preconCardsUrl.replace("__UUID__", encodeURIComponent(uuid))}?${params}`;
+    let payload;
+    try {
+      const response = await fetch(url);
+      payload = await response.json();
+      if (!response.ok || !payload.ok) {
+        preconStatus.textContent = payload.error || `Server error ${response.status}`;
+        return;
+      }
+    } catch (error) {
+      preconStatus.textContent = `Network error: ${error.message}`;
+      return;
+    }
+    preconLoaded = uuid;
+    const parts = [`${payload.cards_total} card(s) in ${payload.records.length} line(s).`];
+    if (payload.basics_skipped) parts.push(`${payload.basics_skipped} basic land(s) skipped.`);
+    preconView.show(payload.records, [], parts.join(" "));
   }
 
   async function fetchAutocomplete(query) {
@@ -174,10 +287,7 @@
       .map(parseDeckLine)
       .filter(Boolean);
 
-    resolved = [];
-    previewRows = [];
-    dlCommitBtn.disabled = true;
-    dlPreview.innerHTML = "";
+    dlView.clear();
 
     if (parsed.length === 0) {
       dlStatus.textContent = "No cards parsed.";
@@ -236,67 +346,96 @@
       (payload.not_found || []).forEach(item => notFound.push(item));
     }
 
-    resolved = found;
     const parts = [`Resolved ${found.length} of ${parsed.length}.`];
     if (notFound.length) parts.push(`${notFound.length} not found.`);
-    dlStatus.textContent = parts.join(" ");
-    dlPreview.replaceChildren(...renderPreview(found, notFound));
-    dlCommitBtn.disabled = found.length === 0;
+    dlView.show(found, notFound, parts.join(" "));
   }
 
-  function collectEdits() {
-    return previewRows.map(row => {
-      const base = resolved[parseInt(row.dataset.idx, 10)];
-      const fields = row._fields;
-      const { quantity, condition, printing, price_bought, date_bought } = fields;
-      const qty = parseInt(quantity.value, 10);
-      const price = parseFloat(price_bought.value);
+  // One editable preview table (decklist and precon modes each own one):
+  // show() renders resolved records, collect() reads the edited rows back,
+  // commit() POSTs them to /inventory/add-bulk with any extra payload.
+  // "Add to inventory" stays disabled until show() has run.
+  function createPreview(previewEl, statusEl, commitBtn) {
+    let base = [];
+    let rows = [];
 
-      return {
-        ...base,
-        quantity: Number.isFinite(qty) && qty > 0 ? qty : 1,
-        set_code: fields.set_code.value.trim().toUpperCase() || base.set_code,
-        set_name:
-          (fields.set_code.value.trim().toUpperCase() || base.set_code) === base.set_code
-            ? base.set_name
-            : "",
-        condition: condition.value || base.condition,
-        printing: printing.value || base.printing,
-        price_bought: Number.isFinite(price) ? price : null,
-        date_bought: date_bought.value || null,
-      };
-    });
-  }
-
-  async function commitDecklist() {
-    if (resolved.length === 0) return;
-
-    const records = collectEdits();
-    dlCommitBtn.disabled = true;
-    dlStatus.textContent = `Adding ${records.length} card(s)...`;
-
-    try {
-      const csrf = document.querySelector('meta[name="csrf-token"]')?.content || "";
-      const response = await fetch("/inventory/add-bulk", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-CSRFToken": csrf },
-        body: JSON.stringify({ records }),
-      });
-      if (!response.ok) {
-        dlStatus.textContent = `Server error ${response.status}`;
-        dlCommitBtn.disabled = false;
-        return;
-      }
-      window.location.href = "/inventory";
-    } catch (error) {
-      dlStatus.textContent = `Network error: ${error.message}`;
-      dlCommitBtn.disabled = false;
+    function clear() {
+      if (base.length === 0 && !previewEl.innerHTML) return;
+      base = [];
+      rows = [];
+      commitBtn.disabled = true;
+      previewEl.innerHTML = "";
+      statusEl.textContent = "";
     }
+
+    function show(records, notFound, status) {
+      base = records;
+      rows = [];
+      statusEl.textContent = status;
+      previewEl.replaceChildren(...renderPreview(records, notFound, rows));
+      commitBtn.disabled = records.length === 0;
+    }
+
+    function collect() {
+      return rows.map(row => {
+        const record = base[parseInt(row.dataset.idx, 10)];
+        const fields = row._fields;
+        const { quantity, condition, printing, price_bought, date_bought } = fields;
+        const qty = parseInt(quantity.value, 10);
+        const price = parseFloat(price_bought.value);
+        const setCode = fields.set_code.value.trim().toUpperCase() || record.set_code;
+
+        return {
+          ...record,
+          quantity: Number.isFinite(qty) && qty > 0 ? qty : 1,
+          set_code: setCode,
+          set_name: setCode === record.set_code ? record.set_name : "",
+          condition: condition.value || record.condition,
+          printing: printing.value || record.printing,
+          price_bought: Number.isFinite(price) ? price : null,
+          date_bought: date_bought.value || null,
+        };
+      });
+    }
+
+    async function commit(extra) {
+      if (base.length === 0) return;
+
+      const records = collect();
+      commitBtn.disabled = true;
+      statusEl.textContent = `Adding ${records.length} card(s)...`;
+
+      try {
+        const csrf = document.querySelector('meta[name="csrf-token"]')?.content || "";
+        const response = await fetch("/inventory/add-bulk", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-CSRFToken": csrf },
+          body: JSON.stringify({ records, ...extra }),
+        });
+        if (!response.ok) {
+          let message = `Server error ${response.status}`;
+          try {
+            const payload = await response.json();
+            if (payload && payload.error) message = payload.error;
+          } catch (_) {
+            // keep the status-code message
+          }
+          statusEl.textContent = message;
+          commitBtn.disabled = false;
+          return;
+        }
+        window.location.href = "/inventory";
+      } catch (error) {
+        statusEl.textContent = `Network error: ${error.message}`;
+        commitBtn.disabled = false;
+      }
+    }
+
+    return { clear, show, commit };
   }
 
-  function renderPreview(records, notFound) {
+  function renderPreview(records, notFound, previewRows) {
     const nodes = [];
-    previewRows = [];
 
     if (records.length) {
       const table = document.createElement("table");
