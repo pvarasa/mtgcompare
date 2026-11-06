@@ -30,19 +30,13 @@ The ``parse_search_html`` function is pure and is what tests exercise.
 """
 import re
 
-from selectolax.lexbor import LexborHTMLParser as HTMLParser
-
+from . import ocnk
 from .html_base import HtmlSearchScrapper, node_text_ws, to_usd
 from .names import matched_name
 from .variants import encode, normalize_number, tags_from_markers
 
 BASE_URL = "https://www.cardrush-mtg.jp"
 SEARCH_URL = f"{BASE_URL}/product-list/0/0/photo"
-
-# Card Rush only exposes prices tax-included ((税込) badge alongside the figure).
-_PRICE_RE = re.compile(r"([\d,]+)\s*円")
-# Stock counter uses 枚 (mai); SingleStar's template uses 点 — same idea.
-_STOCK_RE = re.compile(r"在庫数\s*(\d+)")
 
 # Listing name structure. Group meanings:
 #   cond  : NM if absent; otherwise the bracketed grade (EX, PLD, HPLD, POOR, NM-, ...)
@@ -74,19 +68,12 @@ _TAG_RE = re.compile(r"\(([^)]*)\)")
 
 def parse_search_html(html: str | bytes, card_name: str, fx_jpy_per_usd: float) -> list[dict]:
     """Extract NM English price records for ``card_name`` from a Card Rush page."""
-    tree = HTMLParser(html)
     records: list[dict] = []
 
-    for cell in tree.css("li.list_item_cell"):
-        name_el = cell.css_first("span.goods_name")
-        price_el = cell.css_first("span.figure")
-        stock_el = cell.css_first("p.stock")
-        link_el = cell.css_first("a.item_data_link")
-        if not (name_el and price_el and stock_el and link_el):
+    for cell in ocnk.iter_cells(html, BASE_URL):
+        if cell.price_jpy is None or cell.stock <= 0:
             continue
-
-        text = node_text_ws(name_el)
-        m = _LISTING_RE.match(text)
+        m = _LISTING_RE.match(node_text_ws(cell.name))
         if not m:
             continue
 
@@ -101,25 +88,6 @@ def parse_search_html(html: str | bytes, card_name: str, fx_jpy_per_usd: float) 
         if en_name is None:
             continue
 
-        stock_class_attr = stock_el.attributes.get("class") or ""
-        if "soldout" in stock_class_attr.split():
-            continue
-        stock_match = _STOCK_RE.search(stock_el.text(deep=True, separator=" ", strip=True))
-        if not stock_match:
-            continue
-        stock = int(stock_match.group(1))
-        if stock <= 0:
-            continue
-
-        price_match = _PRICE_RE.search(price_el.text(deep=True, separator=" ", strip=True))
-        if not price_match:
-            continue
-        price_jpy = float(price_match.group(1).replace(",", ""))
-        price_usd = to_usd(price_jpy, fx_jpy_per_usd)
-
-        href = (link_el.attributes.get("href") or "").strip()
-        link = href if href.startswith("http") else f"{BASE_URL}{href}"
-
         tags = _TAG_RE.findall(m.group("tags"))
         # A bare-digits tag is the collector number: "(1604)".
         number = m.group("num") or next((t for t in tags if t.isdigit()), None)
@@ -129,11 +97,11 @@ def parse_search_html(html: str | bytes, card_name: str, fx_jpy_per_usd: float) 
             "set": m.group("set").strip(),
             "number": normalize_number(number),
             "variant": encode(tags_from_markers(tags)),
-            "price_jpy": price_jpy,
-            "price_usd": price_usd,
-            "stock": stock,
+            "price_jpy": cell.price_jpy,
+            "price_usd": to_usd(cell.price_jpy, fx_jpy_per_usd),
+            "stock": cell.stock,
             "condition": "NM",
-            "link": link,
+            "link": cell.link,
         })
     return records
 

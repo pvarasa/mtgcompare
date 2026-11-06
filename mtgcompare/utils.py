@@ -22,6 +22,17 @@ _ER_API_URL = "https://open.er-api.com/v6/latest/USD"
 _TIMEOUT_S = 5.0
 
 
+def opt_float(value: str | None) -> float | None:
+    """A form / CSV number field: blank or junk → None."""
+    value = (value or "").strip()
+    if not value:
+        return None
+    try:
+        return float(value)
+    except ValueError:
+        return None
+
+
 class FxError(Exception):
     """No FX source could supply a usable rate."""
 

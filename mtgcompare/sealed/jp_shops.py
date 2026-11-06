@@ -27,6 +27,7 @@ from dataclasses import dataclass
 import requests
 from selectolax.lexbor import LexborHTMLParser as HTMLParser
 
+from ..scrapers import ocnk
 from ..scrapers.hareruya import UNISEARCH_API
 from ..scrapers.hareruya import make_session as hareruya_session
 from ..scrapers.html_base import ScraperFetchError, retry_after_s
@@ -53,7 +54,8 @@ HARERUYA_KEYWORDS = ("ブースターBOX", "ブースターパック")
 _HARERUYA_ROWS = 60
 _HARERUYA_MAX_PAGES = 40
 
-SINGLESTAR_CATEGORY_URL = "https://www.singlestar.jp/product-list/1427/0/photo"  # 未開封BOX
+SINGLESTAR_BASE = "https://www.singlestar.jp"
+SINGLESTAR_CATEGORY_URL = f"{SINGLESTAR_BASE}/product-list/1427/0/photo"  # 未開封BOX
 _SINGLESTAR_PAGE_SIZE = 100
 _SINGLESTAR_MAX_PAGES = 15
 # SingleStar is slow on cold pages (10-50 s observed); give it room.
@@ -77,8 +79,6 @@ _HARERUYA_BUY_PAGE_SIZE = 60
 _HARERUYA_BUY_MAX_PAGES = 30
 
 _PAGE_PACING_S = 0.5
-_PRICE_RE = re.compile(r"([\d,]+)\s*円")
-_STOCK_RE = re.compile(r"在庫数\s*(\d+)")
 # SingleStar image paths are hex-encoded and often carry the set code:
 # ".../_/70726f...6a7067..." → "product/FRA/FRApro/MTGpro_FRA_01.jpg".
 _IMG_HEX_RE = re.compile(r"/_/([0-9a-f]+)")
@@ -163,24 +163,13 @@ def _image_set_code(src: str) -> str | None:
 
 def parse_singlestar_category_html(html: str | bytes) -> list[ShopListing]:
     out: list[ShopListing] = []
-    for cell in HTMLParser(html).css("li.list_item_cell"):
-        name_el = cell.css_first("span.goods_name")
-        link_el = cell.css_first("a.item_data_link")
-        if not (name_el and link_el):
-            continue
-        price_el = cell.css_first("span.figure")
-        price_m = _PRICE_RE.search(price_el.text(strip=True)) if price_el else None
-        stock_el = cell.css_first("p.stock")
-        stock = 0
-        if stock_el and "soldout" not in (stock_el.attributes.get("class") or "").split():
-            sm = _STOCK_RE.search(stock_el.text(strip=True))
-            stock = int(sm.group(1)) if sm else 0
-        img = cell.css_first("img")
+    for cell in ocnk.iter_cells(html, SINGLESTAR_BASE):
+        img = cell.node.css_first("img")
         out.append(ShopListing(
-            title=name_el.text(strip=True),
-            price_jpy=float(price_m.group(1).replace(",", "")) if price_m else None,
-            stock=stock,
-            url=(link_el.attributes.get("href") or "").strip(),
+            title=cell.name.text(strip=True),
+            price_jpy=cell.price_jpy,
+            stock=cell.stock,
+            url=cell.link,
             hint_set_code=_image_set_code(img.attributes.get("src") or "" if img else ""),
         ))
     return out

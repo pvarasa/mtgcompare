@@ -2,7 +2,8 @@
 
 Write side:
 - ``refresh_catalog``  — reload the catalog from MTGJSON SetList.json when
-  it is empty or older than ``CATALOG_MAX_AGE``.
+  it is empty, older than ``CATALOG_MAX_AGE`` or from an older
+  ``CATALOG_VERSION``.
 - ``refresh_prices``   — for every tracked product (or the given ones):
   backfill a year of TCGPlayer history the first time, then record today's
   market price. Per-product failures are logged and counted, never fatal.
@@ -415,6 +416,7 @@ def compute_sealed_ctx(user_id: str, *, fx: float | None, today: date | None = N
         watch = [_product_label(r) for r in repo.list_watch(conn, user_id)]
         catalog_rows = repo.list_catalog(conn)
         catalog_stamp = meta.read(conn, CATALOG_META_KEY)
+        shop_stamp = meta.read(conn, SHOP_PRICES_META_KEY)
         uuids = list({r["uuid"] for r in lots + watch})
         points = repo.latest_points(conn, uuids)
         past = repo.latest_points(
@@ -440,8 +442,6 @@ def compute_sealed_ctx(user_id: str, *, fx: float | None, today: date | None = N
         else:
             lot["pnl_usd"] = lot["pnl_pct"] = None
 
-    with db.get_conn() as conn:
-        shop_stamp = meta.read(conn, SHOP_PRICES_META_KEY)
     return {
         "lots": lots,
         "watch": watch,
@@ -557,12 +557,40 @@ def _openable(uuid: str) -> tuple[dict, dict]:
     return product, contents
 
 
+def _current_prices(cards: list[dict]) -> dict[tuple[str, str], float]:
+    """Latest MTGJSON price per (uuid, printing) for deck cards, to prefill
+    the preview's purchase price. A foil with no foil price falls back to
+    the etched one (decks map Etched to Foil). Best-effort: no history, or
+    a store error, just leaves the prices blank."""
+    uuids = sorted({c["uuid"] for c in cards})
+    if not uuids:
+        return {}
+    try:
+        store = pricing_common.price_store()
+        if not store.has_history():
+            return {}
+        latest = store.latest_prices(uuids)
+    except Exception:
+        logger.exception("event=precon_price_prefill_failed")
+        return {}
+    out: dict[tuple[str, str], float] = {}
+    for c in cards:
+        if pricing_common.is_foil(c["printing"]):
+            price = latest.get((c["uuid"], "foil")) or latest.get((c["uuid"], "etched"))
+        else:
+            price = latest.get((c["uuid"], "normal"))
+        if price is not None:
+            out[(c["uuid"], c["printing"])] = round(float(price), 2)
+    return out
+
+
 def precon_preview(
     uuid: str, *, skip_basics: bool = True, include_sideboard: bool = False,
     language: str = "EN", load: Callable[[str], dict] | None = None,
 ) -> dict:
     """The cards of an openable product as inventory add-preview records
-    (the same shape the decklist preview builds). Raises PreconError;
+    (the same shape the decklist preview builds), each priced at its
+    latest market price when price history has one. Raises PreconError;
     deck download failures propagate (the route reports them)."""
     product, contents = _openable(uuid)
     cards = decks.product_cards(contents, include_sideboard=include_sideboard, load=load or decks.load_deck)
@@ -570,13 +598,14 @@ def precon_preview(
         stored = meta.read(conn, SET_NAMES_ALL_META_KEY)
     set_names: dict[str, str] = json.loads(stored) if stored else {}
     kept = [c for c in cards if not (skip_basics and c["is_basic"])]
+    prices = _current_prices(kept)
     records = [
         {
             "card_name": c["card_name"], "set_code": c["set_code"],
             "set_name": set_names.get(c["set_code"], ""), "card_number": c["card_number"],
             "quantity": c["quantity"], "condition": "NM", "printing": c["printing"],
             "language": INVENTORY_LANGUAGES.get(language, "English"),
-            "price_bought": None, "date_bought": None,
+            "price_bought": prices.get((c["uuid"], c["printing"])), "date_bought": None,
         }
         for c in kept
     ]
@@ -586,10 +615,6 @@ def precon_preview(
         "cards_total": sum(c["quantity"] for c in kept),
         "basics_skipped": sum(c["quantity"] for c in cards if c["is_basic"]) if skip_basics else 0,
     }
-
-
-def _identity(row: dict) -> tuple[str, str, str, int]:
-    return pricing_common.row_key_for_mapping(row)
 
 
 def add_precon_cards(
@@ -608,14 +633,14 @@ def add_precon_cards(
     """
     _product, contents = _openable(product_uuid)
     trusted = {
-        _identity(c): c
+        pricing_common.row_key_for_mapping(c): c
         for c in decks.product_cards(contents, include_sideboard=True, load=load or decks.load_deck)
     }
     now = _now_iso()
     card_maps: list[tuple[str, str, str, int, str, str]] = []
     seen: set[tuple[str, str, str, int]] = set()
     for r in records:
-        key = _identity(r)
+        key = pricing_common.row_key_for_mapping(r)
         if key in trusted and key not in seen:
             seen.add(key)
             card_maps.append((r["card_name"], key[1], key[2], key[3], trusted[key]["uuid"], now))

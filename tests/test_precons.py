@@ -188,6 +188,33 @@ def test_precon_preview_skips_basics_and_names_sets(seeded):
     assert {r["language"] for r in full["records"]} == {"Japanese"}
 
 
+class _FakeStore:
+    def __init__(self, fail=False):
+        self.fail = fail
+
+    def has_history(self):
+        return True
+
+    def latest_prices(self, uuids):
+        if self.fail:
+            raise RuntimeError("store down")
+        # No "foil" points: foil cards must fall back to the etched price.
+        return {**{(u, "normal"): 1.234 for u in uuids}, **{(u, "etched"): 9.0 for u in uuids}}
+
+
+def test_precon_preview_prefills_current_prices(seeded, monkeypatch):
+    from mtgcompare.pricing import common as pricing_common
+    monkeypatch.setattr(pricing_common, "price_store", lambda: _FakeStore())
+    records = service.precon_preview("precon-vv", load=_load)["records"]
+    for r in records:
+        assert r["price_bought"] == (9.0 if r["printing"] == "Foil" else 1.23)
+    assert {r["printing"] for r in records} == {"Foil", "Normal"}
+
+    monkeypatch.setattr(pricing_common, "price_store", lambda: _FakeStore(fail=True))
+    records = service.precon_preview("precon-vv", load=_load)["records"]
+    assert all(r["price_bought"] is None for r in records)   # best-effort
+
+
 def test_precon_preview_includes_bonus_cards(seeded):
     out = service.precon_preview("sl-rocks", load=_load)
     lotus = [r for r in out["records"] if r["card_name"] == "Lotus Field"]

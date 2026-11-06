@@ -12,10 +12,15 @@ Flask-free; sits directly on the data layer (``db``, ``market_repo``,
 """
 from pathlib import Path
 
+import requests
+
 from .. import db
 from . import history_store, market_repo
 
 __all__ = [
+    "MTGJSON_BASE_URL",
+    "MTGJSON_HEADERS",
+    "fetch_mtgjson_json",
     "has_price_history",
     "is_foil",
     "load_existing_card_map",
@@ -27,6 +32,16 @@ __all__ = [
     "query_history",
     "row_key_for_mapping",
 ]
+
+MTGJSON_BASE_URL = "https://mtgjson.com/api/v5"
+MTGJSON_HEADERS = {"User-Agent": "mtgcompare (+https://github.com/pvarasa/mtgcompare)", "Accept": "application/json"}
+
+
+def fetch_mtgjson_json(path: str, *, read_timeout: float = 60) -> dict:
+    """GET one MTGJSON JSON file (``SetList.json``, ``decks/<name>.json``...)."""
+    resp = requests.get(f"{MTGJSON_BASE_URL}/{path}", headers=MTGJSON_HEADERS, timeout=(20, read_timeout))
+    resp.raise_for_status()
+    return resp.json()
 
 
 # --- small shared card helpers ---------------------------------------------

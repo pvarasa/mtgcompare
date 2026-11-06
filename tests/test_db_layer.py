@@ -262,6 +262,17 @@ class TestInventoryUserScoping:
         alice_rows = inv.list_all("alice")
         assert len(alice_rows) == 2
 
+    def test_import_csv_header_only_is_refused_and_keeps_rows(self, test_db, tmp_path):
+        # Used to crash in the INSERT (an empty executemany), which the web
+        # layer reported as an unexpected failure.
+        inv.add_one(_CARD_A, user_id="alice")
+        csv_path = tmp_path / "import.csv"
+        csv_path.write_text("Card Name,Set Code,Quantity\n", encoding="utf-8")
+
+        with pytest.raises(ValueError):
+            inv.import_csv(str(csv_path), replace=True, user_id="alice")
+        assert len(inv.list_all("alice")) == 1
+
     def test_default_user_id_is_local(self, test_db):
         inv.add_one(_CARD_A)
         rows = inv.list_all()

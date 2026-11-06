@@ -18,10 +18,8 @@ import time
 from collections.abc import Callable
 from threading import Lock
 
-import requests
+from ..pricing.common import fetch_mtgjson_json
 
-DECK_URL = "https://mtgjson.com/api/v5/decks/{file_name}.json"
-_HEADERS = {"User-Agent": "mtgcompare/0.1", "Accept": "application/json"}
 # Deck file names are CamelCase plus "_SETCODE" (``VirtueAndValor_WOC``).
 # They come from our own catalog, never the request, but the URL is still
 # only built from a name of that shape.
@@ -116,9 +114,7 @@ def parse_contents(raw: str | None) -> dict | None:
 def fetch_deck(file_name: str) -> dict:
     if not _FILE_NAME_RE.match(file_name):
         raise ValueError(f"bad deck file name {file_name!r}")
-    resp = requests.get(DECK_URL.format(file_name=file_name), headers=_HEADERS, timeout=(10, 60))
-    resp.raise_for_status()
-    return resp.json()
+    return fetch_mtgjson_json(f"decks/{file_name}.json")
 
 
 # The only card fields ``parse_deck`` reads. A deck file carries ~50 per

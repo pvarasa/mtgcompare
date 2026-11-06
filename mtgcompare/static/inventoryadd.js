@@ -497,6 +497,7 @@
     const priceInput = createInput("number", "cell-price");
     priceInput.step = "0.01";
     priceInput.min = "0";
+    if (record.price_bought != null) priceInput.value = Number(record.price_bought).toFixed(2);
 
     const dateInput = createInput("date", "cell-date");
     dateInput.value = today;

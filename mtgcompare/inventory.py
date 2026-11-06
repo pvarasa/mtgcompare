@@ -20,6 +20,7 @@ from typing import IO
 from sqlalchemy import bindparam, text
 
 from .db import get_conn, init_schema, row_to_dict
+from .utils import opt_float
 
 
 def _rows_from_csv(f: IO[str]) -> Iterator[dict]:
@@ -37,16 +38,6 @@ def _rows_from_csv(f: IO[str]) -> Iterator[dict]:
 
 def _to_int(s: str) -> int:
     return int(s.strip()) if s.strip() else 0
-
-
-def _to_float(s: str) -> float | None:
-    s = s.strip()
-    if not s:
-        return None
-    try:
-        return float(s)
-    except ValueError:
-        return None
 
 
 def _dict(r: dict, user_id: str) -> dict:
@@ -88,22 +79,24 @@ def import_csv(path: str, replace: bool = True, user_id: str = "local") -> int:
                 "condition":    r.get("Condition", "").strip(),
                 "printing":     r.get("Printing", "").strip(),
                 "language":     r.get("Language", "").strip(),
-                "price_bought": _to_float(r.get("Price Bought", "")),
+                "price_bought": opt_float(r.get("Price Bought")),
                 "date_bought":  r.get("Date Bought", "").strip() or None,
             }
             for r in _rows_from_csv(f)
         ]
+    if not records:
+        # A header-only file: refuse it rather than let a replace import
+        # wipe the inventory for nothing.
+        raise ValueError("no rows")
     with get_conn() as conn:
         if replace:
             purge_user(conn, user_id)
-        conn.execute(_INSERT_SQL, [_dict(r, user_id) for r in records])
-    return len(records)
+        return insert_many(conn, records, user_id)
 
 
 def add_one(record: dict, user_id: str = "local") -> None:
     """Append a single lot to the inventory table."""
-    with get_conn() as conn:
-        conn.execute(_INSERT_SQL, _dict(record, user_id))
+    add_many([record], user_id)
 
 
 def insert_many(conn, records: list[dict], user_id: str = "local") -> int:
@@ -452,11 +445,8 @@ def list_filtered_for_market(
     set_code: str | None = None,
     condition: str | None = None,
 ) -> list[dict]:
-    """Return ALL matching rows (no pagination, no sort).
-
-    Used by the /market route on SQLite (where the joined SQL path isn't
-    available). Python-side join + sort + paginate happens in the caller.
-    """
+    """Return ALL matching rows, unpaginated: the /market computation
+    joins prices, sorts and paginates them in Python."""
     where_sql, binds = _user_where(user_id, q=q,
                                    price_mode=price_mode, price_value=price_value,
                                    set_code=set_code, condition=condition)
@@ -468,8 +458,6 @@ def list_filtered_for_market(
             binds,
         ).mappings().all()
     return [row_to_dict(r) for r in rows]
-
-
 
 
 def _main() -> None:

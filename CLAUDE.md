@@ -61,7 +61,9 @@ Repo-specific guidance for coding sessions.
   `names.py` (`matched_name`: multi-face-aware listing-name matching every
   shop parser uses — compare faces, never raw strings, because Scryfall /
   the autocomplete send `Front // Back` and each shop renders it
-  differently), `cache.py` (`CachedScrapper` DB-cache wrapper),
+  differently), `ocnk.py` (listing cells of the ocnk.net shop template,
+  shared by Card Rush, SingleStar and the sealed SingleStar crawl),
+  `cache.py` (`CachedScrapper` DB-cache wrapper),
   `registry.py` (the `Shop` NamedTuple registry incl. the `marketplace`
   flag + parallel `collect_prices()` fan-out), and one module per shop.
 - `mtgcompare/sealed/`
@@ -181,7 +183,8 @@ The `users` table is keyed on `workos_user_id`; inventory rows continue to key o
   openable sealed products (`GET /sealed/precons/search`), load their cards
   (`GET /sealed/precons/<uuid>/cards`, basics skipped by default, sideboard
   opt-in), commit through `/inventory/add-bulk` with a `precon` object.
-  `price_bought` stays blank. See "Opening precons" below.
+  `price_bought` is prefilled with each card's latest MTGJSON price
+  (blank when there's no history; editable). See "Opening precons" below.
 - Decklist search on the main Search page is separate from inventory add: it prices pasted lists across shops and shows per-shop shipping-aware totals.
 
 ## Search and market behavior

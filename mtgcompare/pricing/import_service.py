@@ -28,6 +28,8 @@ from .. import db, meta
 from .. import inventory as inv
 from . import history_import, history_store, market_repo
 from .common import (
+    MTGJSON_BASE_URL,
+    MTGJSON_HEADERS,
     is_foil,
     load_existing_card_map,
     mtgjson_cache_dir,
@@ -41,8 +43,6 @@ from .market_service import market_cache_clear
 logger = logging.getLogger(__name__)
 
 __all__ = [
-    "MTGJSON_BASE_URL",
-    "MTGJSON_HEADERS",
     "candidate_uuid_map",
     "collector_sort_key",
     "download_file",
@@ -60,9 +60,6 @@ __all__ = [
     "resolve_inventory_uuids",
     "run_daily_price_update",
 ]
-
-MTGJSON_BASE_URL = "https://mtgjson.com/api/v5"
-MTGJSON_HEADERS = {"User-Agent": "mtgcompare (+https://github.com/pvarasa/mtgcompare)", "Accept": "application/json"}
 
 
 # --- MTGJSON paths / downloads ---------------------------------------------

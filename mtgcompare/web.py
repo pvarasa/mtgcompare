@@ -55,7 +55,7 @@ from .scrapers.registry import (
 )
 from .sealed import repo as sealed_repo
 from .sealed import service as sealed_service
-from .utils import get_fx
+from .utils import get_fx, opt_float
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 LOGGING_CONF = ROOT_DIR / "logging.conf"
@@ -779,15 +779,6 @@ def decklist_stream():
     )
 
 
-def _compute_market_ctx(user_id: str, params: dict) -> dict:
-    """Inject the web-layer FX provider and pagination choices into the pure
-    pricing computation. Kept as a thin wrapper so the /market route needs no
-    change and ``web._get_fx`` monkeypatches still apply."""
-    return pricing.compute_market_ctx(
-        user_id, params, get_fx=_get_fx, per_page_choices=_PER_PAGE_CHOICES,
-    )
-
-
 @app.route("/market")
 def market():
     user_id = _get_user_id()
@@ -809,7 +800,9 @@ def market():
     )
     ctx = pricing.market_cache_get(cache_key)
     if ctx is None:
-        ctx = _compute_market_ctx(user_id, params)
+        ctx = pricing.compute_market_ctx(
+            user_id, params, get_fx=_get_fx, per_page_choices=_PER_PAGE_CHOICES,
+        )
         pricing.market_cache_set(cache_key, ctx)
 
     if request.args.get("partial") == "tbody":
@@ -947,7 +940,7 @@ def sealed_add_lot():
             "product_uuid": product["uuid"],
             "language": language,
             "quantity": quantity,
-            "price_bought": _opt_float(request.form.get("price_bought", "")),
+            "price_bought": opt_float(request.form.get("price_bought", "")),
             "currency": currency,
             "date_bought": request.form.get("date_bought", "").strip() or None,
         })
@@ -1025,6 +1018,9 @@ def sealed_refresh():
     return jsonify({"ok": True, "job_id": job_id, "already_running": False})
 
 
+_MTGJSON_DOWN = "MTGJSON is unreachable right now. Try again later."
+
+
 @app.route("/sealed/precons/search")
 def sealed_precon_search():
     """Autocomplete for the inventory's Precon add mode: openable products
@@ -1051,7 +1047,7 @@ def sealed_precon_cards(product_uuid: str):
             "event=precon_deck_fetch_failed product=%s class=%s err=%s",
             product_uuid, type(exc).__name__, exc,
         )
-        return jsonify({"ok": False, "error": "MTGJSON is unreachable right now. Try again later."}), 502
+        return jsonify({"ok": False, "error": _MTGJSON_DOWN}), 502
     return jsonify({"ok": True, **result})
 
 
@@ -1132,7 +1128,7 @@ def _parse_inventory_filter(source) -> dict:
     return {
         "q": str(source.get("q") or "").strip(),
         "price_mode": price_mode if price_mode in inv.PRICE_MODES else "any",
-        "price_value": _opt_float(str(source.get("price_value") or "")),
+        "price_value": opt_float(str(source.get("price_value") or "")),
         "set_code": str(source.get("set_code") or "").strip().upper() or None,
         "condition": str(source.get("condition") or "").strip() or None,
     }
@@ -1213,16 +1209,6 @@ def inventory():
     return render_template("inventory.html", **ctx)
 
 
-def _opt_float(value: str) -> float | None:
-    value = (value or "").strip()
-    if not value:
-        return None
-    try:
-        return float(value)
-    except ValueError:
-        return None
-
-
 @app.route("/inventory/add", methods=["POST"])
 def inventory_add():
     user_id = _get_user_id()
@@ -1237,7 +1223,7 @@ def inventory_add():
             "condition": request.form.get("condition", "NM").strip(),
             "printing": request.form.get("printing", "Normal").strip(),
             "language": request.form.get("language", "English").strip(),
-            "price_bought": _opt_float(request.form.get("price_bought", "")),
+            "price_bought": opt_float(request.form.get("price_bought", "")),
             "date_bought": request.form.get("date_bought", "").strip() or None,
         }
         if not record["card_name"] or not record["set_code"]:
@@ -1274,13 +1260,13 @@ def inventory_add_bulk():
     # uuids, and consume one unit of the sealed lot when opening one.
     precon = payload.get("precon") if isinstance(payload.get("precon"), dict) else None
     source = "precon" if precon else "decklist"
+    opening_lot = bool(precon) and precon.get("lot_id") not in (None, "")
     try:
         if precon:
-            lot_id = precon.get("lot_id")
             count = sealed_service.add_precon_cards(
                 user_id, records,
                 product_uuid=str(precon.get("product_uuid") or ""),
-                lot_id=int(lot_id) if lot_id not in (None, "") else None,
+                lot_id=int(precon["lot_id"]) if opening_lot else None,
             )
         else:
             count = inv.add_many(records, user_id)
@@ -1290,7 +1276,7 @@ def inventory_add_bulk():
         return {"ok": False, "error": "Malformed records"}, 400
     except requests.RequestException:
         app.logger.warning("event=inventory_add_failed source=precon reason=mtgjson_unreachable")
-        return {"ok": False, "error": "MTGJSON is unreachable right now. Try again later."}, 502
+        return {"ok": False, "error": _MTGJSON_DOWN}, 502
     except Exception:
         app.logger.exception(
             "event=inventory_add_failed source=%s record_count=%d",
@@ -1301,7 +1287,7 @@ def inventory_add_bulk():
         "event=inventory_add source=%s record_count=%d added=%d",
         source, len(records), count,
     )
-    if precon and precon.get("lot_id") not in (None, ""):
+    if opening_lot:
         flash(f"Opened the sealed lot: added {count} card(s).")
     else:
         flash(f"Added {count} card(s) from {source}.")

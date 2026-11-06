@@ -21,11 +21,7 @@ from __future__ import annotations
 
 import json
 
-import requests
-
-SETLIST_URL = "https://mtgjson.com/api/v5/SetList.json"
-DECK_LIST_URL = "https://mtgjson.com/api/v5/DeckList.json"
-_HEADERS = {"User-Agent": "mtgcompare/0.1", "Accept": "application/json"}
+from ..pricing.common import fetch_mtgjson_json
 
 BOOSTER_CATEGORIES = ("booster_box", "booster_pack")
 # Products whose contents are fixed and listed by MTGJSON as decks. Bundles
@@ -127,12 +123,8 @@ def set_names(payload: dict) -> dict[str, str]:
 
 
 def fetch_setlist() -> dict:
-    resp = requests.get(SETLIST_URL, headers=_HEADERS, timeout=(20, 120))
-    resp.raise_for_status()
-    return resp.json()
+    return fetch_mtgjson_json("SetList.json", read_timeout=120)
 
 
 def fetch_deck_list() -> dict:
-    resp = requests.get(DECK_LIST_URL, headers=_HEADERS, timeout=(20, 60))
-    resp.raise_for_status()
-    return resp.json()
+    return fetch_mtgjson_json("DeckList.json")
