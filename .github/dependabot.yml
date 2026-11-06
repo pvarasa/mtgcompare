@@ -1,7 +1,13 @@
-# Keeps the SHA-pinned actions in .github/workflows/ current. Pinning to a
-# commit stops a moved or hijacked tag from changing what CI runs; without
-# something bumping the pins, it also freezes them, so Dependabot proposes the
-# updates (with the version comment kept in sync) as PRs.
+# Weekly, grouped update PRs, one per ecosystem. CI (unit + e2e + lint +
+# types) runs on each PR, so a green PR is safe to merge.
+#
+# - github-actions: keeps the SHA-pinned actions in .github/workflows/
+#   current. Pinning to a commit stops a moved or hijacked tag from changing
+#   what CI runs; without something bumping the pins it also freezes them.
+# - uv: Python dependencies in uv.lock (pyproject.toml ranges are kept).
+# - docker: the Dockerfile's digest-pinned python and uv images, so the
+#   runtime base picks up Debian security rebuilds. A new Python minor
+#   (3.14 -> 3.15) is a deliberate upgrade, not a weekly bump.
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -10,4 +16,24 @@ updates:
       interval: weekly
     groups:
       actions:
+        patterns: ["*"]
+
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      python:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: python
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+    groups:
+      images:
         patterns: ["*"]
