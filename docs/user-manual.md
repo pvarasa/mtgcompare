@@ -21,7 +21,7 @@ The numbered red circles in the pictures match the numbered steps under them.
 5. [Price a whole decklist](#5-price-a-whole-decklist)
 6. [Your collection (Inventory)](#6-your-collection-inventory)
 7. [What your collection is worth (Market)](#7-what-your-collection-is-worth-market)
-8. [Booster boxes and packs (Sealed)](#8-booster-boxes-and-packs-sealed)
+8. [Boxes, packs, precons and Secret Lairs (Sealed)](#8-boxes-packs-precons-and-secret-lairs-sealed)
 9. [Tips and questions](#9-tips-and-questions)
 
 ---
@@ -197,7 +197,7 @@ searches and the [Market](#7-what-your-collection-is-worth-market) values.
 
 <img src="images/manual/10-inventory-add-card.png" width="300" alt="Add a single card">
 
-1. Choose how to add: **Single card**, **Paste decklist** or **Import CSV**.
+1. Choose how to add: **Single card**, **Paste decklist**, **Precon / Secret Lair** or **Import CSV**.
 2. Type the card name and pick it from the suggestions.
 3. Pick the **Set**. The list shows every printing, and choosing one fills
    in the collector number (**#**) for you.
@@ -216,6 +216,23 @@ Adding what you paid lets the Market tab show your profit or loss.
 3. Check the preview: you can change quantity, set, condition and so on for
    each row before saving.
 4. Press **Add to inventory**.
+
+### Add a whole precon or Secret Lair
+
+Opened a Commander deck or a Secret Lair drop? Add every card in one go,
+each at its exact printing (set, collector number, foil).
+
+1. Tap **Precon / Secret Lair**.
+2. Start typing the product's name (for example *Virtue and Valor*) and pick
+   it from the list.
+3. Choose the language. **Skip basic lands** is on by default; tick
+   **Include sideboard** if you want the extra cards some decks come with.
+4. Press **Load & preview**. Every card is listed with today's market price
+   already filled in as what you paid. Change any row you like.
+5. Press **Add to inventory**.
+
+A brand-new product can take a few days to appear: the card lists come from
+MTGJSON, which usually publishes them around the release date.
 
 ### Import a file
 
@@ -277,10 +294,10 @@ today's cards, valued at each day's prices.
 
 ---
 
-## 8. Booster boxes and packs (Sealed)
+## 8. Boxes, packs, precons and Secret Lairs (Sealed)
 
-The Sealed tab tracks unopened booster boxes and packs, separately from your
-cards.
+The Sealed tab tracks unopened booster boxes and packs, Commander precons
+and Secret Lairs, separately from your cards.
 
 1. In **Product**, start typing a name (for example *Foundations Play
    Booster Box*) and pick it from the list.
@@ -288,6 +305,11 @@ cards.
    for each one, in **yen or dollars**.
 3. Press **Add to holdings**. The price appears straight away, with about a
    year of history behind it.
+
+When you open a precon or Secret Lair you hold, press **Open** on its row:
+it takes you to the Inventory page with that product ready to add (see
+[Add a whole precon or Secret Lair](#add-a-whole-precon-or-secret-lair)),
+and one unit leaves your sealed holdings when you add the cards.
 
 Press **Watch only** to follow a product's price without owning it. It goes
 in the **Watchlist** below your holdings.
@@ -300,6 +322,7 @@ How a lot is valued depends on its language:
 
 - **English** lots use TCGPlayer's market price (what boxes recently sold for
   in the US).
+- Precons and Secret Lairs always use TCGPlayer's price.
 - **Japanese** lots use the cheapest in-stock Japanese-language box at
   **Hareruya**, **SingleStar** or **Cardshop Serra**. If none has it in
   stock, the English TCGPlayer price is used instead and the lot is marked
@@ -325,7 +348,7 @@ the buttons above the time ranges switch between TCGPlayer and each shop.
 ## 9. Tips and questions
 
 **Why does the first search for a card take a while?**
-The app asks nine shops live. Once a card has been searched, anyone searching
+The app asks eight shops live. Once a card has been searched, anyone searching
 it in the next 24 hours gets the answer instantly.
 
 **Are the prices for English cards?**

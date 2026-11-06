@@ -28,7 +28,7 @@ Repo-specific guidance for coding sessions.
 - `mtgcompare/jobs.py`
   In-memory registry for background import/price-update jobs (`init` /
   `update` / `get` / `find_running`), guarded by a lock. Used by the
-  download + cron routes; not persisted.
+  download, sealed-refresh and cron routes; not persisted.
 - `mtgcompare/pricing/`
   Market + MTGJSON price-history package. The logic is split across three
   modules sharing a small `common` core; `pricing/__init__.py` re-exports

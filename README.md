@@ -47,8 +47,8 @@ Your inventory is stored in `~/Library/Application Support/mtgcompare/inventory.
 - **Use inventory** — check this on a decklist search and already-owned copies are deducted automatically; only the remaining quantity is priced.
 
 ### Inventory
-- Add cards one at a time (Scryfall autocomplete for name and set), paste a decklist, or import a Deckbox/CardCastle CSV.
-- Filter by name (substring match) or purchase price; sort by any column header; paginated for fast loads on large collections.
+- Add cards one at a time (Scryfall autocomplete for name and set), paste a decklist, open a Commander precon or Secret Lair (every card at its exact printing, priced at today's market price), or import a Deckbox/CardCastle CSV.
+- Filter by name (substring match), set, condition or purchase price; sort by any column header; paginated for fast loads on large collections.
 - Page-scoped selection for `Delete selected`, `Export decklist`, `Export CSV`; a "Select all NN matching" banner lets you bulk-delete every row matching the current filter across all pages.
 - In server mode, each user's inventory is isolated by the identity provided by your auth proxy.
 
@@ -58,6 +58,12 @@ Your inventory is stored in `~/Library/Application Support/mtgcompare/inventory.
 - Sort by any column — including derived ones like PnL or market value — and paginate at 25 / 50 / 100 / 200 rows per page.
 - Price history charts show daily price movements per card.
 - Prices are shared across all users; inventory is per-user.
+
+### Sealed products
+- Track booster boxes, packs, Commander precons and Secret Lairs (English or Japanese) separately from your cards, plus a watchlist.
+- English lots are valued at TCGPlayer's market price; Japanese lots at the cheapest in-stock Japanese-language offer at Hareruya, SingleStar or Cardshop Serra, with Hareruya's buylist shown alongside.
+- **Open** a precon or Secret Lair you hold to add its cards to your inventory.
+- Prices refresh daily, with about a year of TCGPlayer history backfilled for each new product.
 
 ### Shops covered
 
@@ -183,28 +189,37 @@ Produces `dist/mtgcompare-windows.zip`. To publish a release, push a `v*` tag:
 git tag vX.Y.Z && git push --tags
 ```
 
-GitHub Actions builds and attaches the zip to the GitHub Release automatically.
+GitHub Actions builds the Windows and macOS zips, attaches them to the GitHub Release, and publishes the Docker image to GHCR.
 
 ### Project layout
 
 ```
 mtgcompare/
-  web.py          Flask layer: routes, middleware, SSE, download-job registry
+  web.py          Flask layer: routes, middleware, SSE transport
   decklist.py     Decklist pricing domain (parse → deduct → fan-out → totals)
+  search.py       Single-card result post-processing (marketplace collapse, shipping sort)
+  jobs.py         In-memory background-job registry
+  meta.py         Data access for the app_meta key/value table
   pricing/        Market + MTGJSON price-history package
-    service.py        orchestration + the /market computation
+    common.py         shared card-identity helpers, price-store factory, MTGJSON fetch
+    import_service.py MTGJSON download, card→UUID mapping, import + daily cron update
+    market_service.py the /market computation + price-history series
     history_store.py  PriceHistoryStore (DuckDB-file vs PostgreSQL backends)
-    history_import.py MTGJSON price history ETL (DuckDB → SQLite or PostgreSQL)
+    history_import.py MTGJSON price history ETL (DuckDB → DuckDB file or PostgreSQL)
     market_repo.py    data access for market_prices + mtgjson_card_map
-    meta.py           data access for the app_meta key/value table
     run_log.py        daily price-update run bookkeeping
   scrapers/       Scraper stack
     base.py           MtgScrapper ABC
-    html_base.py      HtmlSearchScrapper convention base + shared session/error/JSON helpers
+    html_base.py      HtmlSearchScrapper convention base + shared session/error/JSON/FX helpers
     names.py          multi-face-aware card-name matching shared by the shop parsers
+    variants.py       printing-variant tags (borderless, showcase, ...)
+    enrich.py         resolves each listing's printing against Scryfall
+    ocnk.py           listing parser shared by the ocnk.net shops (Card Rush, SingleStar)
     cache.py          CachedScrapper DB-cache wrapper
     registry.py       shop registry (incl. marketplace flag) + collect_prices()
     <shop>.py         per-shop implementations
+  sealed/         Sealed products: MTGJSON catalog, precon decks, TCGPlayer prices,
+                  Japanese shop crawlers, /sealed page computation
   inventory.py    Inventory storage + CSV import (per-user scoping)
   auth.py         WorkOS AuthKit Blueprint (auth gate + login/callback/logout/me + webhook)
   db.py           SQLAlchemy engine + schema (SQLite and PostgreSQL backends)
@@ -220,8 +235,8 @@ docker-compose.yml  Local dev stack (app + postgres)
 
 ### Limitations
 
-- FX is fetched once from the ECB reference rate (Frankfurter, with
-  open.er-api.com as fallback) and cached for the process lifetime.
+- FX is the ECB reference rate (Frankfurter, with open.er-api.com as
+  fallback), re-fetched every 6 hours.
 - Card matching is case-insensitive exact match — fuzzy matching is not supported.
 - Scryfall's USD price reflects TCGPlayer market price, not the cheapest individual listing; the **TCGPlayer → JP** shop covers the listing side, but only for single-card search — marketplace per-card shipping doesn't sum into decklist totals.
 - Shipping is a per-order flat estimate, not a live checkout quote.
