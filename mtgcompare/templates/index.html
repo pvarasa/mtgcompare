@@ -349,6 +349,10 @@
      no-JS fallback that renders a full decklist.html page instead. #}
   <div id="dl-stream-mount"></div>
 
+  {# Single-card results. index-page.js shows them only on the Single card
+     tab and the decklist stream only on the Decklist tab, so one tab's
+     results never sit under the other's. #}
+  <div id="single-results">
   {% if error %}
     <div class="error">{{ error }}</div>
   {% endif %}
@@ -454,6 +458,7 @@
       <div class="empty">No results.</div>
     {% endif %}
   {% endif %}
+  </div>
 
   <script src="{{ url_for('static', filename='searchautocomplete.js') }}?v={{ static_token }}" defer></script>
   <script src="{{ url_for('static', filename='decklist-stream.js') }}?v={{ static_token }}" defer></script>

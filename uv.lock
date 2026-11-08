@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = ">=3.14"
 
 [[package]]
@@ -544,7 +544,7 @@ wheels = [
 
 [[package]]
 name = "mtgcompare"
-version = "1.17.2"
+version = "1.17.3"
 source = { virtual = "." }
 dependencies = [
     { name = "cachetools" },

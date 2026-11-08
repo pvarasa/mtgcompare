@@ -187,3 +187,22 @@ def test_query_filter_tokens_search_the_bare_name_and_preselect(e2e_base_url, pa
     shops = _visible_shops(page)
     assert len(shops) == 2
     assert "TokyoMTG" in shops[0] and "Hareruya" in shops[1]
+
+
+def test_each_tab_shows_only_its_own_results(e2e_base_url, page, stub_search):
+    """A single-card result table must not stay on screen under the
+    Decklist tab (bug report: it never went away after a decklist search),
+    and switching back brings it back."""
+    page.goto(f"{e2e_base_url}/?q=Sol+Ring")
+    single_results = page.locator("#single-results")
+    dl_results = page.locator("#dl-stream-mount")
+    assert single_results.is_visible()
+
+    page.locator("#mode-decklist").click()
+    assert single_results.is_hidden()
+    page.evaluate("document.getElementById('dl-stream-mount').textContent = 'decklist output'")
+    assert dl_results.is_visible()
+
+    page.locator("#mode-single").click()
+    assert single_results.is_visible()
+    assert dl_results.is_hidden()

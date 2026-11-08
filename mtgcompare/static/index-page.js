@@ -11,6 +11,12 @@
     btnDecklist.classList.toggle('active', dl);
     panelSingle.style.display   = dl ? 'none' : '';
     panelDecklist.style.display = dl ? '' : 'none';
+    // Each tab shows only its own results (they'd otherwise stack: a
+    // decklist search streams in above the earlier single-card table).
+    const singleResults = document.getElementById('single-results');
+    const dlResults     = document.getElementById('dl-stream-mount');
+    if (singleResults) singleResults.style.display = dl ? 'none' : '';
+    if (dlResults)     dlResults.style.display     = dl ? '' : 'none';
   }
   btnSingle.addEventListener('click',   () => activate('single'));
   btnDecklist.addEventListener('click', () => activate('decklist'));
