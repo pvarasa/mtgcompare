@@ -1,0 +1,788 @@
+{
+  "pageInfo": {
+    "hasNextPage": false,
+    "endCursor": "eyJsYXN0X2lkIjoxNTY1MzI5NDM3NTA3MiwibGFzdF92YWx1ZSI6IjIwMjYtMDQtMDMgMTA6MTY6MDEuMDAwMDAwIiwib2Zmc2V0Ijo3LCJpZF9zb3J0ZWRfYnkiOiJjcmVhdGVkX2F0In0="
+  },
+  "edges": [
+    {
+      "node": {
+        "title": "Force of Will [Alliances]",
+        "handle": "mtg-force-of-willalliances",
+        "variants": {
+          "edges": [
+            {
+              "node": {
+                "title": "Near Mint",
+                "availableForSale": true,
+                "price": {
+                  "amount": "93.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Lightly Played",
+                "availableForSale": true,
+                "price": {
+                  "amount": "84.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Moderately Played",
+                "availableForSale": true,
+                "price": {
+                  "amount": "75.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Heavily Played",
+                "availableForSale": false,
+                "price": {
+                  "amount": "60.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Damaged",
+                "availableForSale": false,
+                "price": {
+                  "amount": "46.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "node": {
+        "title": "Force of Will [Eternal Masters]",
+        "handle": "mtg-force-of-willeternal-masters",
+        "variants": {
+          "edges": [
+            {
+              "node": {
+                "title": "Near Mint",
+                "availableForSale": true,
+                "price": {
+                  "amount": "88.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Lightly Played",
+                "availableForSale": false,
+                "price": {
+                  "amount": "80.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Moderately Played",
+                "availableForSale": false,
+                "price": {
+                  "amount": "71.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Heavily Played",
+                "availableForSale": false,
+                "price": {
+                  "amount": "57.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Damaged",
+                "availableForSale": false,
+                "price": {
+                  "amount": "44.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Near Mint Foil",
+                "availableForSale": false,
+                "price": {
+                  "amount": "209.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Lightly Played Foil",
+                "availableForSale": false,
+                "price": {
+                  "amount": "188.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Moderately Played Foil",
+                "availableForSale": false,
+                "price": {
+                  "amount": "167.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Heavily Played Foil",
+                "availableForSale": false,
+                "price": {
+                  "amount": "135.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Damaged Foil",
+                "availableForSale": false,
+                "price": {
+                  "amount": "104.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "node": {
+        "title": "Force of Will [Double Masters]",
+        "handle": "force-of-will-double-masters",
+        "variants": {
+          "edges": [
+            {
+              "node": {
+                "title": "Near Mint",
+                "availableForSale": true,
+                "price": {
+                  "amount": "82.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Lightly Played",
+                "availableForSale": false,
+                "price": {
+                  "amount": "74.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Moderately Played",
+                "availableForSale": false,
+                "price": {
+                  "amount": "65.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Heavily Played",
+                "availableForSale": false,
+                "price": {
+                  "amount": "53.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Damaged",
+                "availableForSale": false,
+                "price": {
+                  "amount": "40.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Near Mint Foil",
+                "availableForSale": false,
+                "price": {
+                  "amount": "147.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Lightly Played Foil",
+                "availableForSale": false,
+                "price": {
+                  "amount": "132.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Moderately Played Foil",
+                "availableForSale": false,
+                "price": {
+                  "amount": "117.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Heavily Played Foil",
+                "availableForSale": false,
+                "price": {
+                  "amount": "95.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Damaged Foil",
+                "availableForSale": false,
+                "price": {
+                  "amount": "73.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "node": {
+        "title": "Force of Will [Dominaria Remastered]",
+        "handle": "force-of-will-dominaria-remastered",
+        "variants": {
+          "edges": [
+            {
+              "node": {
+                "title": "Near Mint",
+                "availableForSale": true,
+                "price": {
+                  "amount": "100.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Lightly Played",
+                "availableForSale": false,
+                "price": {
+                  "amount": "90.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Moderately Played",
+                "availableForSale": false,
+                "price": {
+                  "amount": "80.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Heavily Played",
+                "availableForSale": false,
+                "price": {
+                  "amount": "55.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Damaged",
+                "availableForSale": false,
+                "price": {
+                  "amount": "49.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Near Mint Foil",
+                "availableForSale": false,
+                "price": {
+                  "amount": "123.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Lightly Played Foil",
+                "availableForSale": false,
+                "price": {
+                  "amount": "110.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Moderately Played Foil",
+                "availableForSale": false,
+                "price": {
+                  "amount": "98.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Heavily Played Foil",
+                "availableForSale": false,
+                "price": {
+                  "amount": "79.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Damaged Foil",
+                "availableForSale": false,
+                "price": {
+                  "amount": "61.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "node": {
+        "title": "Force of Will (Borderless Alternate Art) [Dominaria Remastered]",
+        "handle": "force-of-will-borderless-alternate-art-dominaria-remastered",
+        "variants": {
+          "edges": [
+            {
+              "node": {
+                "title": "Near Mint",
+                "availableForSale": true,
+                "price": {
+                  "amount": "92.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Lightly Played",
+                "availableForSale": false,
+                "price": {
+                  "amount": "82.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Moderately Played",
+                "availableForSale": false,
+                "price": {
+                  "amount": "73.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Heavily Played",
+                "availableForSale": false,
+                "price": {
+                  "amount": "54.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Damaged",
+                "availableForSale": false,
+                "price": {
+                  "amount": "45.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Near Mint Foil",
+                "availableForSale": true,
+                "price": {
+                  "amount": "121.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Lightly Played Foil",
+                "availableForSale": false,
+                "price": {
+                  "amount": "109.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Moderately Played Foil",
+                "availableForSale": false,
+                "price": {
+                  "amount": "98.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Heavily Played Foil",
+                "availableForSale": false,
+                "price": {
+                  "amount": "88.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Damaged Foil",
+                "availableForSale": false,
+                "price": {
+                  "amount": "71.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "node": {
+        "title": "Force of Will (Retro) [Dominaria Remastered]",
+        "handle": "force-of-will-retro-dominaria-remastered",
+        "variants": {
+          "edges": [
+            {
+              "node": {
+                "title": "Near Mint",
+                "availableForSale": false,
+                "price": {
+                  "amount": "77.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Lightly Played",
+                "availableForSale": false,
+                "price": {
+                  "amount": "69.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Moderately Played",
+                "availableForSale": false,
+                "price": {
+                  "amount": "62.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Heavily Played",
+                "availableForSale": false,
+                "price": {
+                  "amount": "50.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Damaged",
+                "availableForSale": false,
+                "price": {
+                  "amount": "38.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Near Mint Foil",
+                "availableForSale": true,
+                "price": {
+                  "amount": "143.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Lightly Played Foil",
+                "availableForSale": false,
+                "price": {
+                  "amount": "129.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Moderately Played Foil",
+                "availableForSale": false,
+                "price": {
+                  "amount": "115.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Heavily Played Foil",
+                "availableForSale": false,
+                "price": {
+                  "amount": "93.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Damaged Foil",
+                "availableForSale": false,
+                "price": {
+                  "amount": "71.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "node": {
+        "title": "Force of Will [Secrets of Strixhaven: Mystical Archive]",
+        "handle": "force-of-will-secrets-of-strixhaven-mystical-archive",
+        "variants": {
+          "edges": [
+            {
+              "node": {
+                "title": "Near Mint",
+                "availableForSale": true,
+                "price": {
+                  "amount": "88.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Lightly Played",
+                "availableForSale": false,
+                "price": {
+                  "amount": "79.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Moderately Played",
+                "availableForSale": false,
+                "price": {
+                  "amount": "70.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Heavily Played",
+                "availableForSale": false,
+                "price": {
+                  "amount": "57.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Damaged",
+                "availableForSale": false,
+                "price": {
+                  "amount": "43.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Near Mint Foil",
+                "availableForSale": false,
+                "price": {
+                  "amount": "123.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Lightly Played Foil",
+                "availableForSale": false,
+                "price": {
+                  "amount": "110.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Moderately Played Foil",
+                "availableForSale": false,
+                "price": {
+                  "amount": "98.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Heavily Played Foil",
+                "availableForSale": false,
+                "price": {
+                  "amount": "88.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Damaged Foil",
+                "availableForSale": false,
+                "price": {
+                  "amount": "72.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "node": {
+        "title": "Force of Will (Japanese Silver Scroll Foil) [Secrets of Strixhaven: Mystical Archive]",
+        "handle": "force-of-will-jp-alternate-art-silver-scroll-foil-secrets-of-strixhaven-mystical-archive",
+        "variants": {
+          "edges": [
+            {
+              "node": {
+                "title": "Near Mint Foil",
+                "availableForSale": true,
+                "price": {
+                  "amount": "1376.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Lightly Played Foil",
+                "availableForSale": false,
+                "price": {
+                  "amount": "1239.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Moderately Played Foil",
+                "availableForSale": false,
+                "price": {
+                  "amount": "1115.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Heavily Played Foil",
+                "availableForSale": false,
+                "price": {
+                  "amount": "925.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            },
+            {
+              "node": {
+                "title": "Damaged Foil",
+                "availableForSale": false,
+                "price": {
+                  "amount": "711.99",
+                  "currencyCode": "CAD"
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

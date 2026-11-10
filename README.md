@@ -76,6 +76,7 @@ Your inventory is stored in `~/Library/Application Support/mtgcompare/inventory.
 | MINT MALL | 🇯🇵 JP | Price + stock (multi-tenant marketplace). **Paused** since 2026-10-22 while the site is down for a security review |
 | SingleStar | 🇯🇵 JP | Price + stock |
 | TokyoMTG | 🇯🇵 JP | Price + stock |
+| The Mythic Store | 🇨🇦 CA | Price (in stock / sold out, no count). Ships to Japan |
 | TCGPlayer market (via Scryfall) | 🇺🇸 US | Market price (stock not available) |
 | TCGPlayer → JP | 🇺🇸 US | Cheapest NM/LP offers that ship to Japan — item price shown; each offer's real shipping is applied when *Include shipping* is on (single-card search only) |
 

@@ -64,6 +64,11 @@ Repo-specific guidance for coding sessions.
   differently), `ocnk.py` (listing cells of the ocnk.net shop template,
   shared by Card Rush, SingleStar and the sealed SingleStar crawl),
   `cache.py` (`CachedScrapper` DB-cache wrapper),
+  `mythic.py` (The Mythic Store, Canada, CAD: Shopify Storefront GraphQL
+  with the store's public page token, not HTML. Its pages / `.js` / `/search`
+  429 scripts for 30+ minutes; GraphQL didn't. Concurrent lookups that arrive
+  within 0.25 s are merged into one aliased request, so a decklist costs it
+  a few requests, not one per card),
   `registry.py` (the `Shop` NamedTuple registry incl. the `marketplace`
   flag + parallel `collect_prices()` fan-out), and one module per shop.
 - `mtgcompare/sealed/`

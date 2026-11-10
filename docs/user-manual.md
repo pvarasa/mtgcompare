@@ -69,11 +69,11 @@ Swipe the table sideways to see the rest of each row:
 
 | Column | What it means |
 |---|---|
-| **Shop** | Where it's sold. 🇯🇵 = Japanese shop, 🇺🇸 = TCGPlayer (USA) |
+| **Shop** | Where it's sold. 🇯🇵 = Japanese shop, 🇺🇸 = TCGPlayer (USA), 🇨🇦 = The Mythic Store (Canada, ships to Japan) |
 | **Set** | The set code (e.g. `DMR` = Dominaria Remastered) |
 | **¥ / $** | The price in yen and in dollars |
 | **Stock** | How many copies the shop has (— when the shop doesn't say) |
-| **Cond** | Condition. Japanese shops are always NM (near mint) |
+| **Cond** | Condition. Japanese shops and The Mythic Store are always NM (near mint) |
 | **Link** | **open** takes you to the shop's page to buy it |
 
 Tap the small card icon next to the set to see the card itself:
@@ -126,8 +126,8 @@ that's still showing.
 
 1. Tick **Include shipping**.
 2. Each shop shows how much one order's shipping costs. ¥385 for Japanese
-   shops and ¥2,000 for TCGPlayer are guesses; change them to what you
-   actually pay. TCGPlayer → JP uses each seller's real shipping, so there's
+   shops, ¥1,000 for The Mythic Store and ¥2,000 for TCGPlayer are guesses;
+   change them to what you actually pay. TCGPlayer → JP uses each seller's real shipping, so there's
    nothing to set.
 
 Search again and the list is sorted by **price + shipping**, with a

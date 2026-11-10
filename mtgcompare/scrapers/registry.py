@@ -11,6 +11,7 @@ from .cardrush import CardRushScrapper
 from .enrich import EnrichingScrapper
 from .hareruya import HareruyaScrapper
 from .mintmall import MintMallScrapper
+from .mythic import MythicStoreScrapper
 from .scryfall import ScryfallScrapper
 from .serra import CardshopSerraScrapper
 from .singlestar import SingleStarScrapper
@@ -19,6 +20,7 @@ from .tokyomtg import TokyoMtgScrapper
 
 _JP_FLAG = "\U0001F1EF\U0001F1F5"
 _US_FLAG = "\U0001F1FA\U0001F1F8"
+_CA_FLAG = "\U0001F1E8\U0001F1E6"
 
 # JP shops: domestic tracked rates (ネコポス / クリックポスト equivalent, ~¥385).
 # TCGPlayer: international from US to JP. Realistic landed cost via the
@@ -27,6 +29,9 @@ _US_FLAG = "\U0001F1FA\U0001F1F8"
 # the 2024 estimate and was understating the shipping line item.
 _DEFAULT_JP_SHIPPING = 385
 _DEFAULT_INTL_SHIPPING = 2000
+# The Mythic Store (Quebec) → Japan: ChitChats Select, CA$8.95 for one card
+# in a cart quote on 2026-11-10 (≈¥1,000 at the day's rate).
+_MYTHIC_SHIPPING = 1000
 
 
 class Shop(NamedTuple):
@@ -59,6 +64,7 @@ _SHOPS: list[Shop] = [
     Shop("Card Rush",        _JP_FLAG, _DEFAULT_JP_SHIPPING,   True,  False, lambda fx: CardRushScrapper(fx=fx)),
     Shop("Cardshop Serra",   _JP_FLAG, _DEFAULT_JP_SHIPPING,   True,  False, lambda fx: CardshopSerraScrapper(fx=fx)),
     Shop("BLACK FROG",       _JP_FLAG, _DEFAULT_JP_SHIPPING,   True,  False, lambda fx: BlackFrogScrapper(fx=fx)),
+    Shop("The Mythic Store", _CA_FLAG, _MYTHIC_SHIPPING,       True,  False, lambda fx: MythicStoreScrapper(fx=fx)),
     # MINT MALL is disabled while its own site is down: since 2026-10-22
     # 10:00 JST every URL answers 503 with a maintenance page announcing a
     # service-wide suspension for a security review, end date undecided

@@ -12,6 +12,7 @@ from mtgcompare.scrapers.blackfrog import BlackFrogScrapper
 from mtgcompare.scrapers.cardrush import CardRushScrapper
 from mtgcompare.scrapers.hareruya import HareruyaScrapper
 from mtgcompare.scrapers.mintmall import MintMallScrapper
+from mtgcompare.scrapers.mythic import MythicStoreScrapper
 from mtgcompare.scrapers.scryfall import ScryfallScrapper
 from mtgcompare.scrapers.serra import CardshopSerraScrapper
 from mtgcompare.scrapers.singlestar import SingleStarScrapper
@@ -47,6 +48,7 @@ _SHOPS = [
     pytest.param(CardshopSerraScrapper,   "Cardshop Serra",      "https://cardshop-serra.com/",  id="serra"),
     pytest.param(BlackFrogScrapper,       "BLACK FROG",          "https://blackfrog.jp/",        id="blackfrog"),
     pytest.param(MintMallScrapper,        "MINT MALL",           "https://www.mint-mall.net/",   id="mintmall"),
+    pytest.param(MythicStoreScrapper,     "The Mythic Store",    "https://themythicstore.com/products/", id="mythic"),
     pytest.param(ScryfallScrapper,        "TCGPlayer market",    "http",                         id="scryfall"),
     pytest.param(TcgPlayerJpScrapper,     "TCGPlayer → JP",      "https://www.tcgplayer.com/product/", id="tcgplayer_jp"),
 ]

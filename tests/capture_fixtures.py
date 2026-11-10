@@ -17,14 +17,17 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import orjson
 import requests
 
 from mtgcompare.scrapers.blackfrog import BlackFrogScrapper
 from mtgcompare.scrapers.cardrush import CardRushScrapper
 from mtgcompare.scrapers.hareruya import UNISEARCH_API, UNISEARCH_LAZY
 from mtgcompare.scrapers.hareruya import make_session as hareruya_session
-from mtgcompare.scrapers.html_base import HtmlSearchScrapper
+from mtgcompare.scrapers.html_base import HtmlSearchScrapper, ScraperFetchError
 from mtgcompare.scrapers.mintmall import MintMallScrapper
+from mtgcompare.scrapers.mythic import _search_many as mythic_search_many
+from mtgcompare.scrapers.mythic import search_query as mythic_search_query
 from mtgcompare.scrapers.scryfall import SEARCH_URL as SCRYFALL_SEARCH_URL
 from mtgcompare.scrapers.scryfall import make_session as scryfall_session
 from mtgcompare.scrapers.serra import CardshopSerraScrapper
@@ -98,6 +101,14 @@ def capture_scryfall() -> None:
     print(f"  Scryfall /cards/search: {n} printings")
 
 
+def capture_mythic() -> None:
+    query = mythic_search_query(CARD)
+    connection = mythic_search_many([query])[query]
+    path = FIXTURES / "mythic_force_of_will.json"
+    path.write_bytes(orjson.dumps(connection, option=orjson.OPT_INDENT_2))
+    print(f"  The Mythic Store GraphQL: {len(connection.get('edges') or [])} products")
+
+
 def main() -> int:
     """Captures each shop and skips (with a warning) on transport failures
     — a single down shop shouldn't block the rest of the refresh."""
@@ -121,6 +132,12 @@ def main() -> int:
         capture_hareruya()
     except requests.RequestException as exc:
         print(f"  Hareruya: SKIPPED — {exc}")
+
+    print("The Mythic Store:")
+    try:
+        capture_mythic()
+    except (requests.RequestException, ScraperFetchError) as exc:
+        print(f"  The Mythic Store: SKIPPED — {exc}")
 
     print("Scryfall:")
     try:
