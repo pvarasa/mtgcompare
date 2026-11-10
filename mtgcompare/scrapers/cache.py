@@ -127,13 +127,14 @@ def read_listings(conn, shop: str, card_name: str) -> list[dict]:
 
     Raises ``StaleListings`` for rows without a ``variant``: written by a
     release that didn't know the column (stg and prod share this table), so
-    they'd render every printing as unknown until the TTL ran out.
+    they'd render every printing as unknown until the TTL ran out. Likewise
+    for marketplace rows (``ship_jpy`` set) without a ``seller``.
     """
     rows = conn.execute(
         text(
             "SELECT card_display, set_code, condition,"
             "       price_jpy, price_usd, ship_jpy, stock, url,"
-            "       variant, card_number"
+            "       variant, card_number, seller"
             " FROM shop_listings"
             " WHERE shop = :shop AND card_name = :card"
         ),
@@ -143,6 +144,9 @@ def read_listings(conn, shop: str, card_name: str) -> list[dict]:
     for r in rows:
         if r[8] is None:
             raise StaleListings(f"{shop} {card_name!r}")
+        if r[5] is not None and r[10] is None:
+            # A marketplace offer cached before rows named their seller.
+            raise StaleListings(f"{shop} {card_name!r} (no seller)")
         record = {
             "shop": shop,
             "card": r[0],
@@ -159,6 +163,7 @@ def read_listings(conn, shop: str, card_name: str) -> list[dict]:
         # fresh-scrape shape by omitting the key entirely otherwise.
         if r[5] is not None:
             record["ship_jpy"] = float(r[5])
+            record["seller"] = r[10]
         out.append(record)
     return out
 
@@ -203,6 +208,8 @@ def replace_listings(
         "price_jpy": r["price_jpy"],
         "price_usd": r.get("price_usd"),
         "ship_jpy": r.get("ship_jpy"),
+        "seller": r.get("seller") if r.get("seller") is not None
+                  else ("" if r.get("ship_jpy") is not None else None),
         "variant": _UNKNOWN_VARIANT if r.get("variant") is None else r["variant"],
         "card_number": r.get("number"),
         "stock": r.get("stock"),

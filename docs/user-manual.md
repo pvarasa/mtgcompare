@@ -59,9 +59,12 @@ the next 24 hours.
 
 <img src="images/manual/02-search-results.png" width="300" alt="Search results">
 
-Every row is one copy you can buy. The list is sorted by price, cheapest first.
+Every row is one copy you can buy, except *TCGPlayer market*, which is marked
+**reference** (see *What's the difference between "TCGPlayer market" and
+"TCGPlayer → JP"?* in the FAQ).
+The list is sorted by price, cheapest first.
 
-1. The top row has the **cheapest** badge. That's the best price.
+1. The first copy you can buy has the **cheapest** badge. That's the best price.
 2. **Version** tells you which printing it is: *Regular*, *Borderless*,
    *Old frame*, *Full art*… with the collector number underneath (`#418`).
 
@@ -357,11 +360,20 @@ TCGPlayer → JP shows near-mint or lightly-played English copies that ship to
 Japan.
 
 **What's the difference between "TCGPlayer market" and "TCGPlayer → JP"?**
-*TCGPlayer market* is the typical US price, a reference point, not a copy you
-can buy from Japan. *TCGPlayer → JP* is the cheapest real offer from a seller
-who ships to Japan, with that seller's shipping. To keep searches fast it only
-checks the cheapest few printings of each card, so expensive versions (full
-art and the like) may not show up there.
+*TCGPlayer market* is the average of recent sales in the US. It's marked
+**reference** and never gets the *cheapest* badge, because nobody sells at that
+price to Japan: sellers who ship here usually ask more, plus $12–20 shipping.
+Its link says **view**, and the page it opens won't show that price. It isn't
+counted in decklist totals either.
+
+*TCGPlayer → JP* is the cheapest real offer from a seller who ships to Japan.
+The row names the seller (*sold by …*) and shows their shipping under the
+price (*+ ¥3,157 ship*). TCGPlayer's page puts its own pick at the top (the
+cheapest *with* shipping, often a different seller), so look for the named
+seller in the listings. Turn on **Include shipping** to compare by total
+cost instead. To keep searches fast it only checks the cheapest few printings
+of each card, so expensive versions (full art and the like) may not show up
+there.
 
 **Why is a version shown as "?"?**
 The shop doesn't say which version it is. See

@@ -42,6 +42,9 @@ class Shop(NamedTuple):
     enabled: bool      # False = known but not scraped; kept so cached rows still render
     marketplace: bool  # records carry the offer's own ship_jpy; skipped by decklist pricing
     factory: Callable[[float], MtgScrapper]
+    # The price is a reference, not an offer anyone can buy at: shown
+    # labelled as such, never badged "cheapest", kept out of decklist totals.
+    reference: bool = False
 
 
 # Single source of truth: every known shop. Derived dicts/lists below stay in
@@ -56,7 +59,12 @@ _SHOPS: list[Shop] = [
     Shop("Hareruya",         _JP_FLAG, _DEFAULT_JP_SHIPPING,   True,  False, lambda fx: HareruyaScrapper(fx=fx)),
     # Renamed from "TCGPlayer (Scryfall)" in v1.9 — shop_listings /
     # shop_query_log rows under the old name are inert and can be purged.
-    Shop("TCGPlayer market", _US_FLAG, _DEFAULT_INTL_SHIPPING, True,  False, lambda fx: ScryfallScrapper(fx=fx)),
+    # Scryfall's prices.usd: TCGPlayer's average of recent US sales. From
+    # Japan the offers that ship cost more, plus $12-20 shipping (Mistrise
+    # Village 2026-11: market $6.34, cheapest NM shipping to JP $6.77 +
+    # $19.99), so it is a reference line, not a shop.
+    Shop("TCGPlayer market", _US_FLAG, _DEFAULT_INTL_SHIPPING, True,  False, lambda fx: ScryfallScrapper(fx=fx),
+         reference=True),
     # Cheapest listing that actually ships to Japan.
     Shop("TCGPlayer → JP",   _US_FLAG, 0,                      True,  True,  lambda fx: TcgPlayerJpScrapper(fx=fx)),
     Shop("SingleStar",       _JP_FLAG, _DEFAULT_JP_SHIPPING,   True,  False, lambda fx: SingleStarScrapper(fx=fx)),
@@ -87,6 +95,9 @@ ACTIVE_SHOPS: list[str] = [s.name for s in _SHOPS if s.enabled]
 # See the marketplace column above: ¥0-pinned shipping (already in the
 # price) + excluded from decklist pricing.
 MARKETPLACE_SHOPS: frozenset[str] = frozenset(s.name for s in _SHOPS if s.marketplace)
+
+# See the reference column above.
+REFERENCE_SHOPS: frozenset[str] = frozenset(s.name for s in _SHOPS if s.reference)
 
 
 def shop_slug(name: str) -> str:

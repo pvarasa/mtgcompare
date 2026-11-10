@@ -206,3 +206,28 @@ def test_each_tab_shows_only_its_own_results(e2e_base_url, page, stub_search):
     page.locator("#mode-single").click()
     assert single_results.is_visible()
     assert dl_results.is_hidden()
+
+
+def test_the_cheapest_badge_skips_reference_prices_after_filtering(e2e_base_url, page, monkeypatch):
+    """resultfilters.js re-badges the first visible row; a reference price
+    (TCGPlayer market) sorting first must not get it, same as the server."""
+    from mtgcompare import web as web_module
+    base = {"card": "Force of Will", "price_usd": 1.0, "stock": 1, "condition": "NM",
+            "link": "https://example.test/", "number": None}
+    rows = [
+        {**base, "shop": "TCGPlayer market", "set": "DMR", "variant": "", "price_jpy": 9000.0},
+        {**base, "shop": "Hareruya", "set": "DMR", "variant": "", "price_jpy": 14000.0},
+        {**base, "shop": "Card Rush", "set": "2XM", "variant": "", "price_jpy": 15000.0},
+    ]
+    monkeypatch.setattr(web_module, "collect_prices", lambda name, fx, **kw: [dict(r) for r in rows])
+    monkeypatch.setattr(web_module, "_get_fx", lambda: 150.0)
+
+    page.goto(f"{e2e_base_url}/?q=Force+of+Will")
+    shops = _visible_shops(page)
+    assert "TCGPlayer market" in shops[0] and "cheapest" not in shops[0]
+    assert "cheapest" in shops[1]
+
+    page.locator("[data-filter-set]").select_option("DMR")
+    shops = _visible_shops(page)
+    assert len(shops) == 2
+    assert "cheapest" not in shops[0] and "cheapest" in shops[1]

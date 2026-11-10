@@ -210,3 +210,51 @@ def test_get_fx_refetches_after_ttl_and_keeps_last_rate_on_failure(monkeypatch):
     assert web._get_fx() == 150.0          # refresh failed → last good rate
     clock["t"] += web._FX_RETRY_S + 1
     assert web._get_fx() == 152.0          # retried after the back-off
+
+
+def _honesty_rows():
+    base = {"card": "Mistrise Village", "set": "TDM", "number": "261", "variant": "",
+            "condition": "NM", "link": "https://example.test/"}
+    return [
+        {**base, "shop": "TCGPlayer market", "price_jpy": 1001.0, "price_usd": 6.34,
+         "stock": None},
+        {**base, "shop": "TCGPlayer → JP", "price_jpy": 1069.0, "price_usd": 6.77,
+         "ship_jpy": 3157.0, "seller": "CITY Cards N More", "stock": 1},
+        {**base, "shop": "Hareruya", "price_jpy": 2000.0, "price_usd": 12.66, "stock": 3},
+    ]
+
+
+def _search_page(monkeypatch, query: str) -> str:
+    monkeypatch.setattr(web, "_get_fx", lambda: 158.0)
+    monkeypatch.setattr(web, "collect_prices", lambda name, fx, **kw: [dict(r) for r in _honesty_rows()])
+    with web.app.test_client() as client:
+        resp = client.get(query)
+    assert resp.status_code == 200
+    return resp.get_data(as_text=True)
+
+
+def _row(html: str, shop: str) -> str:
+    start = html.index(f"</span>{shop}")
+    return html[html.rfind("<tr", 0, start):html.index("</tr>", start)]
+
+
+def test_a_reference_price_is_labelled_and_never_badged_cheapest(monkeypatch):
+    """The market average sorts first but can't be bought: the badge goes
+    to the first real offer, and the row says what it is."""
+    html = _search_page(monkeypatch, "/?q=Mistrise+Village")
+    market = _row(html, "TCGPlayer market")
+    assert 'class="ref-tag"' in market and "cheapest" not in market
+    assert ">view</a>" in market and ">open</a>" not in market
+    assert "cheapest" in _row(html, "TCGPlayer → JP")
+
+
+def test_a_marketplace_offer_shows_its_seller_and_shipping(monkeypatch):
+    """With shipping off the price stays the item price, but the row still
+    says what the seller charges to Japan and who the seller is, so the
+    user can find that listing on TCGPlayer's page."""
+    off = _row(_search_page(monkeypatch, "/?q=Mistrise+Village"), "TCGPlayer → JP")
+    assert "sold by CITY Cards N More" in off
+    assert "+ ¥3,157 ship" in off
+    on = _row(_search_page(monkeypatch, "/?q=Mistrise+Village&shipping=1"), "TCGPlayer → JP")
+    assert "ship</div>" not in on  # the w/ship column carries it instead
+    assert "¥4,226" in on

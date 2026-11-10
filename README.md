@@ -77,8 +77,8 @@ Your inventory is stored in `~/Library/Application Support/mtgcompare/inventory.
 | SingleStar | 🇯🇵 JP | Price + stock |
 | TokyoMTG | 🇯🇵 JP | Price + stock |
 | The Mythic Store | 🇨🇦 CA | Price (in stock / sold out, no count). Ships to Japan |
-| TCGPlayer market (via Scryfall) | 🇺🇸 US | Market price (stock not available) |
-| TCGPlayer → JP | 🇺🇸 US | Cheapest NM/LP offers that ship to Japan — item price shown; each offer's real shipping is applied when *Include shipping* is on (single-card search only) |
+| TCGPlayer market (via Scryfall) | 🇺🇸 US | US average sale price, shown as a **reference**: never badged cheapest, not in decklist totals |
+| TCGPlayer → JP | 🇺🇸 US | Cheapest NM/LP offers that ship to Japan, with the seller's name and their shipping shown on the row; that shipping is added to the sort when *Include shipping* is on (single-card search only) |
 
 Prices are shown in both ¥ and $ using a live FX rate fetched at startup. Results are scoped to English printings.
 
@@ -239,7 +239,7 @@ docker-compose.yml  Local dev stack (app + postgres)
 - FX is the ECB reference rate (Frankfurter, with open.er-api.com as
   fallback), re-fetched every 6 hours.
 - Card matching is case-insensitive exact match — fuzzy matching is not supported.
-- Scryfall's USD price reflects TCGPlayer market price, not the cheapest individual listing; the **TCGPlayer → JP** shop covers the listing side, but only for single-card search — marketplace per-card shipping doesn't sum into decklist totals.
+- Scryfall's USD price reflects TCGPlayer market price, not the cheapest individual listing, so it is shown as a reference only; the **TCGPlayer → JP** shop covers the listing side, but only for single-card search — marketplace per-card shipping doesn't sum into decklist totals.
 - Shipping is a per-order flat estimate, not a live checkout quote.
 - Tax, import duties, and cross-shop order splitting are not modeled.
 - Cached prices age out after 24 h, but FX drift inside that window can introduce 1–2 % error on the USD column. The JPY column is always exactly what the shop charged at scrape time.

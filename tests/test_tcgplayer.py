@@ -20,12 +20,13 @@ def _page(listings: list[dict]) -> dict:
     return {"results": [{"totalResults": len(listings), "results": listings}]}
 
 
-def _listing(price, ship, condition="Near Mint", quantity=1):
+def _listing(price, ship, condition="Near Mint", quantity=1, seller="CITY Cards N More"):
     return {
         "price": price,
         "shippingPrice": ship,
         "condition": condition,
         "quantity": quantity,
+        "sellerName": seller,
     }
 
 
@@ -102,11 +103,22 @@ def test_build_record_keeps_item_price_and_shipping_separate():
         "price_jpy": round(13.76 * 150.0, 2),
         "price_usd": 13.76,
         "ship_jpy": round(1.99 * 150.0, 2),
+        "seller": "CITY Cards N More",
         "stock": 7,
         "condition": "LP",
         "link": "https://www.tcgplayer.com/product/552336"
                 "?Language=English&Printing=Normal&Condition=Lightly+Played",
     }
+
+
+def test_build_record_names_the_seller_even_when_unknown():
+    """The product page features its own pick, so the row has to say
+    whose listing it priced; a missing name is "", not None."""
+    listing = _listing(6.77, 19.99)
+    del listing["sellerName"]
+    r = build_record(listing, card_name="Mistrise Village", set_code="TDM",
+                     product_id=624267, fx_jpy_per_usd=150.0)
+    assert r["seller"] == ""
 
 
 def test_build_record_passes_through_unknown_condition():

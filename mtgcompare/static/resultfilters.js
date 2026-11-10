@@ -60,7 +60,9 @@
       tr.hidden = !ok;
       if (ok) {
         shown += 1;
-        if (!first) first = tr;
+        // A reference price (an average of sales) can't be bought, so it
+        // never gets the "cheapest" badge — same rule as index.html.
+        if (!first && !tr.dataset.reference) first = tr;
       }
     });
     moveCheapestBadge(first);

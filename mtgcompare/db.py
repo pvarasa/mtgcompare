@@ -212,6 +212,10 @@ _shop_listings = Table(
     # Per-offer seller shipping (marketplace shops). NULL means "no
     # per-offer shipping known — use the flat per-shop estimate".
     Column("ship_jpy", Numeric(12, 2)),
+    # The offer's seller (marketplace shops; "" = the shop didn't say).
+    # NULL on a row with ship_jpy marks one written before the column
+    # existed — the cache treats it as stale.
+    Column("seller", Text),
     # Printing treatment (scrapers.variants tags; "" = regular, "?" =
     # unknown) and collector number. NULL variant marks a row written
     # before the column existed — the cache treats it as stale.
@@ -370,6 +374,7 @@ _ADDED_COLUMNS = (
     ("shop_listings", "ship_jpy", "NUMERIC(12,2)"),
     ("shop_listings", "variant", "TEXT"),
     ("shop_listings", "card_number", "TEXT"),
+    ("shop_listings", "seller", "TEXT"),
     ("sealed_products", "contents", "TEXT"),
 )
 

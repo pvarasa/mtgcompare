@@ -87,12 +87,20 @@ def test_iter_decklist_prices_drops_marketplace_shops():
     list(decklist.iter_decklist_prices(
         ["x"], {"x": "X"}, fx=150.0, enabled_shops=None, collect=fake_collect,
     ))
-    assert captured["enabled"] == set(ACTIVE_SHOPS) - MARKETPLACE_SHOPS
+    assert captured["enabled"] == set(ACTIVE_SHOPS) - MARKETPLACE_SHOPS - {"TCGPlayer market"}
 
     # Explicit selection that includes a marketplace shop: still dropped.
     list(decklist.iter_decklist_prices(
         ["x"], {"x": "X"}, fx=150.0,
         enabled_shops={"Hareruya", "TCGPlayer → JP"}, collect=fake_collect,
+    ))
+    assert captured["enabled"] == {"Hareruya"}
+
+    # A reference price (TCGPlayer market) isn't an offer, so a basket of
+    # them isn't a buyable order total either.
+    list(decklist.iter_decklist_prices(
+        ["x"], {"x": "X"}, fx=150.0,
+        enabled_shops={"Hareruya", "TCGPlayer market"}, collect=fake_collect,
     ))
     assert captured["enabled"] == {"Hareruya"}
 

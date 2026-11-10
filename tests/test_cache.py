@@ -107,6 +107,27 @@ class TestStorage:
         by_set = {r["set"]: r for r in rows_out}
         assert by_set["2X2"]["ship_jpy"] == 299.0
         assert "ship_jpy" not in by_set["MMQ"]
+        # A marketplace offer always says whose it is ("" = unknown).
+        assert by_set["2X2"]["seller"] == ""
+        assert "seller" not in by_set["MMQ"]
+
+    def test_seller_round_trips(self, test_db):
+        rows_in = [{**_record(set_code="TDM"), "ship_jpy": 3100.0, "seller": "ThatCardThatSpiked"}]
+        with test_db.get_conn() as conn:
+            replace_listings(conn, "FakeShop", "mistrise village", rows_in)
+        with test_db.get_conn() as conn:
+            (row,) = read_listings(conn, "FakeShop", "mistrise village")
+        assert row["seller"] == "ThatCardThatSpiked"
+
+    def test_marketplace_rows_without_a_seller_are_stale(self, test_db):
+        """Offers cached by a release that didn't record the seller would
+        render without one until the TTL ran out — refetch instead."""
+        rows_in = [{**_record(set_code="TDM"), "ship_jpy": 3100.0}]
+        with test_db.get_conn() as conn:
+            replace_listings(conn, "FakeShop", "mistrise village", rows_in)
+            conn.execute(text("UPDATE shop_listings SET seller = NULL"))
+        with test_db.get_conn() as conn, pytest.raises(cache_module.StaleListings):
+            read_listings(conn, "FakeShop", "mistrise village")
 
     def test_replace_evicts_old_rows(self, test_db):
         with test_db.get_conn() as conn:

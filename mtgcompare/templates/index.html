@@ -182,6 +182,20 @@
   .printing-filter .filter-note { color: var(--muted); font-size: .78rem; }
   .version-unknown { color: var(--muted); cursor: help; }
   .version-number { color: var(--muted); font-size: .8rem; }
+  /* A reference price (an average of sales) is shown, never sold. */
+  #results-table tr.reference td { color: var(--muted); }
+  .ref-tag {
+    display: inline-block;
+    margin-left: .4rem;
+    padding: .05rem .4rem;
+    font-size: .72rem;
+    border: 1px dashed var(--muted);
+    border-radius: 4px;
+    color: var(--muted);
+    cursor: help;
+  }
+  .offer-note { color: var(--muted); font-size: .75rem; font-weight: normal; }
+  .results-note { color: var(--muted); font-size: .8rem; margin: .5rem 0 0; }
 
   /* Search progress indicator — visible only while the form is submitting. */
   .search-loading {
@@ -300,12 +314,12 @@
         </label>
         <span data-shop-filter-summary style="font-size:.8rem; color:var(--muted);"></span>
       </div>
-      {# Marketplace shops are skipped by decklist pricing, so their
-         checkbox is hidden from this form only — the single-card form
+      {# Marketplace and reference shops are skipped by decklist pricing, so
+         their checkbox is hidden from this form only — the single-card form
          above keeps it. #}
       <div class="shop-filter" data-shop-filter-panel
            {% if not shop_filter_active %}style="display:none"{% endif %}>
-        {% for s in shop_filter_config if s.shop not in marketplace_shops %}
+        {% for s in shop_filter_config if s.shop not in marketplace_shops and s.shop not in reference_shops %}
           <label>
             <input type="checkbox" name="shop_{{ s.slug }}" value="1"
                    data-shop-filter-checkbox
@@ -421,14 +435,25 @@
           </tr>
         </thead>
         <tbody>
+          {# "cheapest" goes to the first row you can actually buy: a reference
+             price (an average of sales) never wins it. resultfilters.js
+             re-applies the same rule when the filters hide rows. #}
+          {% set badge = namespace(given=false) %}
           {% for r in results %}
-            <tr class="{% if loop.first %}cheapest{% endif %}"
+            {% set is_ref = r.shop in reference_shops %}
+            {% set is_cheapest = not is_ref and not badge.given %}
+            {% if is_cheapest %}{% set badge.given = true %}{% endif %}
+            {% set offer_ship = r.get('ship_jpy') if r.shop in marketplace_shops else none %}
+            <tr class="{% if is_cheapest %}cheapest{% endif %}{% if is_ref %} reference{% endif %}"
                 data-set="{{ r.set }}"
                 data-variant="{{ '?' if r.variant is none else r.variant }}"
-                data-number="{{ r.number or '' }}">
+                data-number="{{ r.number or '' }}"
+                {% if is_ref %}data-reference="1"{% endif %}>
               <td>
                 <span class="flag">{{ shop_flags.get(r.shop, '') }}</span>{{ r.shop }}
-                {% if loop.first %}<span class="badge">cheapest</span>{% endif %}
+                {% if is_ref %}<span class="ref-tag" title="Average of recent TCGPlayer sales in the US, not an offer you can buy. Copies that ship to Japan usually cost more, plus shipping.">reference</span>{% endif %}
+                {% if is_cheapest %}<span class="badge">cheapest</span>{% endif %}
+                {% if r.get('seller') %}<div class="offer-note">sold by {{ r.seller }}</div>{% endif %}
               </td>
               <td>{{ card_icon(card_name, r.set) }}{{ r.set }}</td>
               <td>
@@ -439,7 +464,11 @@
                 {% endif %}
                 {% if r.number %}<span class="version-number">#{{ r.number }}</span>{% endif %}
               </td>
-              <td class="num">¥{{ '{:,.0f}'.format(r.price_jpy) }}</td>
+              <td class="num">¥{{ '{:,.0f}'.format(r.price_jpy) }}
+                {% if not include_shipping and offer_ship is not none %}
+                  <div class="offer-note" title="This seller's shipping to Japan, charged on top">+ ¥{{ '{:,.0f}'.format(offer_ship) }} ship</div>
+                {% endif %}
+              </td>
               {% if include_shipping %}
                 <td class="num"
                     title="+ ¥{{ '{:,.0f}'.format(r.ship_jpy) }} shipping ({{ 'this offer’s actual rate' if r.shop in marketplace_shops else 'flat ¥/order estimate' }})">
@@ -448,12 +477,21 @@
               <td class="num">${{ '%.2f'|format(r.price_usd) }}</td>
               <td class="num">{{ r.stock if r.stock is not none else "—" }}</td>
               <td>{{ r.condition }}</td>
-              <td><a href="{{ r.link }}" target="_blank" rel="noopener noreferrer">open</a></td>
+              <td>
+                {% if is_ref %}
+                  <a href="{{ r.link }}" target="_blank" rel="noopener noreferrer" title="TCGPlayer's product page. Its prices won't match this average.">view</a>
+                {% else %}
+                  <a href="{{ r.link }}" target="_blank" rel="noopener noreferrer">open</a>
+                {% endif %}
+              </td>
             </tr>
           {% endfor %}
         </tbody>
       </table>
       </div>
+      {% if results|selectattr('shop', 'in', marketplace_shops)|list %}
+        <p class="results-note">TCGPlayer → JP is the cheapest copy that ships to Japan, from the seller named in the row. TCGPlayer's page puts its own pick at the top (the cheapest with shipping, often another seller), so look for that seller in the listings.</p>
+      {% endif %}
     {% else %}
       <div class="empty">No results.</div>
     {% endif %}

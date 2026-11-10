@@ -48,6 +48,7 @@ from .scrapers import variants
 from .scrapers.registry import (
     ACTIVE_SHOPS,
     MARKETPLACE_SHOPS,
+    REFERENCE_SHOPS,
     SHIPPING_JPY,
     SHOP_FLAGS,
     collect_prices,
@@ -299,6 +300,7 @@ def _manual_price_update_refused():
 # decklist form hides their shop-filter checkbox. (Their shipping-override
 # rows are already absent everywhere via _shipping_config.)
 app.jinja_env.globals["marketplace_shops"] = MARKETPLACE_SHOPS
+app.jinja_env.globals["reference_shops"] = REFERENCE_SHOPS
 app.jinja_env.filters["variant_label"] = variants.label
 
 

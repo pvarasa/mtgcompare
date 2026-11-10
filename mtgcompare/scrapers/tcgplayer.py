@@ -176,6 +176,10 @@ def build_record(
         "price_jpy": to_jpy(price_usd, fx_jpy_per_usd),
         "price_usd": round(price_usd, 2),
         "ship_jpy": to_jpy(ship_usd, fx_jpy_per_usd),
+        # The product page's buy box features its own pick (cheapest landed
+        # price, often a TCGplayer Direct seller), so the row names the
+        # seller: without it the user can't find the listing we priced.
+        "seller": listing.get("sellerName") or "",
         "stock": int(qty) if isinstance(qty, int | float) else None,
         "condition": _CONDITION_ABBR.get(condition, condition),
         "link": link,

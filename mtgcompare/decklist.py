@@ -43,6 +43,7 @@ from time import monotonic
 from .scrapers.registry import (
     ACTIVE_SHOPS,
     MARKETPLACE_SHOPS,
+    REFERENCE_SHOPS,
     SHIPPING_JPY,
     SHOP_FLAGS,
     collect_prices,
@@ -124,10 +125,12 @@ def effective_search_shops(enabled_shops: set[str] | None) -> set[str]:
 
     Marketplace shops are dropped even when the form selected them: their
     per-card landed prices (item + that seller's shipping) don't sum to
-    an order total. ``None`` means the default "all shops on" search.
+    an order total. Reference shops too: a basket of average sale prices
+    isn't something anyone can buy. ``None`` means the default "all shops
+    on" search.
     """
     base = set(ACTIVE_SHOPS) if enabled_shops is None else enabled_shops
-    return base - MARKETPLACE_SHOPS
+    return base - MARKETPLACE_SHOPS - REFERENCE_SHOPS
 
 
 def strip_basic_lands(

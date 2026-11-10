@@ -206,6 +206,16 @@ The `users` table is keyed on `workos_user_id`; inventory rows continue to key o
   shipping). `price_jpy` is the item price like every other shop; the offer's
   own seller shipping rides along as `ship_jpy` (persisted in
   `shop_listings.ship_jpy`).
+  **Honesty rule:** every price row is either an offer the user can find
+  at that price or is labelled as a reference. The `reference` flag in
+  `registry._SHOPS` (derived set: `REFERENCE_SHOPS`, Jinja global
+  `reference_shops`) marks TCGPlayer market: it renders a "reference" tag
+  and a "view" link, never gets the "cheapest" badge (template +
+  `static/resultfilters.js`), and decklist pricing skips it. TCGPlayer → JP
+  rows name the seller (`seller`, persisted in `shop_listings.seller`; a
+  cached offer without it is stale) and always show their shipping,
+  because TCGPlayer's buy box features a different listing (cheapest
+  landed, often a Direct seller) than our cheapest-item offer.
   Both shops resolve printings through the same memoized Scryfall lookup
   (`scryfall.fetch_card_summaries`) so one search costs one Scryfall pagination.
 - The `marketplace` flag in `registry._SHOPS` (derived set: `MARKETPLACE_SHOPS`)
