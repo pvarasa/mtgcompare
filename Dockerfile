@@ -10,7 +10,7 @@
 # reach this image — there is no apt-get upgrade below):
 #   docker manifest inspect python:3.14-slim | head
 # then update BOTH FROM lines together.
-FROM python:3.14-slim@sha256:930e1abba7c4e8f96ed93e8012c35d174d7732752731bbd5e8e757d7ec6f3966 AS builder
+FROM python:3.14-slim@sha256:9aaa474097d094040649f2162a627c0049b408f52138d980916788d80f04802f AS builder
 
 # uv from its official image, pinned like the base: `pip install uv` took
 # whatever PyPI served at build time.
@@ -22,7 +22,7 @@ RUN uv sync --frozen --no-dev --no-group desktop
 
 # ── runtime ──────────────────────────────────────────────────────────────────
 # Same digest as the builder stage above — keep them in lockstep.
-FROM python:3.14-slim@sha256:930e1abba7c4e8f96ed93e8012c35d174d7732752731bbd5e8e757d7ec6f3966
+FROM python:3.14-slim@sha256:9aaa474097d094040649f2162a627c0049b408f52138d980916788d80f04802f
 
 # Run as a non-root user. UID matches the deployment manifest's
 # securityContext.runAsUser so volume permissions line up.
