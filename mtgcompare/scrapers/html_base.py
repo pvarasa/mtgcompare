@@ -286,6 +286,12 @@ class HtmlSearchScrapper(MtgScrapper):
     def search_params(self, card_name: str) -> dict:
         return {self.SEARCH_PARAM_NAME: card_name}
 
+    def query_variants(self, card_name: str) -> list[str]:
+        """Search terms to try in order until one yields records. Override
+        for a shop that spells multi-face names its own way (BIGWEB's
+        ``Fire+Ice``)."""
+        return query_variants(card_name)
+
     def decode_response(self, resp: requests.Response) -> str | bytes:
         """Default: return the raw response bytes, skipping the
         ``resp.text`` decode (which would allocate a second copy of the
@@ -303,7 +309,7 @@ class HtmlSearchScrapper(MtgScrapper):
         t0 = monotonic()
         records: list[dict] = []
         pages = 0
-        for query in query_variants(card_name):
+        for query in self.query_variants(card_name):
             records, n = self._collect_pages(query, card_name)
             pages += n
             if records:

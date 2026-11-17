@@ -20,6 +20,7 @@ from typing import Any
 import orjson
 import requests
 
+from mtgcompare.scrapers.bigweb import BigwebScrapper
 from mtgcompare.scrapers.blackfrog import BlackFrogScrapper
 from mtgcompare.scrapers.cardrush import CardRushScrapper
 from mtgcompare.scrapers.hareruya import UNISEARCH_API, UNISEARCH_LAZY
@@ -113,6 +114,7 @@ def main() -> int:
     """Captures each shop and skips (with a warning) on transport failures
     — a single down shop shouldn't block the rest of the refresh."""
     convention_shops: list[tuple[type[HtmlSearchScrapper], str]] = [
+        (BigwebScrapper,          "bigweb_force_of_will.json"),
         (BlackFrogScrapper,       "blackfrog_force_of_will.html"),
         (CardRushScrapper,        "cardrush_force_of_will.html"),
         (MintMallScrapper,        "mintmall_force_of_will.html"),

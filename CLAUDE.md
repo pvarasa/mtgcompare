@@ -69,6 +69,11 @@ Repo-specific guidance for coding sessions.
   429 scripts for 30+ minutes; GraphQL didn't. Concurrent lookups that arrive
   within 0.25 s are merged into one aliased request, so a decklist costs it
   a few requests, not one per card),
+  `bigweb.py` (BIGWEB / BIG MAGIC, JP: the `api.bigweb.co.jp/products`
+  JSON API its own app reads — the `mtg.bigweb.co.jp` storefront is behind
+  a Cloudflare challenge, the API isn't, from Japan or the Helsinki
+  cluster. Filters English + non-foil NM server-side; split cards are
+  queried as `Fire+Ice`),
   `registry.py` (the `Shop` NamedTuple registry incl. the `marketplace`
   flag + parallel `collect_prices()` fan-out), and one module per shop.
 - `mtgcompare/sealed/`

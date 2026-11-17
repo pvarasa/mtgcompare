@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor, wait
 from typing import NamedTuple
 
 from .base import MtgScrapper
+from .bigweb import BigwebScrapper
 from .blackfrog import BlackFrogScrapper
 from .cache import DEFAULT_TTL, CachedScrapper
 from .cardrush import CardRushScrapper
@@ -72,6 +73,7 @@ _SHOPS: list[Shop] = [
     Shop("Card Rush",        _JP_FLAG, _DEFAULT_JP_SHIPPING,   True,  False, lambda fx: CardRushScrapper(fx=fx)),
     Shop("Cardshop Serra",   _JP_FLAG, _DEFAULT_JP_SHIPPING,   True,  False, lambda fx: CardshopSerraScrapper(fx=fx)),
     Shop("BLACK FROG",       _JP_FLAG, _DEFAULT_JP_SHIPPING,   True,  False, lambda fx: BlackFrogScrapper(fx=fx)),
+    Shop("BIGWEB",           _JP_FLAG, _DEFAULT_JP_SHIPPING,   True,  False, lambda fx: BigwebScrapper(fx=fx)),
     Shop("The Mythic Store", _CA_FLAG, _MYTHIC_SHIPPING,       True,  False, lambda fx: MythicStoreScrapper(fx=fx)),
     # MINT MALL is disabled while its own site is down: since 2026-10-22
     # 10:00 JST every URL answers 503 with a maintenance page announcing a

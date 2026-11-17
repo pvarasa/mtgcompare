@@ -72,6 +72,7 @@ Your inventory is stored in `~/Library/Application Support/mtgcompare/inventory.
 | Hareruya | 🇯🇵 JP | Price + stock + condition |
 | Cardshop Serra | 🇯🇵 JP | Price + stock |
 | BLACK FROG | 🇯🇵 JP | Price |
+| BIGWEB | 🇯🇵 JP | Price + stock (BIG MAGIC's web shop, via its JSON API) |
 | Card Rush | 🇯🇵 JP | Price + stock |
 | MINT MALL | 🇯🇵 JP | Price + stock (multi-tenant marketplace). **Paused** since 2026-10-22 while the site is down for a security review |
 | SingleStar | 🇯🇵 JP | Price + stock |
