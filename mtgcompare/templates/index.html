@@ -180,21 +180,62 @@
     .printing-filter .chip:hover { border-color: var(--gold); color: var(--gold); }
   }
   .printing-filter .filter-note { color: var(--muted); font-size: .78rem; }
-  .version-unknown { color: var(--muted); cursor: help; }
+  /* Tap/click-to-explain markers. A title tooltip alone never shows on
+     touch screens, and the help cursor promised a click that did nothing,
+     so these are <details>: native toggle, keyboard-accessible, no JS. */
+  .explain { display: inline; }
+  .explain > summary {
+    display: inline-block;
+    list-style: none;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .explain > summary::-webkit-details-marker { display: none; }
+  .explain > summary:focus-visible { outline: 1px solid var(--gold); outline-offset: 2px; }
+  .explain > .explain-text {
+    display: block;
+    /* The table scrolls sideways on phones; a narrow column would stack
+       the text one word per line. */
+    min-width: 12rem;
+    max-width: 18rem;
+    margin-top: .25rem;
+    color: var(--muted);
+    font-size: .75rem;
+    font-weight: normal;
+    white-space: normal;
+  }
+  .version-unknown { color: var(--muted); }
+  .version-unknown > summary {
+    border-bottom: 1px dotted var(--muted);
+    padding: 0 .15rem;
+  }
   .version-number { color: var(--muted); font-size: .8rem; }
   /* A reference price (an average of sales) is shown, never sold. */
   #results-table tr.reference td { color: var(--muted); }
-  .ref-tag {
-    display: inline-block;
-    margin-left: .4rem;
+  .ref-tag { margin-left: .4rem; }
+  .ref-tag > summary {
     padding: .05rem .4rem;
     font-size: .72rem;
     border: 1px dashed var(--muted);
     border-radius: 4px;
     color: var(--muted);
-    cursor: help;
+  }
+  .ref-tag[open] > summary { border-style: solid; }
+  /* Drawn, not a glyph: "ⓘ" is missing from the page font (renders as a box). */
+  .explain-icon {
+    display: inline-block;
+    width: .95em;
+    height: .95em;
+    margin-left: .15rem;
+    border: 1px solid currentColor;
+    border-radius: 50%;
+    font-size: .85em;
+    line-height: .9em;
+    text-align: center;
+    vertical-align: .05em;
   }
   .offer-note { color: var(--muted); font-size: .75rem; font-weight: normal; }
+  td.num .offer-note { white-space: nowrap; }
   .results-note { color: var(--muted); font-size: .8rem; margin: .5rem 0 0; }
 
   /* Search progress indicator — visible only while the form is submitting. */
@@ -451,14 +492,22 @@
                 {% if is_ref %}data-reference="1"{% endif %}>
               <td>
                 <span class="flag">{{ shop_flags.get(r.shop, '') }}</span>{{ r.shop }}
-                {% if is_ref %}<span class="ref-tag" title="Average of recent TCGPlayer sales in the US, not an offer you can buy. Copies that ship to Japan usually cost more, plus shipping.">reference</span>{% endif %}
+                {% if is_ref %}
+                  <details class="explain ref-tag">
+                    <summary title="What does this mean?">reference <span class="explain-icon" aria-hidden="true">?</span></summary>
+                    <span class="explain-text">The average of recent TCGPlayer sales in the US, not an offer you can buy. Sellers who ship to Japan usually ask more, plus shipping, so TCGPlayer's page won't show this price.</span>
+                  </details>
+                {% endif %}
                 {% if is_cheapest %}<span class="badge">cheapest</span>{% endif %}
                 {% if r.get('seller') %}<div class="offer-note">sold by {{ r.seller }}</div>{% endif %}
               </td>
               <td>{{ card_icon(card_name, r.set) }}{{ r.set }}</td>
               <td>
                 {% if r.variant is none %}
-                  <span class="version-unknown" title="This shop doesn’t say which version this is">?</span>
+                  <details class="explain version-unknown">
+                    <summary title="What does this mean?">?</summary>
+                    <span class="explain-text">This shop doesn’t say which version this is. Open its page to check before buying.</span>
+                  </details>
                 {% else %}
                   {{ r.variant|variant_label }}
                 {% endif %}

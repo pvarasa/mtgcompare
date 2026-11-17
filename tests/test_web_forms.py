@@ -243,7 +243,9 @@ def test_a_reference_price_is_labelled_and_never_badged_cheapest(monkeypatch):
     to the first real offer, and the row says what it is."""
     html = _search_page(monkeypatch, "/?q=Mistrise+Village")
     market = _row(html, "TCGPlayer market")
-    assert 'class="ref-tag"' in market and "cheapest" not in market
+    assert 'class="explain ref-tag"' in market and "cheapest" not in market
+    # The explanation is in the page, behind a tap — not a hover-only title.
+    assert "not an offer you can buy" in market
     assert ">view</a>" in market and ">open</a>" not in market
     assert "cheapest" in _row(html, "TCGPlayer → JP")
 

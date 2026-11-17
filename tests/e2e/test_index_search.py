@@ -231,3 +231,28 @@ def test_the_cheapest_badge_skips_reference_prices_after_filtering(e2e_base_url,
     shops = _visible_shops(page)
     assert len(shops) == 2
     assert "cheapest" not in shops[0] and "cheapest" in shops[1]
+
+
+def test_reference_and_unknown_markers_explain_themselves_on_click(e2e_base_url, page, monkeypatch):
+    """Both markers looked clickable but only had a hover title, which
+    never shows on touch screens. Clicking now reveals the explanation."""
+    from mtgcompare import web as web_module
+    base = {"card": "Force of Will", "price_usd": 1.0, "stock": 1, "condition": "NM",
+            "link": "https://example.test/", "number": None}
+    rows = [
+        {**base, "shop": "TCGPlayer market", "set": "DMR", "variant": "", "price_jpy": 9000.0},
+        {**base, "shop": "TokyoMTG", "set": "DMR", "variant": None, "price_jpy": 14000.0},
+    ]
+    monkeypatch.setattr(web_module, "collect_prices", lambda name, fx, **kw: [dict(r) for r in rows])
+    monkeypatch.setattr(web_module, "_get_fx", lambda: 150.0)
+    page.goto(f"{e2e_base_url}/?q=Force+of+Will")
+
+    ref_text = page.locator(".ref-tag .explain-text")
+    assert not ref_text.is_visible()
+    page.locator(".ref-tag summary").click()
+    assert ref_text.is_visible() and "not an offer you can buy" in ref_text.inner_text()
+
+    unknown_text = page.locator(".version-unknown .explain-text")
+    assert not unknown_text.is_visible()
+    page.locator(".version-unknown summary").click()
+    assert unknown_text.is_visible()
