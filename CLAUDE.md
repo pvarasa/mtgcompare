@@ -73,7 +73,13 @@ Repo-specific guidance for coding sessions.
   JSON API its own app reads — the `mtg.bigweb.co.jp` storefront is behind
   a Cloudflare challenge, the API isn't, from Japan or the Helsinki
   cluster. Filters English + non-foil NM server-side; split cards are
-  queried as `Fire+Ice`),
+  queried as `Fire+Ice`, as at Nukenin and Azumaya: `SPLIT_JOINER`),
+  `nukenin.py` (EC-CUBE 4; condition/price/stock come from the page's
+  `eccube.productsClassCategories` JSON, not the HTML. Slow: ~14 s a search
+  from the cluster, so capped at 4 requests in flight),
+  `azumaya.py` (EC-CUBE 3; listings carry no set, so each English NM match
+  costs one product-page fetch for its code (`DMR-0050E`) and categories,
+  remembered per process by product id),
   `registry.py` (the `Shop` NamedTuple registry incl. the `marketplace`
   flag + parallel `collect_prices()` fan-out), and one module per shop.
 - `mtgcompare/sealed/`

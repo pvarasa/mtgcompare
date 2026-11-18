@@ -72,10 +72,21 @@ def matched_name(listing_name: str, card_name: str) -> str | None:
     return None
 
 
-def query_variants(card_name: str) -> list[str]:
+def query_variants(card_name: str, split_joiner: str | None = None) -> list[str]:
     """Search terms to try in order: the name as given, then — for a
     ``Front // Back`` name — the front face alone, which the keyword search
-    of shops that only list the front face needs to find anything."""
+    of shops that only list the front face needs to find anything.
+
+    ``split_joiner`` adds the faces joined that way before the front face,
+    for shops that list split cards as ``Fire+Ice`` (BIGWEB, Nukenin,
+    Azumaya): there the ``//`` spelling finds nothing and the front face
+    alone ("Fire") matches hundreds of other cards.
+    """
     name = card_name.strip()
-    front = name.split("//", 1)[0].strip()
-    return [name, front] if front and front != name else [name]
+    faces = [f.strip() for f in name.split("//")]
+    queries = [name]
+    if split_joiner is not None and len(faces) > 1 and all(faces):
+        queries.append(split_joiner.join(faces))
+    if faces[0] and faces[0] != name:
+        queries.append(faces[0])
+    return queries

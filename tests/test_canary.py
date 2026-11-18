@@ -8,12 +8,14 @@ Run:  uv run pytest -m canary
 import pytest
 import requests
 
+from mtgcompare.scrapers.azumaya import AzumayaScrapper
 from mtgcompare.scrapers.bigweb import BigwebScrapper
 from mtgcompare.scrapers.blackfrog import BlackFrogScrapper
 from mtgcompare.scrapers.cardrush import CardRushScrapper
 from mtgcompare.scrapers.hareruya import HareruyaScrapper
 from mtgcompare.scrapers.mintmall import MintMallScrapper
 from mtgcompare.scrapers.mythic import MythicStoreScrapper
+from mtgcompare.scrapers.nukenin import NukeninScrapper
 from mtgcompare.scrapers.scryfall import ScryfallScrapper
 from mtgcompare.scrapers.serra import CardshopSerraScrapper
 from mtgcompare.scrapers.singlestar import SingleStarScrapper
@@ -39,6 +41,10 @@ _PROBE_CARD_BY_SHOP = {
     "MINT MALL": "Sol Ring",
     "SingleStar": "Swords to Plowshares",
     "BLACK FROG": "Swords to Plowshares",
+    # Small shops: 3-4 English NM Force of Will copies on 2026-11-18,
+    # against 8-16 Lightning Bolts.
+    "Nukenin": "Lightning Bolt",
+    "Azumaya": "Lightning Bolt",
 }
 
 _SHOPS = [
@@ -49,6 +55,8 @@ _SHOPS = [
     pytest.param(CardshopSerraScrapper,   "Cardshop Serra",      "https://cardshop-serra.com/",  id="serra"),
     pytest.param(BlackFrogScrapper,       "BLACK FROG",          "https://blackfrog.jp/",        id="blackfrog"),
     pytest.param(BigwebScrapper,          "BIGWEB",              "https://www.bigweb.co.jp/ja/products/mtg/cardViewer/", id="bigweb"),
+    pytest.param(NukeninScrapper,         "Nukenin",             "https://nukeninmtg.com/products/detail/", id="nukenin"),
+    pytest.param(AzumayaScrapper,         "Azumaya",             "https://azumayamtg.com/products/detail/", id="azumaya"),
     pytest.param(MintMallScrapper,        "MINT MALL",           "https://www.mint-mall.net/",   id="mintmall"),
     pytest.param(MythicStoreScrapper,     "The Mythic Store",    "https://themythicstore.com/products/", id="mythic"),
     pytest.param(ScryfallScrapper,        "TCGPlayer market",    "http",                         id="scryfall"),

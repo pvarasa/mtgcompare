@@ -20,6 +20,9 @@ from typing import Any
 import orjson
 import requests
 
+from mtgcompare.scrapers.azumaya import DETAIL_URL as AZUMAYA_DETAIL_URL
+from mtgcompare.scrapers.azumaya import AzumayaScrapper
+from mtgcompare.scrapers.azumaya import parse_search_html as azumaya_listings
 from mtgcompare.scrapers.bigweb import BigwebScrapper
 from mtgcompare.scrapers.blackfrog import BlackFrogScrapper
 from mtgcompare.scrapers.cardrush import CardRushScrapper
@@ -29,6 +32,7 @@ from mtgcompare.scrapers.html_base import HtmlSearchScrapper, ScraperFetchError
 from mtgcompare.scrapers.mintmall import MintMallScrapper
 from mtgcompare.scrapers.mythic import _search_many as mythic_search_many
 from mtgcompare.scrapers.mythic import search_query as mythic_search_query
+from mtgcompare.scrapers.nukenin import NukeninScrapper
 from mtgcompare.scrapers.scryfall import SEARCH_URL as SCRYFALL_SEARCH_URL
 from mtgcompare.scrapers.scryfall import make_session as scryfall_session
 from mtgcompare.scrapers.serra import CardshopSerraScrapper
@@ -110,6 +114,19 @@ def capture_mythic() -> None:
     print(f"  The Mythic Store GraphQL: {len(connection.get('edges') or [])} products")
 
 
+def capture_azumaya() -> None:
+    """The search page, plus the product page of each English NM listing
+    it yields (the set is only on those)."""
+    scraper = AzumayaScrapper(fx=150.0)
+    _capture_html_shop(scraper, "azumaya_force_of_will.html")
+    listings = azumaya_listings((FIXTURES / "azumaya_force_of_will.html").read_bytes(), CARD)
+    for listing in listings:
+        resp = scraper.session.get(AZUMAYA_DETAIL_URL.format(id=listing.product_id), timeout=20)
+        resp.raise_for_status()
+        (FIXTURES / f"azumaya_detail_{listing.product_id}.html").write_bytes(resp.content)
+    print(f"  Azumaya: {len(listings)} product pages")
+
+
 def main() -> int:
     """Captures each shop and skips (with a warning) on transport failures
     — a single down shop shouldn't block the rest of the refresh."""
@@ -118,6 +135,7 @@ def main() -> int:
         (BlackFrogScrapper,       "blackfrog_force_of_will.html"),
         (CardRushScrapper,        "cardrush_force_of_will.html"),
         (MintMallScrapper,        "mintmall_force_of_will.html"),
+        (NukeninScrapper,         "nukenin_force_of_will.html"),
         (CardshopSerraScrapper,   "serra_force_of_will.html"),
         (SingleStarScrapper,      "singlestar_force_of_will.html"),
         (TokyoMtgScrapper,        "tokyomtg_force_of_will.html"),
@@ -128,6 +146,12 @@ def main() -> int:
             _capture_html_shop(cls(fx=150.0), fname)
         except requests.RequestException as exc:
             print(f"  {cls.SHOP_NAME}: SKIPPED — {exc}")
+
+    print("Azumaya:")
+    try:
+        capture_azumaya()
+    except requests.RequestException as exc:
+        print(f"  Azumaya: SKIPPED — {exc}")
 
     print("Hareruya:")
     try:

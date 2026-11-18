@@ -61,7 +61,6 @@ import orjson
 
 from .html_base import HtmlSearchScrapper, ScraperFetchError, to_usd
 from .names import matched_name
-from .names import query_variants as default_query_variants
 from .variants import OTHER, encode, normalize_number, tags_from_markers
 
 SHOP_NAME = "BIGWEB"
@@ -198,6 +197,7 @@ class BigwebScrapper(HtmlSearchScrapper):
     SESSION_HEADERS = {"Accept": "application/json"}
     PAGE_PARAM = "page"
     MAX_PAGES = 3
+    SPLIT_JOINER = "+"
 
     def search_params(self, card_name: str) -> dict:
         return {
@@ -206,13 +206,6 @@ class BigwebScrapper(HtmlSearchScrapper):
             "lang": f"[{ENGLISH}]",
             "condition": f"[{NEAR_MINT}]",
         }
-
-    def query_variants(self, card_name: str) -> list[str]:
-        queries = default_query_variants(card_name)
-        faces = [f.strip() for f in card_name.split("//")]
-        if len(faces) > 1 and all(faces):
-            queries.insert(1, "+".join(faces))
-        return queries
 
     def _has_next_page(self, body: str | bytes, page: int) -> bool:
         raw = body.encode() if isinstance(body, str) else body

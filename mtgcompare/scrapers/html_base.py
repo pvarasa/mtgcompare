@@ -243,6 +243,9 @@ class HtmlSearchScrapper(MtgScrapper):
     # Query parameter carrying the 1-based page number; None = single page.
     PAGE_PARAM: ClassVar[str | None] = None
     MAX_PAGES: ClassVar[int] = 3
+    # How the shop joins a split card's faces ("+" for "Fire+Ice"); tried
+    # between the full name and the front face. None = not tried.
+    SPLIT_JOINER: ClassVar[str | None] = None
     # Pacing for shops that 429 bursts; None / 0.0 = unlimited.
     MAX_CONCURRENT: ClassVar[int | None] = None
     MIN_INTERVAL_S: ClassVar[float] = 0.0
@@ -287,10 +290,8 @@ class HtmlSearchScrapper(MtgScrapper):
         return {self.SEARCH_PARAM_NAME: card_name}
 
     def query_variants(self, card_name: str) -> list[str]:
-        """Search terms to try in order until one yields records. Override
-        for a shop that spells multi-face names its own way (BIGWEB's
-        ``Fire+Ice``)."""
-        return query_variants(card_name)
+        """Search terms to try in order until one yields records."""
+        return query_variants(card_name, self.SPLIT_JOINER)
 
     def decode_response(self, resp: requests.Response) -> str | bytes:
         """Default: return the raw response bytes, skipping the

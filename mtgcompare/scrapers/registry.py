@@ -4,6 +4,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, wait
 from typing import NamedTuple
 
+from .azumaya import AzumayaScrapper
 from .base import MtgScrapper
 from .bigweb import BigwebScrapper
 from .blackfrog import BlackFrogScrapper
@@ -13,6 +14,7 @@ from .enrich import EnrichingScrapper
 from .hareruya import HareruyaScrapper
 from .mintmall import MintMallScrapper
 from .mythic import MythicStoreScrapper
+from .nukenin import NukeninScrapper
 from .scryfall import ScryfallScrapper
 from .serra import CardshopSerraScrapper
 from .singlestar import SingleStarScrapper
@@ -74,6 +76,8 @@ _SHOPS: list[Shop] = [
     Shop("Cardshop Serra",   _JP_FLAG, _DEFAULT_JP_SHIPPING,   True,  False, lambda fx: CardshopSerraScrapper(fx=fx)),
     Shop("BLACK FROG",       _JP_FLAG, _DEFAULT_JP_SHIPPING,   True,  False, lambda fx: BlackFrogScrapper(fx=fx)),
     Shop("BIGWEB",           _JP_FLAG, _DEFAULT_JP_SHIPPING,   True,  False, lambda fx: BigwebScrapper(fx=fx)),
+    Shop("Nukenin",          _JP_FLAG, _DEFAULT_JP_SHIPPING,   True,  False, lambda fx: NukeninScrapper(fx=fx)),
+    Shop("Azumaya",          _JP_FLAG, _DEFAULT_JP_SHIPPING,   True,  False, lambda fx: AzumayaScrapper(fx=fx)),
     Shop("The Mythic Store", _CA_FLAG, _MYTHIC_SHIPPING,       True,  False, lambda fx: MythicStoreScrapper(fx=fx)),
     # MINT MALL is disabled while its own site is down: since 2026-10-22
     # 10:00 JST every URL answers 503 with a maintenance page announcing a
