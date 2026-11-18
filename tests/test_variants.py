@@ -355,3 +355,20 @@ def test_full_art_borderless_and_extended_are_interchangeable_but_old_frame_is_n
     rec = {"shop": "Card Rush", "set": "DMR", "number": None, "variant": "fullart"}
     [out] = enrich_records([rec], printings)
     assert (out["number"], out["variant"]) == ("418", "borderless")
+
+
+def test_a_number_the_card_does_not_have_in_that_set_is_dropped():
+    """Azumaya numbers unnumbered old sets its own way: its Alliances Force
+    of Will is "42", Scryfall's is 28. The row resolves as if unnumbered
+    instead of showing a number that isn't this card's."""
+    printings = [{"set": "ALL", "set_name": "Alliances", "number": "28", "variant": ""}]
+    rec = {"shop": "Azumaya", "set": "ALL", "number": "42", "variant": None}
+    [out] = enrich_records([rec], printings)
+    assert (out["number"], out["variant"]) == ("28", "")
+
+    # Several printings in the set: the bad number is still dropped, and
+    # nothing is guessed.
+    printings += [{"set": "ALL", "set_name": "Alliances", "number": "28b", "variant": "other"}]
+    rec = {"shop": "Azumaya", "set": "ALL", "number": "42", "variant": None}
+    [out] = enrich_records([rec], printings)
+    assert (out["number"], out["variant"]) == (None, None)

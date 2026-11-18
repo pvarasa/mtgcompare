@@ -170,8 +170,9 @@ def enrich_records(records: list[dict], printings: list[dict]) -> list[dict]:
 
     ``printings`` are ``scryfall.summarize_page`` summaries (``set``,
     ``set_name``, ``number``, ``variant``). A record is matched to one
-    printing by set + collector number, or — without a number — by being
-    the only printing in its set that fits the shop's own tags. A match
+    printing by set + collector number, or — without a number, or with one
+    no printing of the card in that set has, which is then dropped — by
+    being the only printing in its set that fits the shop's own tags. A match
     supplies the number and *replaces* the shop's tags with Scryfall's,
     which are consistent across shops where the shops' own are not;
     several candidates that agree on the treatment still settle the tags.
@@ -192,9 +193,15 @@ def enrich_records(records: list[dict], printings: list[dict]) -> list[dict]:
         candidates = by_set[code]
         shop_tags = decode(r.get("variant"))
         number = r.get("number")
-        if number is not None:
-            matches = [c for c in candidates if c["number"] == number]
-        else:
+        matches = [c for c in candidates if c["number"] == number] if number is not None else []
+        if number is not None and not matches:
+            # No printing of this card in this set has that number, so it
+            # isn't this card's number: shops number unnumbered old sets
+            # their own way (Azumaya's Alliances Force of Will is "42",
+            # Scryfall's 28). Showing it would be wrong; match as if the
+            # shop had given none.
+            number = r["number"] = None
+        if number is None:
             matches = _pick(candidates, shop_tags)
         if len(matches) == 1:
             r["number"] = matches[0]["number"]
