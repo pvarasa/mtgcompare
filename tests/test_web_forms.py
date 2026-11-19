@@ -224,9 +224,9 @@ def _honesty_rows():
     ]
 
 
-def _search_page(monkeypatch, query: str) -> str:
+def _search_page(monkeypatch, fake_shops, query: str) -> str:
     monkeypatch.setattr(web, "_get_fx", lambda: 158.0)
-    monkeypatch.setattr(web, "collect_prices", lambda name, fx, **kw: [dict(r) for r in _honesty_rows()])
+    fake_shops(_honesty_rows())
     with web.app.test_client() as client:
         resp = client.get(query)
     assert resp.status_code == 200
@@ -238,10 +238,10 @@ def _row(html: str, shop: str) -> str:
     return html[html.rfind("<tr", 0, start):html.index("</tr>", start)]
 
 
-def test_a_reference_price_is_labelled_and_never_badged_cheapest(monkeypatch):
+def test_a_reference_price_is_labelled_and_never_badged_cheapest(monkeypatch, fake_shops):
     """The market average sorts first but can't be bought: the badge goes
     to the first real offer, and the row says what it is."""
-    html = _search_page(monkeypatch, "/?q=Mistrise+Village")
+    html = _search_page(monkeypatch, fake_shops, "/?q=Mistrise+Village")
     market = _row(html, "TCGPlayer market")
     assert 'class="explain ref-tag"' in market and "cheapest" not in market
     # The explanation is in the page, behind a tap — not a hover-only title.
@@ -250,13 +250,74 @@ def test_a_reference_price_is_labelled_and_never_badged_cheapest(monkeypatch):
     assert "cheapest" in _row(html, "TCGPlayer → JP")
 
 
-def test_a_marketplace_offer_shows_its_seller_and_shipping(monkeypatch):
+def test_a_marketplace_offer_shows_its_seller_and_shipping(monkeypatch, fake_shops):
     """With shipping off the price stays the item price, but the row still
     says what the seller charges to Japan and who the seller is, so the
     user can find that listing on TCGPlayer's page."""
-    off = _row(_search_page(monkeypatch, "/?q=Mistrise+Village"), "TCGPlayer → JP")
+    off = _row(_search_page(monkeypatch, fake_shops, "/?q=Mistrise+Village"), "TCGPlayer → JP")
     assert "sold by CITY Cards N More" in off
     assert "+ ¥3,157 ship" in off
-    on = _row(_search_page(monkeypatch, "/?q=Mistrise+Village&shipping=1"), "TCGPlayer → JP")
+    on = _row(_search_page(monkeypatch, fake_shops, "/?q=Mistrise+Village&shipping=1"), "TCGPlayer → JP")
     assert "ship</div>" not in on  # the w/ship column carries it instead
     assert "¥4,226" in on
+
+
+def _slow_search(monkeypatch, fake_shops, rows, delays, query="/?q=Mistrise+Village"):
+    """A search whose ``delays`` shops miss the first paint."""
+    from mtgcompare.scrapers import registry
+    monkeypatch.setattr(web, "SEARCH_FIRST_PAINT_S", 0.05)
+    monkeypatch.setattr(registry, "SHOP_QUERY_TIMEOUT_S", 2.0)
+    monkeypatch.setattr(web, "_get_fx", lambda: 158.0)
+    fake_shops(rows, delays)
+    return web.app.test_client().get(query)
+
+
+def test_slow_shops_stream_their_rows_after_the_first_paint(monkeypatch, fake_shops):
+    base = {"card": "Mistrise Village", "set": "TDM", "number": "261", "variant": "",
+            "condition": "NM", "link": "https://example.test/", "price_usd": 1.0, "stock": 1}
+    rows = [{**base, "shop": "Hareruya", "price_jpy": 2000.0},
+            {**base, "shop": "Nukenin", "price_jpy": 1500.0, "set": "OTJ"}]
+    resp = _slow_search(monkeypatch, fake_shops, rows, {"Nukenin": 0.3})
+    assert resp.status_code == 200
+    assert resp.headers["X-Accel-Buffering"] == "no"
+    html = resp.get_data(as_text=True)
+
+    first_paint, _, streamed = html.partition("<template data-late ")
+    # The page went out with Hareruya and a "still searching" line ...
+    assert 'data-pending-shop="Nukenin"' in first_paint
+    assert "</span>Hareruya" in first_paint and "</span>Nukenin" not in first_paint
+    # ... then Nukenin's row, with the filters recomputed over both shops,
+    # then the end of the stream and of the document.
+    assert 'data-shop="Nukenin"' in streamed and "</span>Nukenin" in streamed
+    assert 'data-sort="1500.0"' in streamed
+    assert '<option value="OTJ">OTJ (1)</option>' in streamed
+    assert "data-late-done" in streamed and "Partial results" not in streamed
+    assert html.rstrip().endswith("</html>")
+
+
+def test_a_shop_that_never_answers_is_reported_at_the_end_of_the_stream(monkeypatch, fake_shops):
+    from mtgcompare.scrapers import registry
+    base = {"card": "Mistrise Village", "set": "TDM", "number": "261", "variant": "",
+            "condition": "NM", "link": "https://example.test/", "price_usd": 1.0, "stock": 1}
+    monkeypatch.setattr(web, "SEARCH_FIRST_PAINT_S", 0.05)
+    monkeypatch.setattr(registry, "SHOP_QUERY_TIMEOUT_S", 0.2)
+    monkeypatch.setattr(web, "_get_fx", lambda: 158.0)
+    fake_shops([{**base, "shop": "Hareruya", "price_jpy": 2000.0}], {"Nukenin": 1.0})
+    html = web.app.test_client().get("/?q=Mistrise+Village").get_data(as_text=True)
+    done = html[html.index("data-late-done"):]
+    assert "Partial results" in done and "Nukenin" in done
+
+
+def test_a_search_with_no_rows_yet_hides_the_table_until_they_arrive(monkeypatch, fake_shops):
+    monkeypatch.setattr(web, "SEARCH_FIRST_PAINT_S", 0.05)
+    monkeypatch.setattr(web, "_get_fx", lambda: 158.0)
+    fake_shops([], {"Nukenin": 0.2})
+    html = web.app.test_client().get("/?q=Mistrise+Village").get_data(as_text=True)
+    first_paint = html.partition("<template data-late ")[0]
+    assert '<div class="table-scroll" hidden>' in first_paint
+    assert "data-results-empty hidden" in first_paint  # not "No results" yet
+
+
+def test_a_search_every_shop_answers_in_time_is_not_streamed(monkeypatch, fake_shops):
+    html = _search_page(monkeypatch, fake_shops, "/?q=Mistrise+Village")
+    assert "data-late-status" not in html and "<template data-late" not in html

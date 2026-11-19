@@ -35,6 +35,47 @@ def _reset_shop_throttles():
         cls._THROTTLE.reset()
 
 
+class _FakeShop:
+    """Stands in for a wrapped shop under the real fan-out: answers with
+    its rows after ``delay`` seconds."""
+
+    def __init__(self, shop_name: str, rows: list[dict], delay: float, seen: list[str]):
+        self.shop_name, self.rows, self.delay, self.seen = shop_name, rows, delay, seen
+
+    def get_prices(self, card_name):
+        import time
+        self.seen.append(card_name)
+        time.sleep(self.delay)
+        return [dict(r) for r in self.rows]
+
+
+@pytest.fixture
+def fake_shops(monkeypatch):
+    """``fake_shops(rows, delays={"Shop": seconds})`` makes the shops named
+    in ``rows`` answer with them, through the real ``PriceFanout`` (so a
+    delay past ``web.SEARCH_FIRST_PAINT_S`` exercises the streamed rows).
+    Returns the list of card names the shops were asked for."""
+    from mtgcompare.scrapers import registry
+    seen: list[str] = []
+
+    def install(rows: list[dict], delays: dict[str, float] | None = None) -> list[str]:
+        by_shop: dict[str, list[dict]] = {}
+        for r in rows:
+            by_shop.setdefault(r["shop"], []).append(r)
+        for shop in delays or {}:
+            by_shop.setdefault(shop, [])
+
+        def build(fx, enabled=None):
+            return [_FakeShop(name, shop_rows, (delays or {}).get(name, 0.0), seen)
+                    for name, shop_rows in by_shop.items()
+                    if enabled is None or name in enabled]
+
+        monkeypatch.setattr(registry, "build_scrapers", build)
+        return seen
+
+    return install
+
+
 def _sqlite_engine(db_path):
     return create_engine(f"sqlite:///{db_path}", connect_args={"check_same_thread": False})
 

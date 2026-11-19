@@ -7,16 +7,18 @@
 // visible under every version filter — hiding them could hide the
 // cheapest copy. The initial state comes from filter tokens in the query
 // ("set:DMR is:borderless"), parsed server-side into data-initial.
+//
+// Rows of slow shops arrive after the page (lateresults.js), so rows and
+// controls are looked up on every render, the controls' events are
+// delegated to the bar, and window.mtgcompare.resultFilters lets that
+// script swap in recomputed controls and re-render.
 (function () {
   const bar = document.getElementById('printing-filter');
   const table = document.getElementById('results-table');
   if (!bar || !table || !table.tBodies.length) return;
 
-  const rows = Array.from(table.tBodies[0].rows);
-  const setSelect = bar.querySelector('[data-filter-set]');
-  const chips = Array.from(bar.querySelectorAll('[data-filter-variant]'));
-  const numberChip = bar.querySelector('[data-filter-number]');
-  const count = bar.querySelector('[data-filter-count]');
+  const rows = () => Array.from(table.tBodies[0].rows);
+  const setSelect = () => bar.querySelector('[data-filter-set]');
 
   let initial = {};
   try {
@@ -43,7 +45,7 @@
 
   function moveCheapestBadge(first) {
     table.querySelectorAll('tbody .badge').forEach((b) => b.remove());
-    rows.forEach((tr) => tr.classList.remove('cheapest'));
+    rows().forEach((tr) => tr.classList.remove('cheapest'));
     if (!first) return;
     first.classList.add('cheapest');
     const badge = document.createElement('span');
@@ -53,9 +55,13 @@
   }
 
   function render() {
+    const all = rows();
+    const select = setSelect();
+    const numberChip = bar.querySelector('[data-filter-number]');
+    const count = bar.querySelector('[data-filter-count]');
     let shown = 0;
     let first = null;
-    rows.forEach((tr) => {
+    all.forEach((tr) => {
       const ok = matches(tr);
       tr.hidden = !ok;
       if (ok) {
@@ -67,8 +73,8 @@
     });
     moveCheapestBadge(first);
 
-    if (setSelect) setSelect.value = state.set;
-    chips.forEach((chip) => {
+    if (select) select.value = state.set;
+    bar.querySelectorAll('[data-filter-variant]').forEach((chip) => {
       const value = chip.dataset.filterVariant;
       const pressed = value === ''
         ? state.variants.length === 0
@@ -86,30 +92,38 @@
     if (count) {
       if (!filtering) count.textContent = '';
       else if (shown === 0) count.textContent = 'No copies match these filters.';
-      else count.textContent = `Showing ${shown} of ${rows.length}`;
+      else count.textContent = `Showing ${shown} of ${all.length}`;
     }
   }
 
-  if (setSelect) {
-    setSelect.addEventListener('change', () => {
-      state.set = setSelect.value;
-      render();
-    });
-  }
-  chips.forEach((chip) => {
-    chip.addEventListener('click', () => {
+  bar.addEventListener('change', (e) => {
+    if (!e.target.matches('[data-filter-set]')) return;
+    state.set = e.target.value;
+    render();
+  });
+  bar.addEventListener('click', (e) => {
+    const chip = e.target.closest('[data-filter-variant]');
+    if (chip) {
       const value = chip.dataset.filterVariant;
       const alreadyOnly = state.variants.length === 1 && state.variants[0] === value;
       state.variants = value === '' || alreadyOnly ? [] : [value];
       render();
-    });
-  });
-  if (numberChip) {
-    numberChip.addEventListener('click', () => {
+    } else if (e.target.closest('[data-filter-number]')) {
       state.number = '';
       render();
-    });
-  }
+    }
+  });
+
+  window.mtgcompare = window.mtgcompare || {};
+  window.mtgcompare.resultFilters = {
+    refresh: render,
+    // Replace the set select / chips with ones rendered over every row so
+    // far; the filter state carries over.
+    replaceControls(source) {
+      bar.replaceChildren(...source.childNodes);
+      render();
+    },
+  };
 
   render();
 })();

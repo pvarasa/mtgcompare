@@ -1,0 +1,103 @@
+{# Single-card result pieces, shared by index.html's first paint and the
+   rows of slow shops streamed in after it (_late_rows.html), so a late
+   row renders exactly like the others. Import "with context": the rows
+   read shop_flags from the page context. #}
+{% from "_macros.html" import card_icon %}
+
+{# The printing filter's controls: set select, version chips, notes.
+   Rendered again with every late batch (new sets, new versions), and
+   resultfilters.js swaps them in. #}
+{% macro filter_controls(fo, initial_filters) %}
+  <label>Set
+    <select data-filter-set>
+      <option value="">All sets</option>
+      {% for code, n in fo.sets %}
+        <option value="{{ code }}">{{ code }} ({{ n }})</option>
+      {% endfor %}
+      {% if initial_filters.set and initial_filters.set not in fo.sets|map('first')|list %}
+        <option value="{{ initial_filters.set }}">{{ initial_filters.set }} (0)</option>
+      {% endif %}
+    </select>
+  </label>
+  {% if fo.variant_chips|length > 1 or fo.has_unknown or initial_filters.variants %}
+    <button type="button" class="chip" data-filter-variant="">Any version</button>
+    {% for value, text in fo.variant_chips %}
+      <button type="button" class="chip" data-filter-variant="{{ value }}">{{ text }}</button>
+    {% endfor %}
+  {% endif %}
+  <button type="button" class="chip" data-filter-number hidden></button>
+  <span class="filter-note" data-filter-count aria-live="polite"></span>
+  {% if fo.has_unknown %}
+    <span class="filter-note">“?” = the shop doesn’t say which version; those rows stay visible under every version filter.</span>
+  {% endif %}
+{% endmacro %}
+
+{# One offer. data-sort is the value the table is ordered by, which is
+   where lateresults.js inserts a row that arrives late. #}
+{% macro result_row(r, card_name, include_shipping, is_cheapest=false) %}
+  {% set is_ref = r.shop in reference_shops %}
+  {% set is_mp = r.shop in marketplace_shops %}
+  {% set offer_ship = r.get('ship_jpy') if is_mp else none %}
+  <tr class="{% if is_cheapest %}cheapest{% endif %}{% if is_ref %} reference{% endif %}"
+      data-set="{{ r.set }}"
+      data-variant="{{ '?' if r.variant is none else r.variant }}"
+      data-number="{{ r.number or '' }}"
+      data-sort="{{ r.price_jpy_with_shipping if include_shipping else r.price_jpy }}"
+      {% if is_ref %}data-reference="1"{% endif %}
+      {% if is_mp %}data-marketplace="1"{% endif %}>
+    <td>
+      <span class="flag">{{ shop_flags.get(r.shop, '') }}</span>{{ r.shop }}
+      {% if is_ref %}
+        <details class="explain ref-tag">
+          <summary title="What does this mean?">reference <span class="explain-icon" aria-hidden="true">?</span></summary>
+          <span class="explain-text">The average of recent TCGPlayer sales in the US, not an offer you can buy. Sellers who ship to Japan usually ask more, plus shipping, so TCGPlayer's page won't show this price.</span>
+        </details>
+      {% endif %}
+      {% if is_cheapest %}<span class="badge">cheapest</span>{% endif %}
+      {% if r.get('seller') %}<div class="offer-note">sold by {{ r.seller }}</div>{% endif %}
+    </td>
+    <td>{{ card_icon(card_name, r.set) }}{{ r.set }}</td>
+    <td>
+      {% if r.variant is none %}
+        <details class="explain version-unknown">
+          <summary title="What does this mean?">?</summary>
+          <span class="explain-text">This shop doesn’t say which version this is. Open its page to check before buying.</span>
+        </details>
+      {% else %}
+        {{ r.variant|variant_label }}
+      {% endif %}
+      {% if r.number %}<span class="version-number">#{{ r.number }}</span>{% endif %}
+    </td>
+    <td class="num">¥{{ '{:,.0f}'.format(r.price_jpy) }}
+      {% if not include_shipping and offer_ship is not none %}
+        <div class="offer-note" title="This seller's shipping to Japan, charged on top">+ ¥{{ '{:,.0f}'.format(offer_ship) }} ship</div>
+      {% endif %}
+    </td>
+    {% if include_shipping %}
+      <td class="num"
+          title="+ ¥{{ '{:,.0f}'.format(r.ship_jpy) }} shipping ({{ 'this offer’s actual rate' if is_mp else 'flat ¥/order estimate' }})">
+        ¥{{ '{:,.0f}'.format(r.price_jpy_with_shipping) }}</td>
+    {% endif %}
+    <td class="num">${{ '%.2f'|format(r.price_usd) }}</td>
+    <td class="num">{{ r.stock if r.stock is not none else "—" }}</td>
+    <td>{{ r.condition }}</td>
+    <td>
+      {% if is_ref %}
+        <a href="{{ r.link }}" target="_blank" rel="noopener noreferrer" title="TCGPlayer's product page. Its prices won't match this average.">view</a>
+      {% else %}
+        <a href="{{ r.link }}" target="_blank" rel="noopener noreferrer">open</a>
+      {% endif %}
+    </td>
+  </tr>
+{% endmacro %}
+
+{# The "Partial results" notice, shown on the page or, when the timeouts
+   happen after the first paint, in the stream's last chunk. #}
+{% macro timed_out_notice(shops) %}
+  <p class="meta" data-timed-out><strong>Partial results:</strong>
+    {% for shop in shops -%}
+      {{ shop_flags.get(shop, '') }} {{ shop }}{{ ', ' if not loop.last else '' }}
+    {%- endfor %}
+    timed out — re-run to retry.
+  </p>
+{% endmacro %}

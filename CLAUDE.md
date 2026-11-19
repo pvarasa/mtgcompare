@@ -76,7 +76,8 @@ Repo-specific guidance for coding sessions.
   queried as `Fire+Ice`, as at Nukenin and Azumaya: `SPLIT_JOINER`),
   `nukenin.py` (EC-CUBE 4; condition/price/stock come from the page's
   `eccube.productsClassCategories` JSON, not the HTML. Slow: ~14 s a search
-  from the cluster, so capped at 4 requests in flight),
+  from the cluster, so capped at 4 requests in flight and kept out of
+  decklist pricing: `decklists=False` in the registry),
   `azumaya.py` (EC-CUBE 3; listings carry no set, so each English NM match
   costs one product-page fetch for its code (`DMR-0050E`) and categories,
   remembered per process by product id),
@@ -152,7 +153,8 @@ Repo-specific guidance for coding sessions.
 | `MTGCOMPARE_CACHE_ENABLED` | `1` | Toggle the shop-listings query cache (`shop_listings` table); set to `0`/`false` to disable |
 | `MTGCOMPARE_CACHE_TTL_HOURS` | `24` | TTL (h) for cached shop listing rows |
 | `MTGCOMPARE_DECKLIST_FAN_OUT_WORKERS` | `12` | Thread-pool size for the per-card × per-shop fan-out during decklist pricing |
-| `MTGCOMPARE_SHOP_QUERY_TIMEOUT_S` | `30` | Per-shop wall-clock cap (s) during decklist pricing; shops that miss it are reported as timed out |
+| `MTGCOMPARE_SHOP_QUERY_TIMEOUT_S` | `30` | Per-shop wall-clock cap (s) for a card (single-card search and decklist pricing); shops that miss it are reported as timed out |
+| `MTGCOMPARE_SEARCH_FIRST_PAINT_S` | `3` | Single-card search renders after this many seconds (or once every shop answered); slower shops stream their rows into the same response |
 | `DB_POOL_SIZE` | `5` | SQLAlchemy connection pool size (PostgreSQL mode) |
 | `DB_POOL_OVERFLOW` | `10` | SQLAlchemy connection pool overflow capacity (PostgreSQL mode) |
 
@@ -207,6 +209,19 @@ The `users` table is keyed on `workos_user_id`; inventory rows continue to key o
 
 - The Search page supports both single-card search and decklist search.
 - Single-card search can optionally include per-shop shipping overrides in sort order.
+- **Single-card search streams.** `index()` starts a `registry.PriceFanout`,
+  renders the page with what answered within `SEARCH_FIRST_PAINT_S`, and if
+  shops are still running returns a streamed response: the rendered page up
+  to `</body>`, then one `_late_rows.html` `<template data-late>` per shop as
+  it answers (its rows + the filter controls recomputed over every row), a
+  `_late_done.html` with any timeouts, then `</body></html>`.
+  `static/lateresults.js` moves each template's rows into the table at their
+  `data-sort` position and calls `window.mtgcompare.resultFilters`. One
+  response, not a follow-up request, because the fetch lives in the process
+  that started it (2 replicas × 2 workers). So the index page's scripts are
+  not `defer` (deferred scripts wait for the stream to end), and rows /
+  controls are shared macros in `_results.html`. Tests stub shops under the
+  real fan-out with the `fake_shops` fixture (`tests/conftest.py`).
 - TCGPlayer appears as two shops: **TCGPlayer market** (Scryfall's `prices.usd`,
   a US-centric reference price — not a purchasable offer) and **TCGPlayer → JP**
   (`scrapers/tcgplayer.py`, the cheapest NM/LP English offers that ship to

@@ -37,7 +37,7 @@
   // even when the URL is bare. Each form has its own panel; both read
   // from and write to the same key so toggling on the single-card tab
   // pre-fills the decklist tab. The two panels render different
-  // checkbox sets (marketplace shops are decklist-excluded), so state
+  // checkbox sets (some shops are decklist-excluded), so state
   // is stored as explicit enabled/disabled name lists and persist()
   // merges around names the saving form doesn't render — otherwise a
   // decklist-panel save would silently drop the single-card-only

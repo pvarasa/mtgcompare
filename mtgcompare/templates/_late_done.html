@@ -1,0 +1,5 @@
+{# The stream's last chunk: every pending shop has answered or timed out. #}
+{% from "_results.html" import timed_out_notice with context %}
+<template data-late data-late-done>
+  {% if timed_out_shops %}{{ timed_out_notice(timed_out_shops) }}{% endif %}
+</template><i data-late-ready hidden></i>

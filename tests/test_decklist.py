@@ -87,7 +87,7 @@ def test_iter_decklist_prices_drops_marketplace_shops():
     list(decklist.iter_decklist_prices(
         ["x"], {"x": "X"}, fx=150.0, enabled_shops=None, collect=fake_collect,
     ))
-    assert captured["enabled"] == set(ACTIVE_SHOPS) - MARKETPLACE_SHOPS - {"TCGPlayer market"}
+    assert captured["enabled"] == set(ACTIVE_SHOPS) - MARKETPLACE_SHOPS - {"TCGPlayer market", "Nukenin"}
 
     # Explicit selection that includes a marketplace shop: still dropped.
     list(decklist.iter_decklist_prices(
@@ -103,6 +103,15 @@ def test_iter_decklist_prices_drops_marketplace_shops():
         enabled_shops={"Hareruya", "TCGPlayer market"}, collect=fake_collect,
     ))
     assert captured["enabled"] == {"Hareruya"}
+
+
+def test_slow_shops_are_kept_out_of_decklists():
+    """Nukenin takes ~14 s a card with 4 requests in flight: a deck would
+    time out at it. Even ticked on the form it isn't queried."""
+    from mtgcompare.scrapers.registry import DECKLIST_SKIPPED_SHOPS
+
+    assert "Nukenin" in DECKLIST_SKIPPED_SHOPS
+    assert decklist.effective_search_shops({"Hareruya", "Nukenin"}) == {"Hareruya"}
 
 
 def test_iter_decklist_prices_empty_input_is_empty_iter():

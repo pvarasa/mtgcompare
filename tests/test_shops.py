@@ -198,3 +198,42 @@ def test_build_scrapers_filter_skips_unselected():
     # Inner CachedScrapper has shop_name; bare scrapers don't, but
     # CACHE_ENABLED defaults to True so we can rely on it.
     assert filtered[0].shop_name == "Hareruya"
+
+
+def test_fanout_hands_back_fast_shops_first_and_the_rest_as_they_answer(monkeypatch):
+    fast, slow = _SleepyScraper("Fast", 0.0), _SleepyScraper("Slow", 0.3)
+    monkeypatch.setattr(shops, "build_scrapers", lambda fx, enabled=None: [fast, slow])
+    fanout = shops.PriceFanout("Lightning Bolt", fx=150.0)
+
+    t0 = time.monotonic()
+    first = fanout.first(0.1)
+    assert time.monotonic() - t0 < 0.25, "first() waits no longer than asked"
+    assert [r["shop"] for r in first] == ["Fast"]
+    assert fanout.pending() == ["Slow"]
+
+    late = list(fanout.rest())
+    assert [(shop, [r["shop"] for r in rows]) for shop, rows in late] == [("Slow", ["Slow"])]
+    assert fanout.pending() == [] and fanout.timed_out == set()
+
+
+def test_fanout_times_out_shops_still_running_at_the_deadline(monkeypatch, caplog):
+    slow = _SleepyScraper("Slow", 1.0)
+    monkeypatch.setattr(shops, "build_scrapers", lambda fx, enabled=None: [_FailingScraper(), slow])
+    monkeypatch.setattr(shops, "SHOP_QUERY_TIMEOUT_S", 0.2)
+    logger = logging.getLogger("test.fanout")
+    fanout = shops.PriceFanout("Lightning Bolt", fx=150.0, logger=logger)
+    assert fanout.first(0.05) == []  # the failing shop counts as no rows
+
+    with caplog.at_level(logging.WARNING, logger="test.fanout"):
+        t0 = time.monotonic()
+        assert list(fanout.rest()) == []
+        assert time.monotonic() - t0 < 0.5
+    assert fanout.timed_out == {"Slow"}
+    assert "event=shop_query_timeout shop=Slow" in caplog.text
+
+
+def test_fanout_with_every_shop_done_has_nothing_pending(monkeypatch):
+    monkeypatch.setattr(shops, "build_scrapers", lambda fx, enabled=None: [_SleepyScraper("A", 0.0)])
+    fanout = shops.PriceFanout("Lightning Bolt", fx=150.0)
+    assert len(fanout.first(1.0)) == 1
+    assert fanout.pending() == [] and list(fanout.rest()) == []

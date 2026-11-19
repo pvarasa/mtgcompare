@@ -342,7 +342,10 @@
 
   {% block content %}{% endblock %}
 
-  <script src="{{ url_for('static', filename='common.js') }}?v={{ static_token }}" defer></script>
-  <script src="{{ url_for('static', filename='cardpreview.js') }}?v={{ static_token }}" defer></script>
+  {# Not "defer": a single-card search streams its slow shops' rows after
+     this point (index.html), and deferred scripts would wait for them. At
+     the end of the body the DOM they wire up is already there. #}
+  <script src="{{ url_for('static', filename='common.js') }}?v={{ static_token }}"></script>
+  <script src="{{ url_for('static', filename='cardpreview.js') }}?v={{ static_token }}"></script>
 </body>
 </html>

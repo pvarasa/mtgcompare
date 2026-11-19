@@ -135,17 +135,10 @@ def _printing_rows():
 
 
 @pytest.fixture
-def stub_search(monkeypatch):
+def stub_search(monkeypatch, fake_shops):
     from mtgcompare import web as web_module
-    seen: list[str] = []
-
-    def fake_collect(name, fx, **kw):
-        seen.append(name)
-        return [dict(r) for r in _printing_rows()]
-
-    monkeypatch.setattr(web_module, "collect_prices", fake_collect)
     monkeypatch.setattr(web_module, "_get_fx", lambda: 150.0)
-    return seen
+    return fake_shops(_printing_rows())
 
 
 def _visible_shops(page):
@@ -208,7 +201,7 @@ def test_each_tab_shows_only_its_own_results(e2e_base_url, page, stub_search):
     assert dl_results.is_hidden()
 
 
-def test_the_cheapest_badge_skips_reference_prices_after_filtering(e2e_base_url, page, monkeypatch):
+def test_the_cheapest_badge_skips_reference_prices_after_filtering(e2e_base_url, page, monkeypatch, fake_shops):
     """resultfilters.js re-badges the first visible row; a reference price
     (TCGPlayer market) sorting first must not get it, same as the server."""
     from mtgcompare import web as web_module
@@ -219,7 +212,7 @@ def test_the_cheapest_badge_skips_reference_prices_after_filtering(e2e_base_url,
         {**base, "shop": "Hareruya", "set": "DMR", "variant": "", "price_jpy": 14000.0},
         {**base, "shop": "Card Rush", "set": "2XM", "variant": "", "price_jpy": 15000.0},
     ]
-    monkeypatch.setattr(web_module, "collect_prices", lambda name, fx, **kw: [dict(r) for r in rows])
+    fake_shops(rows)
     monkeypatch.setattr(web_module, "_get_fx", lambda: 150.0)
 
     page.goto(f"{e2e_base_url}/?q=Force+of+Will")
@@ -233,7 +226,7 @@ def test_the_cheapest_badge_skips_reference_prices_after_filtering(e2e_base_url,
     assert "cheapest" not in shops[0] and "cheapest" in shops[1]
 
 
-def test_reference_and_unknown_markers_explain_themselves_on_click(e2e_base_url, page, monkeypatch):
+def test_reference_and_unknown_markers_explain_themselves_on_click(e2e_base_url, page, monkeypatch, fake_shops):
     """Both markers looked clickable but only had a hover title, which
     never shows on touch screens. Clicking now reveals the explanation."""
     from mtgcompare import web as web_module
@@ -243,7 +236,7 @@ def test_reference_and_unknown_markers_explain_themselves_on_click(e2e_base_url,
         {**base, "shop": "TCGPlayer market", "set": "DMR", "variant": "", "price_jpy": 9000.0},
         {**base, "shop": "TokyoMTG", "set": "DMR", "variant": None, "price_jpy": 14000.0},
     ]
-    monkeypatch.setattr(web_module, "collect_prices", lambda name, fx, **kw: [dict(r) for r in rows])
+    fake_shops(rows)
     monkeypatch.setattr(web_module, "_get_fx", lambda: 150.0)
     page.goto(f"{e2e_base_url}/?q=Force+of+Will")
 
@@ -256,3 +249,41 @@ def test_reference_and_unknown_markers_explain_themselves_on_click(e2e_base_url,
     assert not unknown_text.is_visible()
     page.locator(".version-unknown summary").click()
     assert unknown_text.is_visible()
+
+
+def test_slow_shops_rows_join_the_table_as_they_arrive(e2e_base_url, page, monkeypatch, fake_shops):
+    """The page shows the shops that answered within the first paint; a
+    slow shop's rows stream in after, land at their price position, take
+    the cheapest badge if they're cheapest, and add their set to the
+    filter. The "Still searching" line goes away when it's done."""
+    from mtgcompare import web as web_module
+    monkeypatch.setattr(web_module, "SEARCH_FIRST_PAINT_S", 0.1)
+    monkeypatch.setattr(web_module, "_get_fx", lambda: 150.0)
+    base = {"card": "Force of Will", "price_usd": 1.0, "stock": 1, "condition": "NM",
+            "link": "https://example.test/", "number": None, "variant": ""}
+    fake_shops([
+        {**base, "shop": "Hareruya", "set": "DMR", "price_jpy": 14000.0},
+        {**base, "shop": "Card Rush", "set": "DMR", "price_jpy": 16000.0},
+        {**base, "shop": "Nukenin", "set": "2XM", "price_jpy": 12000.0},
+        {**base, "shop": "Azumaya", "set": "DMR", "price_jpy": 15000.0},
+    ], delays={"Nukenin": 1.5, "Azumaya": 1.0})
+
+    page.goto(f"{e2e_base_url}/?q=Force+of+Will", wait_until="commit")
+    status = page.locator("[data-late-status]")
+    status.wait_for()
+    assert "Nukenin" in status.inner_text()
+    # The filters work before the slow shops are in.
+    page.locator("[data-filter-set]").select_option("DMR")
+
+    status.wait_for(state="detached", timeout=10_000)
+    # The filter kept its value through the late shops' new controls.
+    assert page.locator("[data-filter-set]").input_value() == "DMR"
+    assert not any("Nukenin" in s for s in _visible_shops(page))
+
+    page.locator("[data-filter-set]").select_option("")
+    shops = _visible_shops(page)
+    assert len(shops) == 4
+    assert "Nukenin" in shops[0] and "cheapest" in shops[0]
+    assert "Hareruya" in shops[1] and "Azumaya" in shops[2] and "Card Rush" in shops[3]
+    assert page.locator('[data-filter-set] option[value="2XM"]').count() == 1
+    assert page.locator("[data-result-count]").inner_text() == "4 results"

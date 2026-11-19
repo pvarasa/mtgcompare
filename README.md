@@ -41,7 +41,7 @@ Your inventory is stored in `~/Library/Application Support/mtgcompare/inventory.
 ## Features
 
 ### Price search
-- **Single card** — search by name across all shops in parallel; the cheapest result is highlighted. Cold searches take ~5–10 s (bounded by the slowest shop); already-searched cards return from a 24 h DB cache in ~10–200 ms.
+- **Single card** — search by name across all shops in parallel; the cheapest result is highlighted. A cold search shows what the shops found within ~3 s, and the slower shops' rows join the table as they answer (Nukenin takes ~14 s); already-searched cards return from a 24 h DB cache in ~10–200 ms.
 - **Decklist** — paste a list in `1 Sol Ring`, `4x Force of Will (ALL)`, or `1 Rhystic Study (C21) 79` format (max 100 cards per search); the app finds the best price per card and shows a per-shop spending breakdown.
 - **Shipping-aware sorting** — enable per-shop shipping estimates to sort and total by true landed cost.
 - **Use inventory** — check this on a decklist search and already-owned copies are deducted automatically; only the remaining quantity is priced.
@@ -73,7 +73,7 @@ Your inventory is stored in `~/Library/Application Support/mtgcompare/inventory.
 | Cardshop Serra | 🇯🇵 JP | Price + stock |
 | BLACK FROG | 🇯🇵 JP | Price |
 | BIGWEB | 🇯🇵 JP | Price + stock (BIG MAGIC's web shop, via its JSON API) |
-| Nukenin (抜忍) | 🇯🇵 JP | Price + stock |
+| Nukenin (抜忍) | 🇯🇵 JP | Price + stock. Single-card search only: too slow (~14 s a card) for decklists |
 | Azumaya (あずまや) | 🇯🇵 JP | Price + stock |
 | Card Rush | 🇯🇵 JP | Price + stock |
 | MINT MALL | 🇯🇵 JP | Price + stock (multi-tenant marketplace). **Paused** since 2026-10-22 while the site is down for a security review |

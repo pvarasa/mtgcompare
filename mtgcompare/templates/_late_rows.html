@@ -1,0 +1,11 @@
+{# One streamed chunk of a single-card search (web._stream_late_results):
+   a slow shop's rows plus the printing filter's controls recomputed over
+   every row so far. Inert until lateresults.js moves it into the page.
+   The <i> after it tells that script the template is fully parsed. #}
+{% from "_results.html" import filter_controls, result_row with context %}
+<template data-late data-shop="{{ shop }}">
+  <table><tbody>
+    {% for r in rows %}{{ result_row(r, card_name, include_shipping) }}{% endfor %}
+  </tbody></table>
+  <div data-filter-controls>{{ filter_controls(filter_options, initial_filters) }}</div>
+</template><i data-late-ready hidden></i>

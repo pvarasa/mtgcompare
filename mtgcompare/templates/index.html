@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import card_icon %}
+{% from "_results.html" import filter_controls, result_row, timed_out_notice with context %}
 {% block title %}mtgcompare{% if q %} - {{ q }}{% endif %}{% endblock %}
 {% block extra_css %}
   {% include "_decklist_styles.html" %}
@@ -257,6 +257,24 @@
     animation: search-spin .8s linear infinite;
   }
   @keyframes search-spin { to { transform: rotate(360deg); } }
+
+  /* Shops still answering after the first paint (lateresults.js). */
+  .search-pending { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem; }
+  .search-pending .spinner {
+    width: .85rem;
+    height: .85rem;
+    border: 2px solid var(--gold-dim);
+    border-top-color: var(--gold);
+    border-radius: 50%;
+    animation: search-spin .8s linear infinite;
+  }
+  .search-pending [data-pending-shop]:not(:last-of-type)::after { content: ","; }
+  @media (prefers-reduced-motion: reduce) {
+    .search-pending .spinner { animation-duration: 2s; }
+  }
+  /* The results pieces toggle with the hidden attribute, which their own
+     display rules (flex, block) would otherwise override. */
+  #single-results [hidden] { display: none !important; }
 {% endblock %}
 {% block content %}
   <div class="search-mode">
@@ -355,12 +373,12 @@
         </label>
         <span data-shop-filter-summary style="font-size:.8rem; color:var(--muted);"></span>
       </div>
-      {# Marketplace and reference shops are skipped by decklist pricing, so
-         their checkbox is hidden from this form only — the single-card form
-         above keeps it. #}
+      {# Marketplace, reference and too-slow shops are skipped by decklist
+         pricing, so their checkbox is hidden from this form only — the
+         single-card form above keeps it. #}
       <div class="shop-filter" data-shop-filter-panel
            {% if not shop_filter_active %}style="display:none"{% endif %}>
-        {% for s in shop_filter_config if s.shop not in marketplace_shops and s.shop not in reference_shops %}
+        {% for s in shop_filter_config if s.shop not in decklist_skipped_shops %}
           <label>
             <input type="checkbox" name="shop_{{ s.slug }}" value="1"
                    data-shop-filter-checkbox
@@ -414,18 +432,23 @@
 
   {% if q %}
     <p class="meta">
-      {{ results|length }} result{% if results|length != 1 %}s{% endif %} for "{{ q }}"
+      <span data-result-count>{{ results|length }} result{% if results|length != 1 %}s{% endif %}</span> for "{{ q }}"
       {% if fx %} &middot; FX ¥{{ '%.2f'|format(fx) }} per $1{% endif %}
       {% if include_shipping %} &middot; sorted by total incl. shipping{% endif %}
     </p>
-    {% if timed_out_shops %}
-      <p class="meta"><strong>Partial results:</strong>
-        {% for shop in timed_out_shops -%}
-          {{ shop_flags.get(shop, '') }} {{ shop }}{{ ', ' if not loop.last else '' }}
+    {# Shops that hadn't answered at first paint: their rows stream into
+       this same response and lateresults.js adds them to the table. #}
+    {% if pending_shops %}
+      <p class="meta search-pending" data-late-status>
+        <span class="spinner" aria-hidden="true"></span>
+        Still searching:
+        {% for shop in pending_shops -%}
+          <span data-pending-shop="{{ shop }}">{{ shop_flags.get(shop, '') }} {{ shop }}</span>
         {%- endfor %}
-        timed out — re-run to retry.
+        <noscript>Reload in a few seconds to see their prices.</noscript>
       </p>
     {% endif %}
+    {% if timed_out_shops %}{{ timed_out_notice(timed_out_shops) }}{% endif %}
     {% if unknown_filter_tokens %}
       <p class="meta">Ignored {{ unknown_filter_tokens|join(', ') }} — filters are
         <code>set:</code>, <code>#number</code> and
@@ -433,34 +456,13 @@
         <code>extended</code> / <code>oldframe</code> / <code>regular</code>.</p>
     {% endif %}
 
-    {% if results %}
-      {% set fo = filter_options %}
+    {% if results or pending_shops %}
       <div class="printing-filter" id="printing-filter"
-           data-initial="{{ initial_filters|tojson|forceescape }}">
-        <label>Set
-          <select data-filter-set>
-            <option value="">All sets</option>
-            {% for code, n in fo.sets %}
-              <option value="{{ code }}">{{ code }} ({{ n }})</option>
-            {% endfor %}
-            {% if initial_filters.set and initial_filters.set not in fo.sets|map('first')|list %}
-              <option value="{{ initial_filters.set }}">{{ initial_filters.set }} (0)</option>
-            {% endif %}
-          </select>
-        </label>
-        {% if fo.variant_chips|length > 1 or fo.has_unknown or initial_filters.variants %}
-          <button type="button" class="chip" data-filter-variant="">Any version</button>
-          {% for value, text in fo.variant_chips %}
-            <button type="button" class="chip" data-filter-variant="{{ value }}">{{ text }}</button>
-          {% endfor %}
-        {% endif %}
-        <button type="button" class="chip" data-filter-number hidden></button>
-        <span class="filter-note" data-filter-count aria-live="polite"></span>
-        {% if fo.has_unknown %}
-          <span class="filter-note">“?” = the shop doesn’t say which version; those rows stay visible under every version filter.</span>
-        {% endif %}
+           data-initial="{{ initial_filters|tojson|forceescape }}"
+           {% if not results %}hidden{% endif %}>
+        {{ filter_controls(filter_options, initial_filters) }}
       </div>
-      <div class="table-scroll">
+      <div class="table-scroll" {% if not results %}hidden{% endif %}>
       <table id="results-table">
         <thead>
           <tr>
@@ -481,74 +483,26 @@
              re-applies the same rule when the filters hide rows. #}
           {% set badge = namespace(given=false) %}
           {% for r in results %}
-            {% set is_ref = r.shop in reference_shops %}
-            {% set is_cheapest = not is_ref and not badge.given %}
+            {% set is_cheapest = r.shop not in reference_shops and not badge.given %}
             {% if is_cheapest %}{% set badge.given = true %}{% endif %}
-            {% set offer_ship = r.get('ship_jpy') if r.shop in marketplace_shops else none %}
-            <tr class="{% if is_cheapest %}cheapest{% endif %}{% if is_ref %} reference{% endif %}"
-                data-set="{{ r.set }}"
-                data-variant="{{ '?' if r.variant is none else r.variant }}"
-                data-number="{{ r.number or '' }}"
-                {% if is_ref %}data-reference="1"{% endif %}>
-              <td>
-                <span class="flag">{{ shop_flags.get(r.shop, '') }}</span>{{ r.shop }}
-                {% if is_ref %}
-                  <details class="explain ref-tag">
-                    <summary title="What does this mean?">reference <span class="explain-icon" aria-hidden="true">?</span></summary>
-                    <span class="explain-text">The average of recent TCGPlayer sales in the US, not an offer you can buy. Sellers who ship to Japan usually ask more, plus shipping, so TCGPlayer's page won't show this price.</span>
-                  </details>
-                {% endif %}
-                {% if is_cheapest %}<span class="badge">cheapest</span>{% endif %}
-                {% if r.get('seller') %}<div class="offer-note">sold by {{ r.seller }}</div>{% endif %}
-              </td>
-              <td>{{ card_icon(card_name, r.set) }}{{ r.set }}</td>
-              <td>
-                {% if r.variant is none %}
-                  <details class="explain version-unknown">
-                    <summary title="What does this mean?">?</summary>
-                    <span class="explain-text">This shop doesn’t say which version this is. Open its page to check before buying.</span>
-                  </details>
-                {% else %}
-                  {{ r.variant|variant_label }}
-                {% endif %}
-                {% if r.number %}<span class="version-number">#{{ r.number }}</span>{% endif %}
-              </td>
-              <td class="num">¥{{ '{:,.0f}'.format(r.price_jpy) }}
-                {% if not include_shipping and offer_ship is not none %}
-                  <div class="offer-note" title="This seller's shipping to Japan, charged on top">+ ¥{{ '{:,.0f}'.format(offer_ship) }} ship</div>
-                {% endif %}
-              </td>
-              {% if include_shipping %}
-                <td class="num"
-                    title="+ ¥{{ '{:,.0f}'.format(r.ship_jpy) }} shipping ({{ 'this offer’s actual rate' if r.shop in marketplace_shops else 'flat ¥/order estimate' }})">
-                  ¥{{ '{:,.0f}'.format(r.price_jpy_with_shipping) }}</td>
-              {% endif %}
-              <td class="num">${{ '%.2f'|format(r.price_usd) }}</td>
-              <td class="num">{{ r.stock if r.stock is not none else "—" }}</td>
-              <td>{{ r.condition }}</td>
-              <td>
-                {% if is_ref %}
-                  <a href="{{ r.link }}" target="_blank" rel="noopener noreferrer" title="TCGPlayer's product page. Its prices won't match this average.">view</a>
-                {% else %}
-                  <a href="{{ r.link }}" target="_blank" rel="noopener noreferrer">open</a>
-                {% endif %}
-              </td>
-            </tr>
+            {{ result_row(r, card_name, include_shipping, is_cheapest) }}
           {% endfor %}
         </tbody>
       </table>
       </div>
-      {% if results|selectattr('shop', 'in', marketplace_shops)|list %}
-        <p class="results-note">TCGPlayer → JP is the cheapest copy that ships to Japan, from the seller named in the row. TCGPlayer's page puts its own pick at the top (the cheapest with shipping, often another seller), so look for that seller in the listings.</p>
-      {% endif %}
-    {% else %}
-      <div class="empty">No results.</div>
+      <p class="results-note" data-marketplace-note
+         {% if not results|selectattr('shop', 'in', marketplace_shops)|list %}hidden{% endif %}>TCGPlayer → JP is the cheapest copy that ships to Japan, from the seller named in the row. TCGPlayer's page puts its own pick at the top (the cheapest with shipping, often another seller), so look for that seller in the listings.</p>
     {% endif %}
+    <div class="empty" data-results-empty {% if results or pending_shops %}hidden{% endif %}>No results.</div>
   {% endif %}
   </div>
 
-  <script src="{{ url_for('static', filename='searchautocomplete.js') }}?v={{ static_token }}" defer></script>
-  <script src="{{ url_for('static', filename='decklist-stream.js') }}?v={{ static_token }}" defer></script>
-  <script src="{{ url_for('static', filename='resultfilters.js') }}?v={{ static_token }}" defer></script>
+  {# No "defer": a search whose slow shops stream in keeps the document
+     parsing until the last one answers, and deferred scripts would wait
+     for that. At the end of the body they find the DOM they need anyway. #}
+  <script src="{{ url_for('static', filename='searchautocomplete.js') }}?v={{ static_token }}"></script>
+  <script src="{{ url_for('static', filename='decklist-stream.js') }}?v={{ static_token }}"></script>
+  <script src="{{ url_for('static', filename='resultfilters.js') }}?v={{ static_token }}"></script>
+  <script src="{{ url_for('static', filename='lateresults.js') }}?v={{ static_token }}"></script>
   <script src="{{ url_for('static', filename='index-page.js') }}?v={{ static_token }}"></script>
 {% endblock %}

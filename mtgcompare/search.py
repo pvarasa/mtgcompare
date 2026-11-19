@@ -175,3 +175,22 @@ def apply_shipping(results: list[dict], overrides_jpy: dict[str, int]) -> None:
             r["ship_jpy"] = overrides_jpy.get(r["shop"], 0)
         r["price_jpy_with_shipping"] = landed_jpy(r)
     results.sort(key=lambda r: r["price_jpy_with_shipping"])
+
+
+def order_results(
+    results: list[dict],
+    include_shipping: bool,
+    overrides_jpy: dict[str, int],
+) -> list[dict]:
+    """The rows as the results table shows them: one marketplace offer per
+    printing, sorted by price or, with shipping on, by landed total.
+
+    Shops that answer after the first paint get the same treatment per
+    batch; each row's sort value (``price_jpy`` / ``price_jpy_with_shipping``)
+    is what the page merges them in by."""
+    results = collapse_marketplace_offers(results, include_shipping)
+    if include_shipping:
+        apply_shipping(results, overrides_jpy)
+    else:
+        results.sort(key=lambda r: r["price_jpy"])
+    return results

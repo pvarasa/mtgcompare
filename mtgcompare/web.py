@@ -47,10 +47,12 @@ from .pricing import run_log
 from .scrapers import variants
 from .scrapers.registry import (
     ACTIVE_SHOPS,
+    DECKLIST_SKIPPED_SHOPS,
     MARKETPLACE_SHOPS,
     REFERENCE_SHOPS,
     SHIPPING_JPY,
     SHOP_FLAGS,
+    PriceFanout,
     collect_prices,
     shop_slug,
 )
@@ -296,11 +298,13 @@ def _manual_price_update_refused():
     return jsonify({"ok": False, "error": "Prices update daily on the hosted site."}), 403
 
 
-# Marketplace shops are skipped by decklist pricing (see registry), so the
-# decklist form hides their shop-filter checkbox. (Their shipping-override
-# rows are already absent everywhere via _shipping_config.)
+# Decklist pricing skips marketplace, reference and too-slow shops (see
+# registry), so the decklist form hides their shop-filter checkbox.
+# (Marketplace shipping-override rows are already absent everywhere via
+# _shipping_config.)
 app.jinja_env.globals["marketplace_shops"] = MARKETPLACE_SHOPS
 app.jinja_env.globals["reference_shops"] = REFERENCE_SHOPS
+app.jinja_env.globals["decklist_skipped_shops"] = DECKLIST_SKIPPED_SHOPS
 app.jinja_env.filters["variant_label"] = variants.label
 
 
@@ -475,6 +479,15 @@ def _shop_filter_config(enabled: set[str] | None) -> list[dict]:
     ]
 
 
+# A single-card search shows its page once every shop has answered or
+# after this many seconds, whichever comes first. Shops still running then
+# (Nukenin takes ~14 s, SingleStar 5-20 s) stream their rows into the same
+# response as they answer, up to SHOP_QUERY_TIMEOUT_S. One response rather
+# than a follow-up request because the fetch lives in this process: with
+# 2 replicas x 2 workers, a second request would mostly land elsewhere.
+SEARCH_FIRST_PAINT_S = float(os.environ.get("MTGCOMPARE_SEARCH_FIRST_PAINT_S", "3"))
+
+
 @app.route("/")
 def index():
     q = request.args.get("q", "").strip()
@@ -487,47 +500,49 @@ def index():
 
     results: list[dict] = []
     error: str | None = None
-    timed_out_shops: set[str] = set()
+    fanout: PriceFanout | None = None
     query = search.parse_query(q)
+    t0 = monotonic()
 
     if q and not query.name:
         error = "Add a card name to the filters, e.g. “Force of Will set:DMR”."
     elif q:
-        t0 = monotonic()
         fx = _get_fx()
         if fx is None:
             error = "Could not fetch FX rate; try again later."
         else:
-            results = collect_prices(
-                query.name, fx, enabled=enabled_shops, logger=app.logger,
-                timeouts_out=timed_out_shops,
+            fanout = PriceFanout(query.name, fx, enabled=enabled_shops, logger=app.logger)
+            results = search.order_results(
+                fanout.first(SEARCH_FIRST_PAINT_S), include_shipping, shipping_overrides_jpy,
             )
-            results = search.collapse_marketplace_offers(results, include_shipping)
-            if include_shipping:
-                search.apply_shipping(results, shipping_overrides_jpy)
-            else:
-                results.sort(key=lambda r: r["price_jpy"])
+    pending_shops = fanout.pending() if fanout is not None else []
+
+    def log_search(first_paint_ms: int) -> None:
+        if not q:
+            return
+        timed_out = fanout.timed_out if fanout is not None else set()
         app.logger.info(
             "event=search_query q=%r name=%r filter_set=%s filter_number=%s "
             "filter_variants=%s shops_enabled=%s include_shipping=%d "
-            "result_count=%d timed_out_shops=%s duration_ms=%d",
+            "result_count=%d timed_out_shops=%s duration_ms=%d first_paint_ms=%d",
             q, query.name, query.set_code or "-", query.number or "-",
             ",".join(query.variants) or "-",
             len(enabled_shops) if enabled_shops is not None else "all",
             int(include_shipping), len(results),
-            ",".join(sorted(timed_out_shops)) or "none",
-            int((monotonic() - t0) * 1000),
+            ",".join(sorted(timed_out)) or "none",
+            int((monotonic() - t0) * 1000), first_paint_ms,
         )
 
-    return render_template(
+    initial_filters = {
+        "set": query.set_code,
+        "number": query.number,
+        "variants": query.variants,
+    }
+    page = render_template(
         "index.html",
         q=q,
         card_name=query.name,
-        initial_filters={
-            "set": query.set_code,
-            "number": query.number,
-            "variants": query.variants,
-        },
+        initial_filters=initial_filters,
         unknown_filter_tokens=query.unknown_tokens,
         filter_options=search.filter_options(results),
         results=results,
@@ -538,8 +553,46 @@ def index():
         include_shipping=include_shipping,
         shop_filter_config=shop_filter_cfg,
         shop_filter_active=shop_filter_active,
-        timed_out_shops=sorted(timed_out_shops),
+        timed_out_shops=[],
+        pending_shops=pending_shops,
         active="search",
+    )
+    first_paint_ms = int((monotonic() - t0) * 1000)
+    if fanout is None or not pending_shops:
+        log_search(first_paint_ms)
+        return page
+
+    def generate() -> Iterator[str]:
+        head, body_end, tail = page.rpartition("</body>")
+        yield head
+        try:
+            for shop, rows in fanout.rest():
+                rows = search.order_results(rows, include_shipping, shipping_overrides_jpy)
+                results.extend(rows)
+                yield render_template(
+                    "_late_rows.html", shop=shop, rows=rows, card_name=query.name,
+                    include_shipping=include_shipping, shop_flags=SHOP_FLAGS,
+                    filter_options=search.filter_options(results),
+                    initial_filters=initial_filters,
+                )
+            yield render_template(
+                "_late_done.html", timed_out_shops=sorted(fanout.timed_out),
+                shop_flags=SHOP_FLAGS,
+            )
+            yield body_end + tail
+        finally:
+            # Also when the client left mid-stream: the search still ran.
+            log_search(first_paint_ms)
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/html",
+        headers={
+            # Same as the decklist stream: no proxy buffering or rewriting,
+            # or the late rows would arrive all at once at the end.
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 
