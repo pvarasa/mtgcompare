@@ -27,7 +27,10 @@
     initial = {};
   }
   const state = {
-    set: initial.set || '',
+    // A set picked before this script ran (the select is parsed first,
+    // and on a streamed search the page is usable early) or restored by
+    // the browser wins over the query's set: token.
+    set: (setSelect() && setSelect().value) || initial.set || '',
     number: initial.number || '',
     variants: Array.isArray(initial.variants) ? initial.variants : [],
   };

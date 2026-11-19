@@ -272,7 +272,10 @@ def test_slow_shops_rows_join_the_table_as_they_arrive(e2e_base_url, page, monke
     status = page.locator("[data-late-status]")
     status.wait_for()
     assert "Nukenin" in status.inner_text()
-    # The filters work before the slow shops are in.
+    # The filters work before the slow shops are in. (Wait for the script:
+    # the status line is parsed before it, and CI was fast enough to pick
+    # a set in between.)
+    page.wait_for_function("() => window.mtgcompare && window.mtgcompare.resultFilters")
     page.locator("[data-filter-set]").select_option("DMR")
 
     status.wait_for(state="detached", timeout=10_000)

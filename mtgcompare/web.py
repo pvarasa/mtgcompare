@@ -99,6 +99,15 @@ if db.IS_POSTGRES and not _SECRET_KEY:
     )
 app.secret_key = _SECRET_KEY or "mtgcompare-local-dev"
 
+# The flask session carries the CSRF token. With WorkOS on, the site is
+# HTTPS-only (its auth cookies are Secure already), so this one is too;
+# the local app and docker-compose dev serve plain http and keep defaults.
+def _session_cookie_config(https_only: bool) -> dict:
+    return {"SESSION_COOKIE_SECURE": True, "SESSION_COOKIE_SAMESITE": "Lax"} if https_only else {}
+
+
+app.config.update(_session_cookie_config(auth.WORKOS_ENABLED))
+
 # Cap every request body. Werkzeug bounds non-file form fields
 # (MAX_FORM_MEMORY_SIZE, 500 kB) but not uploads or JSON bodies, so without
 # this one signed-in user could stream a multi-GB CSV to /inventory/import or

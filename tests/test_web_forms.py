@@ -321,3 +321,11 @@ def test_a_search_with_no_rows_yet_hides_the_table_until_they_arrive(monkeypatch
 def test_a_search_every_shop_answers_in_time_is_not_streamed(monkeypatch, fake_shops):
     html = _search_page(monkeypatch, fake_shops, "/?q=Mistrise+Village")
     assert "data-late-status" not in html and "<template data-late" not in html
+
+
+def test_the_session_cookie_is_secure_when_the_site_is_https_only():
+    """The flask session carries the CSRF token: Secure + Lax with WorkOS
+    on (HTTPS-only, like its auth cookies), defaults for the local app."""
+    assert web._session_cookie_config(True) == {
+        "SESSION_COOKIE_SECURE": True, "SESSION_COOKIE_SAMESITE": "Lax"}
+    assert web._session_cookie_config(False) == {}
